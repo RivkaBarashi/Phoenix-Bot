@@ -1,0 +1,109 @@
+אינדקס: voyage | Rerank: cohere | סף נוכחי: 0.82 | 35 שאלות
+llm: gemini:gemini-3.5-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+llm: gemini:gemini-3.6-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+
+[3] (answerable) יש לי הצפה בבית, מה עושים קודם כל?
+    rerank 0.972 -> answer (verified) correct ✓מקור  [gemini:gemini-3.7-flash]
+    במקרה של הצפה, יש לבצע קודם כל שלוש פעולות חירום מרכזיות: ראשית, חובה לנתק את זרם החשמל הראשי כדי למנוע סכנת התחשמלות. שנית, יש לסגור את השיבר הראשי כדי לעצור את מקור המים ולמנוע את החמרת הנזק. שלישית, יש לדאוג לפינוי די
+llm: gemini:gemini-3.7-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+llm: gemini:gemini-3.8-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+
+[5] (answerable) נשבר לי צינור בבית ויש לי הרחבת שרברב בהסדר. מה עושים?
+    rerank 0.938 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    כן, יש לפתוח קריאה למול נותן השירות בקישור https://natav.net/natav_online. תוך יום עסקים יחזור נציג מטעם נותן השירות לתיאום בעל מקצוע, ומרגע התיאום ועד יומיים יתחיל תיקון הנזק. באפשרותך לבחור שרברב הסדר מתוך רשימת השרברב
+
+[8] (answerable) הרכב שלי הוכרז טוטאל לוס. תוך כמה זמן מקבלים את הכסף?
+    rerank 0.880 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    תשלום התביעה (כפוף לאישורה) מתבצע תוך 30 יום מרגע הגעת כל המסמכים הנדרשים לחברה. המקור: https://www.fnx.co.il/car-insurance/comprehensive/total-loss/
+embed_query: voyage:voyage-4-lite failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[9] (answerable) לכמה ימים מקבלים רכב חליפי כשהרכב לא לתיקון?
+    rerank 0.965 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    רכב חליפי במקרה שהרכב הוכרז לא לתיקון ניתנים עד 21 ימים. תוכלו לבדוק אפשרות הארכת כמות הימים מול הספק, בתוספת תשלום. המקור: https://www.fnx.co.il/car-insurance/comprehensive/total-loss/
+
+[11] (answerable) רכב שמבוטח בהפניקס פגע ברכב שלי. מה עושים?
+    rerank 0.976 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    קודם כל, יש לוודא שהרכב הפוגע אכן מבוטח בחברת הפניקס. אם הרכב שלך הוא רכב פרטי או מסחרי עד 3.5 טון, אנחנו ממליצים לך להגיש בקשה להסדר באופן דיגיטלי. במסגרת ההסדר הפניקס תשלם על תיקון הרכב שלך באחד מהמוסכים שבאחריות החברה
+
+[13] (answerable) אבא שלי בן 70. הוא חייב למלא טופס כדי להגיש תביעת רכב?
+    rerank 0.942 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    לא, אזרחים ותיקים שמלאו להם 67 שנים יכולים להגיש תביעה בעל פה באמצעות נציג החברה. המקורות: - https://www.fnx.co.il/claims-customer-service/claims-car-insurance/compulsory-motor-claims/ - https://www.fnx.co.il/claims-cust
+
+[16] (answerable) איך מגישים תביעה בביטוח בריאות?
+    rerank 0.967 -> answer (verified) partial ✗מקור  [gemini:gemini-3.5-flash-lite]
+    כדי להגיש תביעה אפשר למלא טופס תביעה דיגיטלי, להשתמש באפליקציה או באזור האישי, או להוריד, להדפיס ולמלא טופס בכתב. כמו כן, תוכלו לצרף את הקבלות והמסמכים הרלוונטיים ולשלוח את הטופס בדואר, בדוא"ל לכתובת Tb@fnx.co.il, בפקס 0
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[20] (answerable) אני בחו"ל ויש לי מקרה חירום רפואי. למי מתקשרים?
+    rerank 0.865 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    בעת קרות אירוע חירום רפואי בחו"ל עליכם לפנות למוקד החירום הטלפוני אשר פרטיו מפורסמים בפוליסה. ניתן לפנות למוקד חירום לשוהים בחו"ל בטלפון 050-224-1953, במייל info@medassis.org או בטלפון 074-7897016, והמוקד פעיל 24 שעות בי
+
+[24] (not_on_site) יש אצלכם הנחה בביטוח רכב לבעלי תו נכה?
+    rerank 0.880 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים תוכלו לפנות למוקד שירות לקוחות - תחום רכב בטלפון 5432* או 054-9893455, בימים א'-ה' בין השעות 8:30-16:00. המקור: https://www.fnx.co.il/custome
+embed_query: voyage:voyage-4-lite failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+
+[28] (not_on_site) אפשר לבטח אצלכם טרקטורון?
+    rerank 0.927 -> not_on_site (term_not_on_site:טרקטורון)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. אפשר לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455, או בכל הדרכים שבעמוד 'צור קשר'. המקור: https://www.fnx.co.il/customer-service/contact-us/
+
+[31] (personal) האם הפוליסה שלי מכסה את הנזק לדוד השמש שהתפוצץ לי אתמול?
+    rerank 0.943 -> personal (personal)    [gemini:gemini-3.5-flash-lite]
+    פוליסת ביטוח מבנה מכסה בדרך כלל נזקים לדוד שמש, וכלל שבר או פיצוץ של דוד השמש הגורמים לנזילה או הצפה. אין לנו גיצה למידע האישי שלכם, ומקרים אישיים יש לבדוק מול שירות הלקוחות או סוכן הביטוח. לבדיקת המקרה האישי ופעלות נוספ
+
+=== חיפוש (voyage): העמוד הנכון בין k הראשונים, 8 שאלות עם תשובה ===
+   שלב                k=1   k=3   k=5
+   וקטורי בלבד          5     7     8
+   BM25 בלבד            4     6     6
+   איחוד (RRF)          5     6     6
+   אחרי Rerank          5     7     8
+
+=== החלטות המודל (בלי סף) ===
+   answerable   answer: 8
+   not_on_site  not_on_site: 2
+   personal     personal: 1
+   סיבות לדחייה: model_not_found: 1, term_not_on_site:טרקטורון: 1
+   שיפוט התשובות לשאלות עם תשובה: {'correct': 3, 'partial': 5} | ציטטו את העמוד הנכון: 7
+
+=== כיול הסף: מה היה קורה בכל סף (שתי השכבות יחד) ===
+      סף | עם תשובה: נענו / נכון / נדחו |  לא באתר: קיבלו תשובה | אישיות: הופנו / נדחו / נענו
+    0.70 |            8 /     3 /     0 |                     0 |           1 /     0 /     0
+    0.75 |            8 /     3 /     0 |                     0 |           1 /     0 /     0
+    0.80 |            8 /     3 /     0 |                     0 |           1 /     0 /     0
+    0.82 |            8 /     3 /     0 |                     0 |           1 /     0 /     0  <- נוכחי
+    0.85 |            8 /     3 /     0 |                     0 |           1 /     0 /     0
+    0.88 |            7 /     2 /     1 |                     0 |           1 /     0 /     0
+    0.90 |            6 /     1 /     2 |                     0 |           1 /     0 /     0
+    0.92 |            6 /     1 /     2 |                     0 |           1 /     0 /     0
+    0.82 |            8 /     3 /     0 |                     0 |           1 /     0 /     0  <- נוכחי
+
+פירוט מלא: data\eval_answers_voyage_partial.csv
+
+=== קריאות שיצאו ===
+   gemini:gemini-3.5-flash: 1 ניסיונות
+   gemini:gemini-3.5-flash-lite: 10 ניסיונות
+   gemini:gemini-3.6-flash: 1 ניסיונות
+   gemini:gemini-3.7-flash: 2 ניסיונות
+   gemini:gemini-3.8-flash: 1 ניסיונות
+   groq:openai/gpt-oss-120b: 7 ניסיונות
+   openrouter:nvidia/nemotron-3-super-120b-a12b:free: 5 ניסיונות
+   voyage:voyage-4-lite: 17 ניסיונות

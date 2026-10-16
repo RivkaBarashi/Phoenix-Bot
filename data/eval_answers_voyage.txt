@@ -1,0 +1,242 @@
+אינדקס: voyage | Rerank: cohere | סף נוכחי: 0.82 | 35 שאלות
+llm: gemini:gemini-3.5-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+llm: gemini:gemini-3.6-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+llm: gemini:gemini-3.7-flash failed (unavailable: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}), moving to next provider
+llm: gemini:gemini-3.8-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+
+[1] (answerable) אני שוכרת דירה. אפשר לעשות אצלכם ביטוח תכולה?
+    rerank 0.952 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    אפשר לעשות אצלנו ביטוח תכולה לדירה שכורה. שוכרים יכולים לבחור ביטוח תכולה בלבד, הכולל גם ביטוח צד ג'. המקורות: - https://www.fnx.co.il/apartment-insurance/apartment-contents-insurance/ - https://www.fnx.co.il/apartment-i
+
+[2] (answerable) האם ביטוח התכולה כולל גם ביטוח צד ג', או שצריך לשלם עליו בנפרד?
+    rerank 0.968 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    ביטוח התכולה של הפניקס כולל גם ביטוח צד ג', והוא חלק מן הפוליסה ללא עלות נוספת. המקורות: - https://www.fnx.co.il/apartment-insurance/apartment-information/apartment-third-party-guide/ - https://www.fnx.co.il/apartment-in
+
+[3] (answerable) יש לי הצפה בבית, מה עושים קודם כל?
+    rerank 0.972 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    ראשית, חובה לנתק את זרם החשמל הראשי כדי למנוע התחשמלות. לאחר מכן, סגרו את השיבר הראשי כדי לעצור מיד את מקור המים, ודאגו לפינוי דיירים למקום בטוח ויבש. המקור: https://www.fnx.co.il/apartment-insurance/apartment-informatio
+llm: gemini:gemini-3.7-flash failed (unavailable: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}), moving to next provider
+
+[4] (answerable) אני עוברת דירה בשבוע הבא. ביטוח התכולה מכסה את הרהיטים בזמן ההובלה?
+    rerank 0.947 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    ביטוח התכולה אינו מספק הגנה בעבור רכוש כשהוא יוצא מהדלת על מנוף או בידיו של איש מקצוע, עושה דרכו במכולת משאית ומתיישב מחדש בנכס אחר. במקרה של מעבר דירה ובהובלה של הרכוש המבוטח על ידי חברת הובלה, החוק קובע כי אלה באחריותה
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[5] (answerable) נשבר לי צינור בבית ויש לי הרחבת שרברב בהסדר. מה עושים?
+    rerank 0.938 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    במידה ורכשת הרחבה לשרברב בהסדר ונגרם לך נזק למבנה או למבנה ולתכולה מהצנרת וברצונך לטפל בנזק, עליך לפתוח קריאה למול נותן השירות בקישור https://natav.net/natav_online. לאחר פתיחת הקריאה, תוך יום עסקים יחזור נציג מטעם נותן 
+
+[6] (answerable) עד מתי אפשר להגיש תביעה בביטוח דירה?
+    rerank 0.957 -> answer (verified) correct ✓מקור  [gemini:gemini-3.7-flash]
+    תקופת ההתיישנות להגשת תביעת ביטוח דירה היא 3 שנים מיום האירוע הביטוחי. בביטוח דירה צד ג', תקופת ההתיישנות היא 7 שנים מיום קרות המקרה (ולגבי קטינים – 7 שנים מיום הגיעם לגיל 18). יש לשים לב כי הגשת התביעה לחברת הביטוח אינה
+llm: gemini:gemini-3.7-flash failed (unavailable: 504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': 'Deadline expired before operation could complete.', 'status': 'DEADLINE_EXCEEDED'}}), moving to next provider
+
+[7] (answerable) הדוד שמש שלי התקלקל ויש לי הרחבת דוודים. עד כמה מכסים?
+    rerank 0.950 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    במידה והנזק לדוד שמש ולקולטים אינו כתוצאה מנזקי מזג אויר ונרכשה הרחבה לדוודים, גבול האחריות לא יעלה על 3,500 ₪ וקיימת השתתפות עצמית של 320 ₪. הכיסוי הוא על דוד בנפח עד 200 ליטר. במקרה בו דוד החימום שניזוק הינו בנפח של מע
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[8] (answerable) הרכב שלי הוכרז טוטאל לוס. תוך כמה זמן מקבלים את הכסף?
+    rerank 0.880 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    תשלום התביעה (כפוף לאישורה) מתבצע תוך 30 יום מרגע הגעת כל המסמכים הנדרשים לחברה. המקור: https://www.fnx.co.il/car-insurance/comprehensive/total-loss/
+llm: gemini:gemini-3.7-flash failed (unavailable: 504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': 'Deadline expired before operation could complete.', 'status': 'DEADLINE_EXCEEDED'}}), moving to next provider
+
+[9] (answerable) לכמה ימים מקבלים רכב חליפי כשהרכב לא לתיקון?
+    rerank 0.965 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    רכב חליפי במקרה של אבדן גמור (טוטאל לוס) ניתנים עד 21 ימים. המקור: https://www.fnx.co.il/car-insurance/comprehensive/total-loss/
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[10] (answerable) איך אפשר לשלם על ביטוח הרכב, ואיך מחליפים אמצעי תשלום?
+    rerank 0.970 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    ניתן לשלם את פרמיות ביטוח הרכב באמצעות כרטיס אשראי או הוראות קבע (ענפים נבחרים). אפשר לעדכן את אמצעי התשלום של ביטוח הרכב בקלות ובמהירות על ידי הכנסת פרטי כרטיס אשראי חדשים באזור האישי באתר החברה. עדכון גורף בכלל הפוליסו
+llm: gemini:gemini-3.7-flash failed (unavailable: 504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': 'Deadline expired before operation could complete.', 'status': 'DEADLINE_EXCEEDED'}}), moving to next provider
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[11] (answerable) רכב שמבוטח בהפניקס פגע ברכב שלי. מה עושים?
+    rerank 0.976 -> answer (verified) partial ✓מקור  [gemini:gemini-3.5-flash-lite]
+    קודם כל, יש לוודא שהרכב הפוגע אכן מבוטח בחברת הפניקס. אם הרכב הפוגע מבוטח בהפניקס והרכב שלך הוא רכב פרטי או מסחרי עד 3.5 טון, אנחנו ממליצים לך להגיש בקשה להסדר באופן דיגיטלי. במסגרת ההסדר הפניקס תשלם על תיקון הרכב שלך בא
+
+[12] (answerable) כמה זמן יש לי לתבוע את הפניקס אחרי שמבוטח שלהם פגע ברכב שלי?
+    rerank 0.931 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    תקופת ההתיישנות הינה 7 שנים מיום קרות מקרה הביטוח וזאת בהתאם להוראות הדין. אין די בהגשת תביעה לפניקס כדי לעצור את מרוץ תקופת ההתיישנות, ורק הגשת התביעה לבית המשפט עוצרת את מרוץ תקופת ההתיישנות. המקור: https://www.fnx.co.
+llm: gemini:gemini-3.7-flash failed (unavailable: 504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': 'Deadline expired before operation could complete.', 'status': 'DEADLINE_EXCEEDED'}}), moving to next provider
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[13] (answerable) אבא שלי בן 70. הוא חייב למלא טופס כדי להגיש תביעת רכב?
+    rerank 0.942 -> answer (verified) wrong ✓מקור  [gemini:gemini-3.5-flash-lite]
+    כדי להגיש תביעת ביטוח יש למלא טופס תביעה באופן דיגיטלי או להוריד טופס, להדפיסו ולמלא אותו בכתב. אם אביך הוא אזרח ותיק (מי שמלאו לו 67 שנים), הוא יכול להגיש תביעה בעל פה באמצעות נציג החברה. המקורות: - https://www.fnx.co.i
+
+[14] (answerable) שילמתי לחברה שהקדימה לי תור ל-MRI. אפשר לקבל על זה החזר מביטוח הבריאות?
+    rerank 0.920 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    לא יינתן החזר הוצאות עבור עלויות נלוות לבדיקות האבחנתיות, כגון הוצאות לחברות תיווך בגין תיאום תור, הקדמת מועד ביצוע הבדיקה, קבלת תוצאות מהירות ועוד. המקור: https://www.fnx.co.il/claims-customer-service/claims-health-insu
+
+[15] (answerable) עד מתי אפשר להגיש תביעה בביטוח בריאות?
+    rerank 0.916 -> answer (verified) correct ✓מקור  [gemini:gemini-3.7-flash]
+    תקופת ההתיישנות להגשת תביעה היא 3 שנים מיום קרות מקרה הביטוח, ובנוגע לקטינים 3 שנים מיום הגעתם לגיל 18 שנים, בכפוף להוראות הדין. בפוליסות שהחלו או התחדשו החל מ-26.11.2020, תקופת ההתיישנות הינה 5 שנים מיום קרות מקרה הביטו
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[16] (answerable) איך מגישים תביעה בביטוח בריאות?
+    rerank 0.967 -> answer (verified) partial ✓מקור  [gemini:gemini-3.7-flash]
+    כדי להגיש תביעה בביטוח בריאות, בוחרים את הנושא הרלוונטי באתר, ממלאים טופס תביעה דיגיטלי (או מורידים טופס וממלאים בכתב) ומצרפים את המסמכים והקבלות הדרושים. ניתן להגיש תביעה גם דרך האפליקציה או האזור האישי, או לשלוח את הטו
+
+[17] (answerable) תוך כמה זמן מטפלים בתביעת מחלות קשות, ומה עושים אם זה מתעכב?
+    rerank 0.981 -> answer (verified) correct ✓מקור  [gemini:gemini-3.7-flash]
+    זמן הטיפול בתביעת מחלות קשות הוא 30 יום. במידה וקיימת חריגה בזמני הטיפול, ניתן לפנות במייל לכתובת Healthd@Fnx.co.il בצירוף ת"ז, שם מלא, פירוט על איזו תביעה מדובר ומתי הוגשו המסמכים, ויינתן מענה בנושא עד 24 שעות. המקור: h
+llm: gemini:gemini-3.7-flash failed (quota: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.), moving to next provider
+
+[18] (answerable) גילו לי מחלה לפני שעשיתי את הביטוח. אפשר לתבוע עליה בביטוח מחלות קשות?
+    rerank 0.925 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    גילוי מחלה שארע טרם תקופת הביטוח אינה מכוסה אלא רק גילוי מחלה שארע לאחר תחילת הפוליסה ובכפוף לתנאים ולסייגים. המקור: https://www.fnx.co.il/health-insurance/chronic-illness/faq/
+llm: groq:openai/gpt-oss-120b failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+
+[19] (answerable) מה המספר של מוקד תביעות רכב ורכוש, ומתי הוא פתוח?
+    rerank 0.933 -> answer (verified) correct ✓מקור  [gemini:gemini-3.5-flash-lite]
+    מספרי הטלפון של מוקד תביעות רכב ורכוש הם 5070* או 074-7311147 (וכן 054-9893455). שעות הפעילות הן ימים א'-ה' 8:30-16:00. המקור: https://www.fnx.co.il/customer-service/contact-us/
+
+[20] (answerable) אני בחו"ל ויש לי מקרה חירום רפואי. למי מתקשרים?
+    rerank 0.865 -> answer (verified) partial ✗מקור  [gemini:gemini-3.5-flash-lite]
+    בעת קרות אירוע חירום רפואי בחו"ל עליכם לפנות למוקד החירום הטלפוני אשר פרטיו מפורסמים בפוליסה. המקור: https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/
+
+[21] (not_on_site) יש לכם סניף לקבלת קהל בבאר שבע?
+    rerank 0.502 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים, תוכלו לפנות לאחד ממוקדי השירות הטלפוניים שלנו. המקור: https://www.fnx.co.il/customer-service/contact-us/
+embed_query: voyage:voyage-4-lite failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+
+[22] (not_on_site) אפשר לבטח אצלכם קלנועית?
+    rerank 0.800 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לקבלת מידע נוסף, תוכלו לפנות למוקד שירות לקוחות בטלפון 5432* או 054-9893455. המקור: https://www.fnx.co.il/customer-service/contact-us/
+
+[23] (not_on_site) האם ביטוח השיניים מכסה הלבנת שיניים?
+    rerank 0.470 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. תוכלו לפנות למוקד שירות בנושאי בריאות, סיעוד ושיניים בטלפון 3455* או בוואטסאפ 054-9893455 בימים א'-ה' בין השעות 8:30-16:00. המקור: https://www.fnx.co.il/cust
+
+[24] (not_on_site) יש אצלכם הנחה בביטוח רכב לבעלי תו נכה?
+    rerank 0.880 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים בנושא רכב, תוכלו לפנות למוקד שירות לקוחות - תחום רכב בטלפון 5432* או 054-9893455, בימים א'-ה' בין השעות 8:30-16:00. המקור: https://www.fnx.co
+embed_query: voyage:voyage-4-lite failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+
+[25] (not_on_site) האם ביטוח הבריאות מכסה השתלת שיער?
+    rerank 0.725 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים תוכלו לפנות למוקד שירות בנושאי בריאות, סיעוד ושיניים בטלפון 3455* או בכתובת Healthd@Fnx.co.il. המקור: https://www.fnx.co.il/customer-service/
+
+[26] (not_on_site) כמה עולה ביטוח מקיף לטויוטה קורולה 2022?
+    rerank 0.525 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לקבלת הצעת מחיר, תוכלו לפנות למוקד שירות לקוחות - תחום רכב בטלפון 5432* או 054-9893455, בימים א'-ה' בין השעות 8:30-16:00. המקור: https://www.fnx.co.il/custom
+
+[27] (not_on_site) יש לכם ביטוח לרחפן צילום?
+    rerank 0.814 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים, תוכלו לפנות למוקד שירות לקוחות - תחום דירה בטלפון 5432* או 054-9893455, בימים א'-ה' בין השעות 8:30-16:00. המקור: https://www.fnx.co.il/custo
+embed_query: voyage:voyage-4-lite failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+
+[28] (not_on_site) אפשר לבטח אצלכם טרקטורון?
+    rerank 0.927 -> answer (verified)    [gemini:gemini-3.5-flash-lite]
+    ביטוח טרקטורים או למעשה, ביטוח ציוד חקלאי בעל מנוע שדורש רישיון נהיגה, הוא עניין סבוך, ארוך ורווי סעיפים שכוללים חלקים שונים בכלי עצמו, נגררים למיניהם, ציוד או מטען שמועמס על כלי הרכב וכדומה. המקור: https://www.fnx.co.il
+
+[29] (not_on_site) יש הנחה בביטוח דירה לגמלאים?
+    rerank 0.809 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים תוכלו לפנות למוקד שירות לקוחות - תחום דירה בטלפון 5432* או 054-9893455. המקור: https://www.fnx.co.il/customer-service/contact-us/
+
+[30] (not_on_site) יש לכם ביטוח לחתונה, למקרה שהאירוע מתבטל?
+    rerank 0.541 -> not_on_site (model_not_found)    [gemini:gemini-3.5-flash-lite]
+    המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים ומידע נוסף תוכלו לפנות לסוכן הביטוח או למוקד שירות הלקוחות. המקור: https://www.fnx.co.il/customer-service/contact-us/
+
+[31] (personal) האם הפוליסה שלי מכסה את הנזק לדוד השמש שהתפוצץ לי אתמול?
+    rerank 0.943 -> personal (personal)    [gemini:gemini-3.5-flash-lite]
+    אנו לא יכולים לדעת אם הפוליסה האישית שלכם מכסה את הנזק, כין שמקרים אישיים וכיסויים נבדקים מול שירות הלקוחות או סוכן הביטוח. נזקי צנרת כוללים שבר או פיצוץ של דוד השמש או החשמל הגורמים לנזילה או הצפה. לבירור המקרה האישי, ת
+
+[32] (personal) מה הסטטוס של תביעת הרכב שהגשתי לפני שבועיים?
+    rerank 0.926 -> personal (personal)    [gemini:gemini-3.5-flash-lite]
+    באפשרותכם להתעדכן בכל רגע במצב התביעה והטיפול בה ולצפות במסמכים הרלוונטיים, אך את המקרה האישי בודקים מול שורת הלקוחות או סוכן הביטוח. לבירור סטטוס תביעה תוכלו לפנות למוקד שירות לקוחות - תחום רכב בטלפון 5432* או 054-98934
+embed_query: voyage:voyage-4-lite failed (rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב באינדקס voyage - מחכה 25 שניות)
+
+[33] (personal) כמה כסף אקבל על הרכב שלי שהוכרז טוטאל לוס?
+    rerank 0.898 -> personal (personal)    [gemini:gemini-3.5-flash-lite]
+    במקרה של אובדן מוחלט (טוטאל לוס), סכום הפיצוי מחושב בדרך כלל על פי מחירון רכב מוסכם עליו מסתמכת חברת הביטוח (לוי יצחק), ועל פי פירוט של המשתנים שהשפיעו על ערך המכונית. את מקרך האישי וגובה הפיצוי מבדוקים מול מוקד התביעות 
+
+[34] (personal) כדאי לי לעבור מביטוח מקיף לביטוח צד ג'? מה אתם ממליצים?
+    rerank 0.968 -> personal (personal)    [gemini:gemini-3.5-flash-lite]
+    אין תשובה חד משמעית למי מתאים כל אחד מהביטוחים, והוא תלוי במשטנים כמו גיל, שווי הרכב ומוכנות לשלם מחיר גבוה על הפרמיה. תוכלו לבדוק את המקרה האישי מול שירות הלקוחות בתחום רכף. לפניה למוקד שירות לקוחות - תחום רכף: 5432*, 0
+llm: gemini:gemini-3.5-flash-lite failed (empty: unusable response: Invalid \uXXXX escape: line 1 column 1173 (char 1172)), moving to next provider
+
+[35] (personal) אני עומדת לעבור ניתוח בעוד חודש. ביטוח הבריאות שלי יכסה אותו?
+    rerank 0.875 -> personal (personal)    [gemini:gemini-3.1-flash-lite]
+    איננו יכולים לדעת האם הניתוח שלך מכוסה, שכן בדיקת הכיסוי האישי תלויה בתנאי הפוליסה הספציפית שברשותך. מומלץ לבדוק את המקרה האישי מול שירות הלקוחות של הפניקס או מול סוכן הביטוח שלך. לבירורים נוספים ניתן לפנות למוקד שירות ב
+
+=== חיפוש (voyage): העמוד הנכון בין k הראשונים, 20 שאלות עם תשובה ===
+   שלב                k=1   k=3   k=5
+   וקטורי בלבד         12    17    19
+   BM25 בלבד            6    13    14
+   איחוד (RRF)         12    16    17
+   אחרי Rerank         16    19    20
+
+=== החלטות המודל (בלי סף) ===
+   answerable   answer: 20
+   not_on_site  not_on_site: 9, answer: 1
+   personal     personal: 5
+   סיבות לדחייה: model_not_found: 9
+   שיפוט התשובות לשאלות עם תשובה: {'correct': 13, 'partial': 6, 'wrong': 1} | ציטטו את העמוד הנכון: 19
+
+=== כיול הסף: מה היה קורה בכל סף (שתי השכבות יחד) ===
+      סף | עם תשובה: נענו / נכון / נדחו |  לא באתר: קיבלו תשובה | אישיות: הופנו / נדחו / נענו
+    0.70 |           20 /    13 /     0 |                     1 |           5 /     0 /     0
+    0.75 |           20 /    13 /     0 |                     1 |           5 /     0 /     0
+    0.80 |           20 /    13 /     0 |                     1 |           5 /     0 /     0
+    0.82 |           20 /    13 /     0 |                     1 |           5 /     0 /     0  <- נוכחי
+    0.85 |           20 /    13 /     0 |                     1 |           5 /     0 /     0
+    0.88 |           19 /    13 /     1 |                     1 |           4 /     1 /     0
+    0.90 |           18 /    13 /     2 |                     1 |           3 /     2 /     0
+    0.92 |           17 /    12 /     3 |                     1 |           3 /     2 /     0
+    0.82 |           20 /    13 /     0 |                     1 |           5 /     0 /     0  <- נוכחי
+
+פירוט מלא: data\eval_answers_voyage.csv
+
+=== קריאות שיצאו ===
+   cohere:rerank-v4.0-pro: 3 קריאות API אמיתיות (1133 ציונים מהמטמון)
+   gemini:gemini-3.1-flash-lite: 1 ניסיונות
+   gemini:gemini-3.5-flash: 1 ניסיונות
+   gemini:gemini-3.5-flash-lite: 32 ניסיונות
+   gemini:gemini-3.6-flash: 1 ניסיונות
+   gemini:gemini-3.7-flash: 17 ניסיונות
+   gemini:gemini-3.8-flash: 1 ניסיונות
+   groq:openai/gpt-oss-120b: 19 ניסיונות
+   openrouter:nvidia/nemotron-3-super-120b-a12b:free: 15 ניסיונות
+   voyage:voyage-4-lite: 46 ניסיונות

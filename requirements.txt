@@ -1,0 +1,20 @@
+# --- איסוף תוכן (crawl) וניקוי HTML ---
+requests
+httpx
+beautifulsoup4
+lxml
+
+# --- מודל שפה + אמבדינגים (Gemini, מפתח חינמי מ-AI Studio) ---
+google-genai
+
+# --- מסד וקטורי + אחזור היברידי (וקטורי + מילות מפתח) ---
+chromadb
+rank-bm25
+
+# --- ממשק צ'אט ---
+streamlit
+
+# --- כללי ---
+truststore  # משתמש בתעודות של Windows (נחוץ בגלל סינון Netspark)
+python-dotenv
+tqdm

@@ -1,0 +1,40 @@
+﻿n,type,question,top,decision,reason,verdict,judge_reason,cited_correct,llm,sources,answer
+3,answerable,"יש לי הצפה בבית, מה עושים קודם כל?",0.9723727,answer,verified,correct,"הבוט מציין את שלושת הפעולות הראשוניות החשובות (נתק חשמל, סגור שיבר, פינוי) וכן את שלב ההעלאה, ייבוש ותיעוד, בדיוק כמו בתשובה הצפויה",True,gemini:gemini-3.7-flash,https://www.fnx.co.il/apartment-insurance/apartment-information/apartment-flood-costs/,"במקרה של הצפה, יש לבצע קודם כל שלוש פעולות חירום מרכזיות: ראשית, חובה לנתק את זרם החשמל הראשי כדי למנוע סכנת התחשמלות. שנית, יש לסגור את השיבר הראשי כדי לעצור את מקור המים ולמנוע את החמרת הנזק. שלישית, יש לדאוג לפינוי דיירים והרחקת ילדים ומבוגרים ממקום ההצפה למקום בטוח ויבש. לאחר מכן, מומלץ להרים חפצים מהרצפה כדי להצילם, לייבשם, ולתעד ולצלם את כל מוקדי המים והחפצים שניזוקו לטובת חברת הביטוח.
+
+המקור: https://www.fnx.co.il/apartment-insurance/apartment-information/apartment-flood-costs/"
+5,answerable,נשבר לי צינור בבית ויש לי הרחבת שרברב בהסדר. מה עושים?,0.93814665,answer,verified,partial,הבוט מספק את רוב הפרטים אך חסר מידע מרכזי על השתתפות עצמית (190 ₪) והבהרה לגבי תנאי הפוליסה,True,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/claims-customer-service/claims-appartment-insurance/pipeline-damage/,"כן, יש לפתוח קריאה למול נותן השירות בקישור https://natav.net/natav_online. תוך יום עסקים יחזור נציג מטעם נותן השירות לתיאום בעל מקצוע, ומרגע התיאום ועד יומיים יתחיל תיקון הנזק. באפשרותך לבחור שרברב הסדר מתוך רשימת השרברבים. בכל שאלה או בקשה ניתן לפנות לנותן השירות ""נתב"" בטלפון 073-2076100 או בוואצאפ במספר 0546628973. במקרה חירום בדליפת מים כאשר הצינור הדולף חשוף, יש לפנות למוקד החירום הפתוח 24/7 בטלפון 073-2076100.
+
+המקור: https://www.fnx.co.il/claims-customer-service/claims-appartment-insurance/pipeline-damage/"
+8,answerable,הרכב שלי הוכרז טוטאל לוס. תוך כמה זמן מקבלים את הכסף?,0.8800156,answer,verified,correct,הבוט מספק את המידע המרכזי – תשלום תוך 30 יום מרגע קבלת המסמכים – והפרטים הנוספים אינם נדרשים לשאלת הזמן,True,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/car-insurance/comprehensive/total-loss/,"תשלום התביעה (כפוף לאישורה) מתבצע תוך 30 יום מרגע הגעת כל המסמכים הנדרשים לחברה.
+
+המקור: https://www.fnx.co.il/car-insurance/comprehensive/total-loss/"
+9,answerable,לכמה ימים מקבלים רכב חליפי כשהרכב לא לתיקון?,0.96466917,answer,verified,partial,"הבוט מציין נכון את תקופת ה-21 ימים ואת האפשרות להארכה בתשלום, אך מחסר פרטים מרכזיים: צורך באישור השמאי, פנייה לספק הרכב החליפי לפי הפוליסה (שגריר ‎*8888 או דרכים ‎*2008), והתנאי להחזרת הרכב החליפי אם תשלום אובדן הרכב התקבל לפני סוף התקופה.",True,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/car-insurance/comprehensive/total-loss/,"רכב חליפי במקרה שהרכב הוכרז לא לתיקון ניתנים עד 21 ימים. תוכלו לבדוק אפשרות הארכת כמות הימים מול הספק, בתוספת תשלום.
+
+המקור: https://www.fnx.co.il/car-insurance/comprehensive/total-loss/"
+11,answerable,רכב שמבוטח בהפניקס פגע ברכב שלי. מה עושים?,0.9755397,answer,verified,partial,"הבוט מציין נכון את הצעדים הראשונים ואת פרטי הקשר, אך מחמיר את פרטי ההטבות המרכזיות: לא מציין שהתיקון נעשה ללא תשלום, לא מזכיר את הרכב החלופי לכל תקופת התיקון ('מפתח מול מפתח') ואת האחריות לתיקון ל-3 שנים.",True,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/claims-customer-service/claims-car-insurance-third-party/,"קודם כל, יש לוודא שהרכב הפוגע אכן מבוטח בחברת הפניקס. אם הרכב שלך הוא רכב פרטי או מסחרי עד 3.5 טון, אנחנו ממליצים לך להגיש בקשה להסדר באופן דיגיטלי. במסגרת ההסדר הפניקס תשלם על תיקון הרכב שלך באחד מהמוסכים שבאחריות החברה לבחירתך. כדי ליהנות מההטבות יש לפנות למוקד ""מהרגע הראשון"" בטלפון 5070* או 074-7311373, וכדאי להצטייד מראש בטופס הודעה שמקבלים מחברת הביטוח שלך, בפרטי הרכב המבוטח בהפניקס ובתמונות מהאירוע.
+
+המקור: https://www.fnx.co.il/claims-customer-service/claims-car-insurance-third-party/"
+13,answerable,אבא שלי בן 70. הוא חייב למלא טופס כדי להגיש תביעת רכב?,0.9417828,answer,verified,partial,"הבוט ענה נכון שהגיל 67 מאפשר הגשה בעל פה, אך השמיט את האפשרות למלא טופס דיגיטלי או להוריד ולמלא טופס בכתב.",True,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/claims-customer-service/claims-car-insurance/compulsory-motor-claims/ https://www.fnx.co.il/claims-customer-service/claims-car-insurance/claims-property-car-insurance/,"לא, אזרחים ותיקים שמלאו להם 67 שנים יכולים להגיש תביעה בעל פה באמצעות נציג החברה.
+
+המקורות:
+- https://www.fnx.co.il/claims-customer-service/claims-car-insurance/compulsory-motor-claims/
+- https://www.fnx.co.il/claims-customer-service/claims-car-insurance/claims-property-car-insurance/"
+16,answerable,איך מגישים תביעה בביטוח בריאות?,0.96686405,answer,verified,partial,"הבוט מזכיר מילוי טופס דיגיטלי וצרוף מסמכים, אך לא מציין את בחירת נושא התביעה מהרשימה, קבלת אישור ב-SMS על פתיחת התביעה והעברת התשלום ישירות לחשבון הבנק במקרה של אישור.",False,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/claims-customer-service/claims-health-insurance/surgery-treatment-covers/,"כדי להגיש תביעה אפשר למלא טופס תביעה דיגיטלי, להשתמש באפליקציה או באזור האישי, או להוריד, להדפיס ולמלא טופס בכתב. כמו כן, תוכלו לצרף את הקבלות והמסמכים הרלוונטיים ולשלוח את הטופס בדואר, בדוא""ל לכתובת Tb@fnx.co.il, בפקס 03-7336946, או במסרון (SMS) למספר 055-7000887 (יש לשלוח את המילה מסמך ולקבל הנחיות). אזרחים ותקים מגיל 67 ומעלה יכולים להגיש תביעה בעל פה באמצעות נציג החברה.
+
+המקור: https://www.fnx.co.il/claims-customer-service/claims-health-insurance/surgery-treatment-covers/"
+20,answerable,"אני בחו""ל ויש לי מקרה חירום רפואי. למי מתקשרים?",0.8654972,answer,verified,correct,"הבוט מספק את שני מספרי הטלפון, את כתובת המייל ואת שעות הפעילות 24/7, תואם את התשובה הצפויה ללא סתירה או השמטת עובדות מרכזיות.",True,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/ https://www.fnx.co.il/customer-service/contact-us/,"בעת קרות אירוע חירום רפואי בחו""ל עליכם לפנות למוקד החירום הטלפוני אשר פרטיו מפורסמים בפוליסה. ניתן לפנות למוקד חירום לשוהים בחו""ל בטלפון 050-224-1953, במייל info@medassis.org או בטלפון 074-7897016, והמוקד פעיל 24 שעות ביממה, 7 ימים בשבוע.
+
+המקורות:
+- https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/
+- https://www.fnx.co.il/customer-service/contact-us/"
+24,not_on_site,יש אצלכם הנחה בביטוח רכב לבעלי תו נכה?,0.8796026,not_on_site,model_not_found,,,,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/customer-service/contact-us/,"המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. לבירורים נוספים תוכלו לפנות למוקד שירות לקוחות - תחום רכב בטלפון 5432* או 054-9893455, בימים א'-ה' בין השעות 8:30-16:00.
+
+המקור: https://www.fnx.co.il/customer-service/contact-us/"
+28,not_on_site,אפשר לבטח אצלכם טרקטורון?,0.92679554,not_on_site,term_not_on_site:טרקטורון,,,,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/customer-service/contact-us/,"המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו. אפשר לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455, או בכל הדרכים שבעמוד 'צור קשר'.
+
+המקור: https://www.fnx.co.il/customer-service/contact-us/"
+31,personal,האם הפוליסה שלי מכסה את הנזק לדוד השמש שהתפוצץ לי אתמול?,0.9426336,personal,personal,,,,gemini:gemini-3.5-flash-lite,https://www.fnx.co.il/apartment-insurance/apartment-information/water-plumbing-damages/ https://www.fnx.co.il/customer-service/contact-us/,"פוליסת ביטוח מבנה מכסה בדרך כלל נזקים לדוד שמש, וכלל שבר או פיצוץ של דוד השמש הגורמים לנזילה או הצפה. אין לנו גיצה למידע האישי שלכם, ומקרים אישיים יש לבדוק מול שירות הלקוחות או סוכן הביטוח. לבדיקת המקרה האישי ופעלות נוספות, תוכלו לפנות למוקד שירות לקוחות - תחום דירה בטלפון 5432* או 054-9893455, או למוקד תביעות רכב ורכוש בטלפון 5070*.
+
+המקורות:
+- https://www.fnx.co.il/apartment-insurance/apartment-information/water-plumbing-damages/
+- https://www.fnx.co.il/customer-service/contact-us/"

@@ -1,0 +1,309 @@
+אינדקס: voyage | Rerank: cohere | 30 שאלות
+
+[1] (answerable) אני שוכרת דירה. אפשר לעשות אצלכם ביטוח תכולה?
+    ✓ עמוד נכון: /apartment-insurance/apartment-contents-insurance/
+      וקטורי #2 | BM25 #15 | איחוד #4 | אחרי Rerank #1
+      1. ✓ 0.952  /apartment-insurance/apartment-contents-insurance/  |  ביטוח תכולה לדירה › ביטוח תכולה לדירה שכ
+      2.   0.948  /apartment-insurance/apartment-information/rental-home-insurance/  |  כל מה שיש לדעת על ביטוח דירה שכורה
+      3. ✓ 0.946  /apartment-insurance/apartment-contents-insurance/  |  ביטוח תכולה לדירה
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[2] (answerable) האם ביטוח התכולה כולל גם ביטוח צד ג', או שצריך לשלם עליו בנפרד?
+    ✓ עמוד נכון: /apartment-insurance/apartment-contents-insurance/
+      וקטורי #18 | BM25 #3 | איחוד #6 | אחרי Rerank #2
+      1.   0.967  /apartment-insurance/apartment-information/apartment-third-party-guide/  |  ביטוח דירה צד ג' הוא בעצם אלף בית
+      2. ✓ 0.958  /apartment-insurance/apartment-contents-insurance/  |  ביטוח תכולה לדירה
+      3.   0.953  /apartment-insurance/apartment-information/body-damage-insurance/  |  מי מכוסה בביטוח צד ג' לדירה?
+
+[3] (answerable) יש לי הצפה בבית, מה עושים קודם כל?
+    ✓ עמוד נכון: /apartment-insurance/apartment-information/apartment-flood-costs/
+      וקטורי #1 | BM25 #1 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.972  /apartment-insurance/apartment-information/apartment-flood-costs/  |  הצפה בבית – מה לעשות, ואיך למזער הוצאות 
+      2.   0.844  /apartment-insurance/apartment-information/in-case-of-break-in/  |  פריצה לבית: מה עושים?
+      3.   0.843  /apartment-insurance/apartment-information/ceiling-wetness/  |  מה עושים כשהשכן מסרב לשתף פעולה?
+
+[4] (answerable) אני עוברת דירה בשבוע הבא. ביטוח התכולה מכסה את הרהיטים בזמן ההובלה?
+    ✓ עמוד נכון: /apartment-insurance/apartment-information/apartment-insurance-for-moving/
+      וקטורי #1 | BM25 #2 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.947  /apartment-insurance/apartment-information/apartment-insurance-for-moving/  |  עוברים דירה, איך ביטוח הדירה משרת אתכם?
+      2.   0.929  /apartment-insurance/apartment-information/insurance-after-moving-to-new-building/  |  ביטוח העברה
+      3.   0.820  /apartment-insurance/apartment-information/what-is-and-is-not-included-in-the-flat-contents-insurance/  |  מה כלול ומה אינו כלול בביטוח תכולת הדירה
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[5] (answerable) נשבר לי צינור בבית ויש לי הרחבת שרברב בהסדר. מה עושים?
+    ✓ עמוד נכון: /claims-customer-service/claims-appartment-insurance/pipeline-damage/
+      וקטורי #1 | BM25 #2 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.938  /claims-customer-service/claims-appartment-insurance/pipeline-damage/  |  נזקי צנרת
+      2.   0.889  /claims-customer-service/claims-appartment-insurance/water-heater/  |  נזק לדודי שמש / קולטים
+      3.   0.795  /apartment-insurance/apartment-information/guide-covers-and-extensions/  |  ביטוח דירה - מדריך כיסויים והרחבות
+
+[6] (answerable) עד מתי אפשר להגיש תביעה בביטוח דירה?
+    ✓ עמוד נכון: /apartment-insurance/apartment-information/when-apartment-insurance-claim/
+      וקטורי #1 | BM25 #15 | איחוד #3 | אחרי Rerank #1
+      1. ✓ 0.957  /apartment-insurance/apartment-information/when-apartment-insurance-claim/  |  תוך כמה זמן חייבים להגיש תביעת ביטוח דיר
+      2.   0.926  /claims-customer-service/claims-appartment-insurance/claims-third-party-house/  |  איך מגישים תביעה?
+      3.   0.924  /claims-customer-service/claims-appartment-insurance/damage-to-the-apartment/  |  איך מגישים תביעה?
+
+[7] (answerable) הדוד שמש שלי התקלקל ויש לי הרחבת דוודים. עד כמה מכסים?
+    ✓ עמוד נכון: /claims-customer-service/claims-appartment-insurance/water-heater/
+      וקטורי #1 | BM25 #1 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.950  /claims-customer-service/claims-appartment-insurance/water-heater/  |  נזק לדודי שמש / קולטים
+      2.   0.894  /apartment-insurance/apartment-information/guide-covers-and-extensions/  |  ביטוח דירה - מדריך כיסויים והרחבות
+      3.   0.767  /car-insurance/third-party-insurance-cautious-fnx/  |  ביטוח צד ג' › מהו ביטוח צד ג' לרכב? › אי
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[8] (answerable) הרכב שלי הוכרז טוטאל לוס. תוך כמה זמן מקבלים את הכסף?
+    ✓ עמוד נכון: /car-insurance/comprehensive/total-loss/
+      וקטורי #1 | BM25 #1 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.880  /car-insurance/comprehensive/total-loss/  |  טיפול ברכב טוטאלוס
+      2.   0.720  /claims-customer-service/claims-car-insurance/claims-property-car-insurance/  |  מה קורה לאחר הגשת התביעה?
+      3.   0.684  /car-insurance/car_information/total-loss/  |  מהו טוטאל לוס?
+
+[9] (answerable) לכמה ימים מקבלים רכב חליפי כשהרכב לא לתיקון?
+    ✓ עמוד נכון: /car-insurance/comprehensive/total-loss/
+      וקטורי #1 | BM25 #1 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.965  /car-insurance/comprehensive/total-loss/  |  טיפול ברכב טוטאלוס
+      2.   0.879  /claims-customer-service/claims-car-insurance-third-party/  |  תביעות רכב צד ג' › מבוטח הפניקס פגע בך?
+      3.   0.814  /car-insurance/comprehensive/comprehensive-car-insurance-fnx/  |  ביטוח רכב מקיף
+
+[10] (answerable) איך אפשר לשלם על ביטוח הרכב, ואיך מחליפים אמצעי תשלום?
+    ✓ עמוד נכון: /car-insurance/how-to-pay-premiums/
+      וקטורי #1 | BM25 #2 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.970  /car-insurance/how-to-pay-premiums/  |  אופן תשלום הפרמיות › מדריך לתשלום ביטוח 
+      2.   0.953  /customer-service/car-insurance/car_payments_info_update/  |  ביטוח רכב עדכון פרטי אשראי
+      3.   0.936  /apartment-insurance/how-to-pay-premiums/  |  אופן תשלום הפרמיות
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[11] (answerable) רכב שמבוטח בהפניקס פגע ברכב שלי. מה עושים?
+    ✓ עמוד נכון: /claims-customer-service/claims-car-insurance-third-party/
+      וקטורי #2 | BM25 #1 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.976  /claims-customer-service/claims-car-insurance-third-party/  |  תביעות רכב צד ג' › מבוטח הפניקס פגע בך?
+      2.   0.954  /claims-customer-service/claims-car-insurance/  |  תביעות ביטוח רכב › להגיש תביעה
+      3.   0.948  /claims-customer-service/claims-car-insurance/compulsory-motor-claims/  |  איך מגישים תביעה?
+
+[12] (answerable) כמה זמן יש לי לתבוע את הפניקס אחרי שמבוטח שלהם פגע ברכב שלי?
+    ✓ עמוד נכון: /claims-customer-service/claims-car-insurance-third-party/
+      וקטורי #1 | BM25 #4 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.931  /claims-customer-service/claims-car-insurance-third-party/  |  תביעות רכב צד ג' › מבוטח הפניקס פגע בך?
+      2. ✓ 0.921  /claims-customer-service/claims-car-insurance-third-party/  |  תביעות רכב צד ג' › מה קורה לאחר הגשת התב
+      3.   0.879  /claims-customer-service/claims-appartment-insurance/claims-third-party-house/  |  איך מגישים תביעה?
+
+[13] (answerable) אבא שלי בן 70. הוא חייב למלא טופס כדי להגיש תביעת רכב?
+    ✓ עמוד נכון: /claims-customer-service/claims-car-insurance/claims-property-car-insurance/
+      וקטורי #4 | BM25 #3 | איחוד #3 | אחרי Rerank #2
+      1.   0.942  /claims-customer-service/claims-car-insurance/compulsory-motor-claims/  |  איך מגישים תביעה?
+      2. ✓ 0.939  /claims-customer-service/claims-car-insurance/claims-property-car-insurance/  |  איך מגישים תביעה?
+      3.   0.880  /claims-customer-service/claims-life-insurance/claims-permanent_invalidity/  |  איך מגישים תביעה?
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[14] (answerable) שילמתי לחברה שהקדימה לי תור ל-MRI. אפשר לקבל על זה החזר מביטוח הבריאות?
+    ✓ עמוד נכון: /claims-customer-service/claims-health-insurance/cover-expenses-for-ambulatory-services/
+      וקטורי #2 | BM25 #6 | איחוד #2 | אחרי Rerank #1
+      1. ✓ 0.921  /claims-customer-service/claims-health-insurance/cover-expenses-for-ambulatory-services/  |  איך מגישים תביעה?
+      2.   0.846  /health-insurance/health-reform/  |  חוק ההסדרים - רפורמה בביטוח בריאות: › מה
+      3.   0.823  /claims-customer-service/claims-health-insurance/surgery-treatment-covers/  |  איך מגישים תביעה?
+
+[15] (answerable) עד מתי אפשר להגיש תביעה בביטוח בריאות?
+    ✓ עמוד נכון: /claims-customer-service/claims-health-insurance/cover-expenses-for-ambulatory-services/
+      וקטורי #1 | BM25 #13 | איחוד #3 | אחרי Rerank #1
+      1. ✓ 0.917  /claims-customer-service/claims-health-insurance/cover-expenses-for-ambulatory-services/  |  איך מגישים תביעה?
+      2.   0.913  /claims-customer-service/claims-health-insurance/claims-medications-not-included/  |  איך מגישים תביעה?
+      3.   0.905  /claims-customer-service/claims-health-insurance/surgery-treatment-covers/  |  איך מגישים תביעה?
+
+[16] (answerable) איך מגישים תביעה בביטוח בריאות?
+    ✓ עמוד נכון: /claims-customer-service/claims-health-insurance/
+      וקטורי #1 | BM25 #- | איחוד #11 | אחרי Rerank #3
+      1.   0.967  /claims-customer-service/claims-health-insurance/claims-medications-not-included/  |  איך מגישים תביעה?
+      2.   0.960  /claims-customer-service/claims-health-insurance/surgery-treatment-covers/  |  איך מגישים תביעה?
+      3. ✓ 0.959  /claims-customer-service/claims-health-insurance/  |  תביעות ביטוח בריאות › להגיש תביעה
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[17] (answerable) תוך כמה זמן מטפלים בתביעת מחלות קשות, ומה עושים אם זה מתעכב?
+    ✓ עמוד נכון: /health-insurance/chronic-illness/faq/
+      וקטורי #4 | BM25 #3 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.981  /health-insurance/chronic-illness/faq/  |  שאלות ותשובות
+      2.   0.964  /claims-customer-service/claims-health-insurance/claims-serious-illness-old/  |  איך מגישים תביעה?
+      3.   0.955  /claims-customer-service/claims-health-insurance/claims-serious-illness/  |  איך מגישים תביעה?
+
+[18] (answerable) גילו לי מחלה לפני שעשיתי את הביטוח. אפשר לתבוע עליה בביטוח מחלות קשות?
+    ✓ עמוד נכון: /health-insurance/chronic-illness/faq/
+      וקטורי #3 | BM25 #2 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.925  /health-insurance/chronic-illness/faq/  |  שאלות ותשובות
+      2.   0.905  /health-insurance/chronic-illness/  |  ביטוח מחלות קשות: מרפא עם כיסוי ב-2 מסלו
+      3.   0.881  /claims-customer-service/claims-health-insurance/claims-serious-illness-old/  |  איך מגישים תביעה?
+
+[19] (answerable) מה המספר של מוקד תביעות רכב ורכוש, ומתי הוא פתוח?
+    ✓ עמוד נכון: /customer-service/contact-us/
+      וקטורי #1 | BM25 #1 | איחוד #1 | אחרי Rerank #1
+      1. ✓ 0.932  /customer-service/contact-us/  |  כל הדרכים ליצור איתנו קשר
+      2.   0.847  /claims-customer-service/claims-appartment-insurance/damage-to-the-apartment/  |  איך מגישים תביעה?
+      3.   0.831  /claims-customer-service/claims-car-insurance/claims-property-car-insurance/  |  איך מגישים תביעה?
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[20] (answerable) אני בחו"ל ויש לי מקרה חירום רפואי. למי מתקשרים?
+    ✓ עמוד נכון: /customer-service/contact-us/
+      וקטורי #3 | BM25 #- | איחוד #11 | אחרי Rerank #2
+      1.   0.866  /claims-customer-service/claims-travel-abroad/  |  תביעות ביטוח נסיעות לחו"ל › להגיש תביעה
+      2. ✓ 0.841  /customer-service/contact-us/  |  כל הדרכים ליצור איתנו קשר
+      3.   0.821  /health-insurance/health_information/health-line-10-reasons/  |  ביטוח בריאות מומלץ - 9 סיבות לבחור במוצר
+
+[21] (not_on_site) יש לכם סניף לקבלת קהל בבאר שבע?
+      1.   0.502  /apartment-insurance/apartment-information/digital-content-insurance/  |  פעולות דיגיטליות שאפשר לעשות מהבית
+      2.   0.466  /customer-service/health-insurance/  |  שירות ביטוח בריאות וסיעוד
+      3.   0.455  /customer-service/apartment-insurance/  |  שירות ביטוח דירה
+
+[22] (not_on_site) אפשר לבטח אצלכם קלנועית?
+      1.   0.800  /apartment-insurance/apartment-information/not-taking-chances/  |  ביטוח דירה: הבית שלכם אל תקחו סיכון!
+      2.   0.797  /apartment-insurance/apartment-information/safe-house/  |  למידע נוסף על ביטוח דירה
+      3.   0.789  /apartment-insurance/apartment-information/protect-your-home/  |  הכל על אמצעי מיגון לבית
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[23] (not_on_site) האם ביטוח השיניים מכסה הלבנת שיניים?
+      1.   0.470  /health-insurance/health_information/annual_mail_health/  |  1. מה הוא מבנה הדיווח?
+      2.   0.463  /health-insurance/  |  ביטוח בריאות - ביטוח רפואי פרטי המותאם א
+      3.   0.447  /claims-customer-service/claims-dental-insurance/  |  איך להגיש תביעה בגין טיפול שיניים?
+
+[24] (not_on_site) יש אצלכם הנחה בביטוח רכב לבעלי תו נכה?
+      1.   0.881  /car-insurance/car_information/age-is-important/  |  הגיל הוא לא רק תרגיל – לפחות בביטוח רכב
+      2.   0.866  /car-insurance/car_information/insurance-experience/  |  משמעות וותק הנהיגה וגיל הנהג על תעריפי ה
+      3.   0.824  /car-insurance/comprehensive/comprehensive-car-insurance-maslul/  |  מסלול באחריות
+
+[25] (not_on_site) האם ביטוח הבריאות מכסה השתלת שיער?
+      1.   0.725  /health-insurance/implants-and-special-treatments-abroad/  |  השתלות וטיפולים מיוחדים מחוץ לישראל
+      2.   0.721  /health-insurance/health_information/  |  ביטוח בריאות - מידע שימושי
+      3.   0.712  /health-insurance/  |  ביטוח בריאות - ביטוח רפואי פרטי המותאם א
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[26] (personal) האם הפוליסה שלי מכסה את הנזק לדוד השמש שהתפוצץ לי אתמול?
+      1.   0.943  /claims-customer-service/claims-appartment-insurance/water-heater/  |  נזק לדודי שמש / קולטים
+      2.   0.905  /apartment-insurance/apartment-information/water-plumbing-damages/  |  ביטוח נזקי מים ונזקי צנרת – כך תיערכו לח
+      3.   0.885  /apartment-insurance/apartment-information/whats-in-an-apartment-building-policy/  |  מבוא לביטוח מבנה
+
+[27] (personal) מה הסטטוס של תביעת הרכב שהגשתי לפני שבועיים?
+      1.   0.926  /customer-service/car-insurance/car_claim_status/  |  תביעת ביטוח רכב - בירור סטאטוס
+      2.   0.926  /claims-customer-service/claims-car-insurance-third-party/  |  תביעות רכב צד ג' › מה קורה לאחר הגשת התב
+      3.   0.868  /claims-customer-service/claims-car-insurance/claims-property-car-insurance/  |  מה קורה לאחר הגשת התביעה?
+
+[28] (personal) כמה כסף אקבל על הרכב שלי שהוכרז טוטאל לוס?
+      1.   0.898  /car-insurance/car_information/total-loss/  |  מהו טוטאל לוס?
+      2.   0.849  /car-insurance/car_information/7-questions-before-purchase/  |  וסעיף נוסף חשוב: טוטאל לוס
+      3.   0.839  /car-insurance/car_information/know-the-assessor/  |  אז מה עם שמאי הבית?
+embed_query: voyage:voyage-4-lite failed (rate_limit), moving to next provider
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: rate_limit: Client error '429 Too Many Requests' for url 'https://api.voyageai.com/v1/embeddings'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+vector search unavailable, using keywords only: embed_query: all providers failed: voyage:voyage-4-lite: resting
+    (מגבלת קצב: אינדקס=None, rerank=cohere:rerank-v4.0-pro - מחכה 25 שניות)
+
+[29] (personal) כדאי לי לעבור מביטוח מקיף לביטוח צד ג'? מה אתם ממליצים?
+      1.   0.968  /car-insurance/car_information/comprehensive-insurance-and-compulsory-insurance/  |  מה שחובה ומה שכדאי
+      2.   0.948  /car-insurance/car_information/third-party-comparison/  |  ביטוח רכב צד ג' – השוואת מחירים ופוליסות
+      3.   0.940  /car-insurance/car_information/comprehensive-insurance-when-should/  |  הכל על ביטוח מקיף ומתי כדאי לרכוש אותו
+
+[30] (personal) אני עומדת לעבור ניתוח בעוד חודש. ביטוח הבריאות שלי יכסה אותו?
+      1.   0.876  /health-insurance/health-reform/  |  חוק ההסדרים - רפורמה בביטוח בריאות: › רפ
+      2.   0.870  /health-insurance/health-reform/  |  חוק ההסדרים - רפורמה בביטוח בריאות: › מה
+      3.   0.850  /health-insurance/surgeries/surgeries-and-treatments/  |  כיסוי להוצאות ניתוחים וטיפולים מחליפי ני
+
+=== שאלות עם תשובה (20): העמוד הנכון בין k הראשונים ===
+   שלב                k=1   k=3   k=5
+   וקטורי בלבד         12    17    19
+   BM25 בלבד            6    13    14
+   איחוד (RRF)         12    16    17
+   אחרי Rerank         16    20    20
+
+=== ציון ה-Rerank הכי גבוה לכל שאלה ===
+   answerable   מינימום 0.866 | חציון 0.948 | מקסימום 0.981
+   not_on_site  מינימום 0.470 | חציון 0.725 | מקסימום 0.881
+   personal     מינימום 0.876 | חציון 0.926 | מקסימום 0.968
+   0.502  (not_on_site) יש לכם סניף לקבלת קהל בבאר שבע?  ->  /apartment-insurance/apartment-information/digital-content-insurance/
+   0.800  (not_on_site) אפשר לבטח אצלכם קלנועית?  ->  /apartment-insurance/apartment-information/not-taking-chances/
+   0.470  (not_on_site) האם ביטוח השיניים מכסה הלבנת שיניים?  ->  /health-insurance/health_information/annual_mail_health/
+   0.881  (not_on_site) יש אצלכם הנחה בביטוח רכב לבעלי תו נכה?  ->  /car-insurance/car_information/age-is-important/
+   0.725  (not_on_site) האם ביטוח הבריאות מכסה השתלת שיער?  ->  /health-insurance/implants-and-special-treatments-abroad/
+   0.943  (personal) האם הפוליסה שלי מכסה את הנזק לדוד השמש שהתפוצ  ->  /claims-customer-service/claims-appartment-insurance/water-heater/
+   0.926  (personal) מה הסטטוס של תביעת הרכב שהגשתי לפני שבועיים?  ->  /customer-service/car-insurance/car_claim_status/
+   0.898  (personal) כמה כסף אקבל על הרכב שלי שהוכרז טוטאל לוס?  ->  /car-insurance/car_information/total-loss/
+   0.968  (personal) כדאי לי לעבור מביטוח מקיף לביטוח צד ג'? מה את  ->  /car-insurance/car_information/comprehensive-insurance-and-compulsory-insurance/
+   0.876  (personal) אני עומדת לעבור ניתוח בעוד חודש. ביטוח הבריאו  ->  /health-insurance/health-reform/
+
+=== סף: מתחת לציון הזה הבוט עונה 'לא מופיע באתר' ===
+      סף |  עם תשובה שיידחו |  לא באתר שיקבלו תשובה |  אישיות מעל הסף
+     0.1 |                0 |                     5 |               5
+     0.2 |                0 |                     5 |               5
+     0.3 |                0 |                     5 |               5
+     0.4 |                0 |                     5 |               5
+     0.5 |                0 |                     4 |               5
+     0.6 |                0 |                     3 |               5
+     0.7 |                0 |                     3 |               5
+     0.8 |                0 |                     1 |               5
+     0.9 |                2 |                     0 |               3
+
+=== קריאות שיצאו בבדיקה הזו ===
+   cohere:rerank-v4.0-pro: 60
+   voyage:voyage-4-lite: 50
