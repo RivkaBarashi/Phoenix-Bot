@@ -1,0 +1,12 @@
+# הממשק משתמש במפתחות ה-API שב-.env - לכן הוא נגיש רק מהמחשב הזה, לא מהרשת.
+[server]
+address = "localhost"
+
+[client]
+# שגיאה לא צפויה לא מציגה traceback למשתמשת - הפירוט נשאר בטרמינל
+showErrorDetails = "none"
+# בלי כפתור Deploy ותפריט מפתחים
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
