@@ -50,8 +50,13 @@ def judge(question: str, expected: str, got: str) -> tuple[str, str]:
 
 
 def outcome(record: dict, threshold: float) -> str:
-    """מה הבוט היה עונה בסף הזה: מתחת לסף - not_on_site, אחרת ההחלטה של המודל."""
-    return "not_on_site" if record["top"] < threshold else record["decision"]
+    """מה הבוט היה עונה בסף הזה. ברכה - תמיד ברכה (לפני החיפוש). מתחת לסף - off_topic אם בדיקת
+    הנושא אמרה שזה לא קשור לביטוח (נבדקת לשאלות שמתחת לסף הנוכחי), אחרת not_on_site."""
+    if record["decision"] == "greeting":
+        return "greeting"
+    if record["top"] < threshold:
+        return "off_topic" if record.get("topic_off") else "not_on_site"
+    return record["decision"]
 
 
 def main():
@@ -76,8 +81,17 @@ def main():
         if records:
             time.sleep(PAUSE)
         timings = {}
-        ranked, used, reranked_by = run_search(row["question"], args.index, timings)
-        a = respond(row["question"], SearchResult(ranked[:5], used, reranked_by, timings), threshold=0.0)
+        # כמו בצ'אט: ברכה נענית בקוד לפני החיפוש, וברכה שאחריה שאלה - עונים רק על השאלה
+        if greeting := answer_layer.greeting_answer(row["question"]):
+            rec = {"n": n, "type": row["type"], "question": row["question"], "top": 0.0, "decision": "greeting",
+                   "reason": "greeting", "llm": "", "sources": "", "answer": greeting.text, "verdict": "",
+                   "judge_reason": "", "cited_correct": "", "timings": {}}
+            records.append(rec)
+            print(f"\n[{n}] ({row['type']}) {row['question']}\n    -> greeting (בלי חיפוש)\n    {greeting.text}")
+            continue
+        question = answer_layer.split_greeting(row["question"])[0] or row["question"]
+        ranked, used, reranked_by = run_search(question, args.index, timings)
+        a = respond(question, SearchResult(ranked[:5], used, reranked_by, timings), threshold=0.0)
         rec = {"n": n, "type": row["type"], "question": row["question"], "top": ranked[0].score if ranked else 0.0,
                "decision": a.kind, "reason": a.reason, "llm": a.llm or "", "sources": " ".join(a.sources),
                "answer": a.text, "verdict": "", "judge_reason": "", "cited_correct": "", "timings": a.timings}
@@ -92,6 +106,8 @@ def main():
             )
             if a.kind == "answer" and not args.no_judge:
                 rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text)
+        if rec["top"] < config.RERANK_THRESHOLD:  # בצ'אט: מתחת לסף בודקים אם זה בכלל על ביטוח
+            rec["topic_off"] = answer_layer.is_off_topic(question)
         records.append(rec)
         source_mark = ("✓מקור" if rec["cited_correct"] else "✗מקור") if row["type"] == "answerable" and a.kind == "answer" else ""
         print(f"\n[{n}] ({row['type']}) {row['question']}")
@@ -110,9 +126,16 @@ def main():
         print(f"   {label:<16}{hit_at(key, 1):>6}{hit_at(key, 3):>6}{hit_at(key, 5):>6}")
 
     print("\n=== החלטות המודל (בלי סף) ===")
-    for kind in ("answerable", "not_on_site", "personal"):
+    for kind in ("answerable", "not_on_site", "personal", "greeting", "off_topic"):
         group = [r for r in records if r["type"] == kind]
-        print(f"   {kind:<12} " + ", ".join(f"{k}: {v}" for k, v in collections.Counter(r["decision"] for r in group).items()))
+        if group:
+            print(f"   {kind:<12} " + ", ".join(f"{k}: {v}" for k, v in collections.Counter(r["decision"] for r in group).items()))
+    print("\n=== בסף הנוכחי (מה שהצ'אט עושה) ===")
+    for kind in ("answerable", "not_on_site", "personal", "greeting", "off_topic"):
+        group = [r for r in records if r["type"] == kind]
+        if group:
+            final = collections.Counter(outcome(r, config.RERANK_THRESHOLD) for r in group)
+            print(f"   {kind:<12} " + ", ".join(f"{k}: {v}" for k, v in final.items()))
     print("   סיבות לדחייה: " + ", ".join(f"{k}: {v}" for k, v in collections.Counter(
         r["reason"] for r in records if r["decision"] == "not_on_site").items()))
     verdicts = collections.Counter(r["verdict"] for r in answerable if r["decision"] == "answer")

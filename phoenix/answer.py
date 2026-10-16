@@ -10,6 +10,9 @@
    בתשובה (טלפון, סכום, ימים) חייב להופיע בקטעים, וכל מילה מהשאלה חייבת להופיע איפשהו באתר
    (שאלה על "טרקטורון" כשבאתר יש רק "טרקטורים" - אין לה תשובה באתר). אחרת - "לא מופיע באתר".
 אין מקור - אין תשובה: כל תשובה מסתיימת בכתובת העמוד שממנו נלקחה.
+
+לפני הכול: ברכה ("שלום", "היי", "תודה") מקבלת תשובה קבועה בקוד, בלי חיפוש ובלי מקור.
+ושאלה שלא קשורה לביטוח בכלל ("בא לי להתחתן") מקבלת off_topic - בלי מקור ובלי טלפון.
 """
 import json
 import logging
@@ -31,12 +34,15 @@ FULL_CONTEXT_LLMS = ["gemini"]
 COMPACT_LLMS = ["groq", "openrouter", "cohere"]
 COMPACT_CHUNKS, COMPACT_CHARS = 3, 1500
 CONTACT_URL = "https://www.fnx.co.il/customer-service/contact-us/"
-KINDS = {"answer", "not_on_site", "personal"}
+KINDS = {"answer", "not_on_site", "personal", "off_topic"}
 
 NOT_ON_SITE = "המידע הזה לא מופיע באתר הפניקס, ולכן אין לי תשובה מדויקת עליו."
 GENERIC_REFERRAL = "אפשר לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455, או בכל הדרכים שבעמוד 'צור קשר'."
 PERSONAL_GENERIC = ("אין לי גישה לפוליסה או לתביעה האישית שלכם, ואני לא נותן ייעוץ אישי - "
                     "את זה בודקים מול שירות הלקוחות או סוכן הביטוח.")
+OFF_TOPIC_TEXT = "אני הבוט של חברת הפניקס. אפשר לשאול אותי על ביטוחים, תביעות ושירות."
+GREETING_REPLY = "שלום! אני הבוט של הפניקס. במה אוכל לעזור?"
+THANKS_REPLY = "בשמחה! אם יש עוד שאלה, אני כאן."
 ERROR_TEXT = ("יש כרגע תקלה זמנית ולא הצלחתי לבדוק את התשובה באתר. אפשר לנסות שוב בעוד רגע, "
               "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 
@@ -60,12 +66,32 @@ SYSTEM_PROMPT = """אתה העוזר הדיגיטלי של אתר הפניקס (
    שאלה על טלפון, מייל, שעות פעילות או "למי פונים" - ענו לפי פרטי ההתקשרות בקטע C, אם המוקד מופיע שם.
 5. referral: משפט אחד שמפנה למוקד המתאים לנושא, רק לפי פרטי ההתקשרות שבקטע C. ב-"answer" אפשר להשאיר ריק.
 6. evidence: העתקה מדויקת, מילה במילה, של המשפט או המשפטים מהקטעים שעליהם התשובה מבוססת - לא ניסוח מחדש.
-   ב-"not_on_site": רשימה ריקה.
-7. sources: מספרי הקטעים שעליהם התשובה מבוססת, למשל [2] או ["C"]. ב-"not_on_site": רשימה ריקה.
+   ב-"not_on_site" וב-"off_topic": רשימה ריקה.
+7. sources: מספרי הקטעים שעליהם התשובה מבוססת, למשל [2] או ["C"]. ב-"not_on_site" וב-"off_topic": רשימה ריקה.
 8. השיחה הקודמת (אם יש) היא רק כדי להבין את השאלה - היא לא מקור מידע.
+9. הודעה שלא קשורה לביטוח, לפיננסים או לשירות של הפניקס (למשל "בא לי להתחתן", "איך קוראים לך",
+   "מה מזג האוויר מחר"): kind = "off_topic". שאלה על ביטוח שהמידע עליה לא באתר היא "not_on_site" ולא
+   "off_topic" (למשל "יש לכם ביטוח לחתונה?" - not_on_site).
 
 החזר JSON בלבד:
-{"kind": "answer" | "not_on_site" | "personal", "answer": "...", "referral": "...", "evidence": ["..."], "sources": [1]}"""
+{"kind": "answer" | "not_on_site" | "personal" | "off_topic", "answer": "...", "referral": "...", "evidence": ["..."], "sources": [1]}"""
+
+# מתחת לסף המודל לא רואה את הקטעים - שאלה קצרה רק כדי להבחין בין off_topic ל-not_on_site
+TOPIC_PROMPT = ("האם ההודעה קשורה לביטוח, לפיננסים (פנסיה, חיסכון, הלוואות) או לשירות של חברת ביטוח? "
+                "גם שאלה על ביטוח שאולי לא קיים קשורה (למשל \"יש לכם ביטוח לחתונה?\"). "
+                'החזר JSON בלבד: {"related": true} או {"related": false}')
+
+# --- ברכות: מטופלות בקוד, לפני החיפוש ---
+# "מה קורה" נחשב ברכה רק כשאחריו סימן פיסוק או סוף ההודעה - "מה קורה עם התביעה שלי?" היא שאלה.
+_SALUTE = r"(?:שלום|היי+|הי|הלו|אהלן|בוקר טוב|ערב טוב|צהריים טובים|צהרים טובים|לילה טוב)(?:\s+(?:לכם|לך))?"
+_SMALL_TALK = r"מה\s+(?:קורה|נשמע|שלומך|שלומכם|המצב|העניינים)"
+_THANKS = r"תודה(?:\s+רבה)?(?:\s+(?:לכם|לך))?(?:\s+על\s+\S+)?"
+_PUNCT = r"[,.!?…:;\-–]"
+GREETING_PREFIX = re.compile(
+    rf"^[\s,.!?…:;\-–]*(?:(?P<salute>{_SALUTE})(?=\s|{_PUNCT}|$)"
+    rf"|(?P<talk>{_SMALL_TALK})(?=\s*(?:{_PUNCT}|$))"
+    rf"|(?P<thanks>{_THANKS})(?=\s*(?:{_PUNCT}|$)))[\s,.!?…:;\-–]*"
+)
 
 CONDENSE_PROMPT = ("נסח מחדש את השאלה האחרונה של הלקוח כשאלה עצמאית ומלאה בעברית, לפי השיחה. "
                    "אם היא כבר עצמאית - החזר אותה כמו שהיא. החזר רק את השאלה, בלי שום דבר נוסף.")
@@ -101,6 +127,39 @@ def contact_text() -> str:
         if chunk["url"] == CONTACT_URL:
             return chunk["text"].split("\n\n", 1)[-1]
     return ""
+
+
+def split_greeting(text: str) -> tuple[str, bool, bool]:
+    """(ההודעה בלי הברכה שבתחילתה, האם הייתה ברכה, האם הייתה תודה)."""
+    rest, greeted, thanked = text, False, False
+    while m := GREETING_PREFIX.match(rest):
+        greeted, thanked = True, thanked or bool(m.group("thanks"))
+        rest = rest[m.end():]
+    return rest.strip(), greeted, thanked
+
+
+def greeting_answer(question: str) -> "Answer | None":
+    """הודעה שהיא רק ברכה או תודה -> תשובה קבועה, בלי חיפוש, בלי Cohere, בלי מקור ובלי טלפון."""
+    rest, greeted, thanked = split_greeting(question)
+    if not greeted or WORD.search(rest):
+        return None
+    return Answer(THANKS_REPLY if thanked else GREETING_REPLY, "greeting", "greeting", [], None, "none",
+                  question=question)
+
+
+def is_off_topic(question: str) -> bool:
+    """שאלה מתחת לסף: האם היא בכלל לא על ביטוח? (אם המודל לא זמין - לא, ונשארים עם not_on_site)."""
+    def parse(text: str) -> dict:
+        data = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        if not isinstance(data.get("related"), bool):
+            raise ValueError("missing 'related'")
+        return data
+    try:
+        reply = llm.chat([{"role": "user", "content": question}], system=TOPIC_PROMPT, temperature=0,
+                         json_mode=True, parse=parse)
+    except AllProvidersFailed:
+        return False
+    return reply.data["related"] is False
 
 
 def parse_reply(text: str) -> dict:
@@ -277,6 +336,11 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     if not hits:
         return not_on_site("no_results")
     if calibrated and hits[0].score < threshold:  # שכבה 1
+        start = time.perf_counter()
+        off_topic = is_off_topic(standalone)
+        timings["topic"] = time.perf_counter() - start
+        if off_topic:
+            return Answer(OFF_TOPIC_TEXT, "off_topic", "below_threshold_off_topic", [], **base)
         return not_on_site("below_threshold")
 
     start = time.perf_counter()
@@ -295,6 +359,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     referral = str(data.get("referral") or "").strip()
     if not referral or unsupported_numbers(referral, [contact_text()]):
         referral = GENERIC_REFERRAL
+
+    if data["kind"] == "off_topic":
+        return Answer(OFF_TOPIC_TEXT, "off_topic", "off_topic", [], **base, **extra)
 
     if data["kind"] == "answer":
         if not cited:
@@ -326,6 +393,12 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 def answer(question: str, history: list[dict] = ()) -> Answer:
     """history: [{"role": "user" | "assistant", "content": "..."}] - לשאלות המשך."""
     start = time.perf_counter()
+    if greeting := greeting_answer(question):
+        greeting.timings["total"] = time.perf_counter() - start
+        return greeting
+    rest, greeted, _ = split_greeting(question)
+    if greeted:  # "היי, איך מגישים תביעה?" - מתעלמים מהברכה ועונים על השאלה
+        question = rest
     standalone = standalone_question(question, list(history))
     condense = time.perf_counter() - start
     result = respond(question, search(standalone, k=CONTEXT_CHUNKS), list(history), standalone=standalone)
