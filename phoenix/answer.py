@@ -12,8 +12,10 @@
 אין מקור - אין תשובה: כל תשובה מסתיימת בכתובת העמוד שממנו נלקחה.
 """
 import json
+import logging
 import re
 import sys
+import time
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
@@ -69,6 +71,10 @@ CONDENSE_PROMPT = ("נסח מחדש את השאלה האחרונה של הלקו
                    "אם היא כבר עצמאית - החזר אותה כמו שהיא. החזר רק את השאלה, בלי שום דבר נוסף.")
 
 WORD = re.compile(r"\w+")
+# מודלים שמחזירים JSON לפי הפרומפט (לא Gemini) כותבים לפעמים חו"ל / ת"ז בלי escape, וה-JSON נשבר.
+# גרש כפול בין שתי אותיות עבריות אף פעם לא סוגר מחרוזת - בטוח להפוך אותו ל-\".
+HEBREW_ACRONYM_QUOTE = re.compile(r'(?<=[א-ת])"(?=[א-ת])')
+log = logging.getLogger("phoenix")
 NUMBER = re.compile(r"\d[\d\-./:,]*\d|\d")
 
 
@@ -84,6 +90,7 @@ class Answer:
     question: str = ""        # השאלה שחיפשנו (אחרי השלמה מהשיחה)
     hits: list[Hit] = field(default_factory=list)
     raw: dict | None = None   # התשובה הגולמית של המודל
+    timings: dict[str, float] = field(default_factory=dict)  # שניות לכל שלב (vector, bm25, rerank, llm, total)
 
 
 @lru_cache
@@ -100,7 +107,11 @@ def parse_reply(text: str) -> dict:
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < start:
         raise ValueError("no JSON object")
-    data = json.loads(text[start:end + 1])
+    raw = text[start:end + 1]
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = json.loads(HEBREW_ACRONYM_QUOTE.sub(r'\\"', raw))
     if data.get("kind") not in KINDS:
         raise ValueError(f"bad kind: {data.get('kind')!r}")
     return data
@@ -255,8 +266,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     standalone = standalone or question
     hits = result.hits[:CONTEXT_CHUNKS]
     calibrated = result.reranker.startswith(config.THRESHOLD_RERANKER + ":")
+    timings = dict(result.timings)
     base = dict(top_score=hits[0].score if hits and calibrated else None, reranker=result.reranker,
-                question=standalone, hits=hits)
+                question=standalone, hits=hits, timings=timings)
 
     def not_on_site(reason: str, referral: str = GENERIC_REFERRAL, **extra) -> Answer:
         return Answer(f"{NOT_ON_SITE} {referral}\n\n{format_sources([CONTACT_URL])}", "not_on_site", reason,
@@ -267,11 +279,14 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     if calibrated and hits[0].score < threshold:  # שכבה 1
         return not_on_site("below_threshold")
 
+    start = time.perf_counter()
     try:  # שכבה 2
         reply = _ask_model(question, standalone, history, hits)
     except AllProvidersFailed:
+        timings["llm"] = time.perf_counter() - start
         return Answer(f"{ERROR_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "llm_unavailable",
                       [CONTACT_URL], **base)
+    timings["llm"] = time.perf_counter() - start
     data, extra = reply.data, dict(llm=reply.provider, raw=reply.data)
     texts = [h.text for h in hits] + [contact_text()]
     cited = _cited(data.get("sources"), hits)
@@ -310,8 +325,15 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
 def answer(question: str, history: list[dict] = ()) -> Answer:
     """history: [{"role": "user" | "assistant", "content": "..."}] - לשאלות המשך."""
+    start = time.perf_counter()
     standalone = standalone_question(question, list(history))
-    return respond(question, search(standalone, k=CONTEXT_CHUNKS), list(history), standalone=standalone)
+    condense = time.perf_counter() - start
+    result = respond(question, search(standalone, k=CONTEXT_CHUNKS), list(history), standalone=standalone)
+    if history:
+        result.timings["condense"] = condense
+    result.timings["total"] = time.perf_counter() - start
+    log.info("timings %s | %s", " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items()), question[:60])
+    return result
 
 
 if __name__ == "__main__":

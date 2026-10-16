@@ -42,7 +42,7 @@ def _save_cache():
 
 def _cached(name: str, call, max_docs: int | None = None):
     """עוטף קריאת Rerank: ציונים קיימים מהמטמון, ל-API נשלחים רק הקטעים החסרים."""
-    def cached_call(query, documents, top_n):
+    def cached_call(query, documents, top_n, timeout=None):
         docs = documents[:max_docs] if max_docs else documents
         cache = _load_cache()
         keys = [hashlib.sha1(f"{name}\n{query}\n{d}".encode()).hexdigest() for d in docs]
@@ -50,7 +50,7 @@ def _cached(name: str, call, max_docs: int | None = None):
         CACHE_HITS[name] += len(docs) - len(missing)
         if missing:
             API_REQUESTS[name] += 1
-            for j, score in call(query, [docs[i] for i in missing], len(missing)):
+            for j, score in call(query, [docs[i] for i in missing], len(missing), timeout):
                 cache[keys[missing[j]]] = score
             _save_cache()
         scored = [(i, cache[key]) for i, key in enumerate(keys) if key in cache]
@@ -59,12 +59,12 @@ def _cached(name: str, call, max_docs: int | None = None):
 
 
 def _cohere(model):
-    def call(query, documents, top_n):
+    def call(query, documents, top_n, timeout=None):
         r = httpx.post(
             "https://api.cohere.com/v2/rerank",
             headers={"Authorization": f"Bearer {config.API_KEYS['cohere']}"},
             json={"model": model, "query": query, "documents": documents, "top_n": top_n},
-            timeout=config.HTTP_TIMEOUT,
+            timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
         return [(x["index"], x["relevance_score"]) for x in r.json()["results"]]
@@ -72,13 +72,13 @@ def _cohere(model):
 
 
 def _voyage(model):
-    def call(query, documents, top_n):
+    def call(query, documents, top_n, timeout=None):
         r = httpx.post(
             "https://api.voyageai.com/v1/rerank",
             headers={"Authorization": f"Bearer {config.API_KEYS['voyage']}"},
             json={"model": model, "query": query, "documents": [d[:VOYAGE_DOC_CHARS] for d in documents],
                   "top_k": top_n},
-            timeout=config.HTTP_TIMEOUT,
+            timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
         return [(x["index"], x["relevance_score"]) for x in r.json()["data"]]
@@ -104,7 +104,9 @@ def rerank(query: str, documents: list[str], top_n: int = 5,
         return [], "none"
     providers = [p for p in PROVIDERS if only is None or p.name.startswith(only + ":")]
     try:
-        return run_chain("rerank", providers, query, documents, top_n, retries=1, max_wait=3)
+        return run_chain("rerank", providers, query, documents, top_n, timeout=config.QUERY_TIMEOUT,
+                         retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
+                         deadline=config.QUERY_TIMEOUT)
     except AllProvidersFailed as exc:
         log.warning("rerank unavailable, keeping original order: %s", exc)
         return [(i, 0.0) for i in range(top_n)], "none"

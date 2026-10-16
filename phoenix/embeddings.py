@@ -40,12 +40,15 @@ def gemini_input(text: str, is_query: bool) -> str:
 def _gemini(model):
     uses_prefix = model.startswith("gemini-embedding-2")  # gemini-embedding-001 עובד עם task_type
 
-    def call(texts, is_query):
+    def call(texts, is_query, timeout=None):
         if uses_prefix:
             inputs, cfg = [gemini_input(t, is_query) for t in texts], None
         else:
             inputs = texts
             cfg = types.EmbedContentConfig(task_type="RETRIEVAL_QUERY" if is_query else "RETRIEVAL_DOCUMENT")
+        if timeout:
+            cfg = (cfg or types.EmbedContentConfig()).model_copy(
+                update={"http_options": types.HttpOptions(timeout=int(timeout * 1000))})
         resp = config.gemini_client().models.embed_content(
             model=model,
             # gemini-embedding-2 מאחד רשימת מחרוזות לוקטור אחד - לכן כל טקסט כ-Content נפרד
@@ -57,12 +60,12 @@ def _gemini(model):
 
 
 def _voyage(model):
-    def call(texts, is_query):
+    def call(texts, is_query, timeout=None):
         r = httpx.post(
             "https://api.voyageai.com/v1/embeddings",
             headers={"Authorization": f"Bearer {config.API_KEYS['voyage']}"},
             json={"model": model, "input": texts, "input_type": "query" if is_query else "document"},
-            timeout=config.HTTP_TIMEOUT,
+            timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
         return _same_length([d["embedding"] for d in sorted(r.json()["data"], key=lambda d: d["index"])], texts)
@@ -81,5 +84,7 @@ def embed_query(text: str, providers: list[str] | None = None) -> tuple[list[flo
     """וקטור לשאלה מהספק הראשון שעובד. providers: שמות ספקים לפי סדר עדיפות (ברירת מחדל: כולם)."""
     order = providers or [p.name for p in PROVIDERS]
     providers = sorted((p for p in PROVIDERS if p.name in order), key=lambda p: order.index(p.name))
-    vectors, provider = run_chain("embed_query", providers, [text], True, retries=1, max_wait=3)
+    vectors, provider = run_chain("embed_query", providers, [text], True, timeout=config.QUERY_TIMEOUT,
+                                  retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
+                                  deadline=config.QUERY_TIMEOUT)
     return vectors[0], provider

@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 12,13,30")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
     # בבדיקה בלי Cohere כמודל שפה: הוא חולק את מכסת ה-Trial (1,000 בחודש) עם ה-Rerank
     answer_layer.COMPACT_LLMS = [p for p in answer_layer.COMPACT_LLMS if p != "cohere"]
 
@@ -74,11 +75,12 @@ def main():
             continue
         if records:
             time.sleep(PAUSE)
-        ranked, used, reranked_by = run_search(row["question"], args.index)
-        a = respond(row["question"], SearchResult(ranked[:5], used, reranked_by), threshold=0.0)
+        timings = {}
+        ranked, used, reranked_by = run_search(row["question"], args.index, timings)
+        a = respond(row["question"], SearchResult(ranked[:5], used, reranked_by, timings), threshold=0.0)
         rec = {"n": n, "type": row["type"], "question": row["question"], "top": ranked[0].score if ranked else 0.0,
                "decision": a.kind, "reason": a.reason, "llm": a.llm or "", "sources": " ".join(a.sources),
-               "answer": a.text, "verdict": "", "judge_reason": "", "cited_correct": ""}
+               "answer": a.text, "verdict": "", "judge_reason": "", "cited_correct": "", "timings": a.timings}
         if row["type"] == "answerable":
             correct = [h for h in ranked if same_page(h.url, row["source_url"])]
             by_rrf = sorted(ranked, key=lambda h: -sum(1 / (RRF_K + r) for r in (h.vector_rank, h.bm25_rank) if r))
@@ -127,6 +129,11 @@ def main():
         mark = "  <- נוכחי" if t == config.RERANK_THRESHOLD else ""
         print(f"   {t:>5.2f} | {ans.count('answer'):>12} / {good:>5} / {ans.count('not_on_site'):>5} | {leaks:>21} | "
               f"{pers.count('personal'):>11} / {pers.count('not_on_site'):>5} / {pers.count('answer'):>5}{mark}")
+
+    print("\n=== זמן ממוצע לכל שלב (שניות) ===")
+    stages = sorted({k for r in records for k in r["timings"]})
+    print("   " + " | ".join(f"{k}: {statistics.mean(r['timings'][k] for r in records if k in r['timings']):.1f}"
+                            for k in stages))
 
     out = config.ROOT / "data" / f"eval_answers_{args.index}{'_partial' if numbers else ''}.csv"
     fields = ["n", "type", "question", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",

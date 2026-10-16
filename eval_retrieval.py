@@ -40,7 +40,7 @@ def best_rank(ranks) -> int | None:
     return min(ranks) if ranks else None
 
 
-def run_search(question: str, index: str) -> tuple[list, str, str]:
+def run_search(question: str, index: str, timings: dict | None = None) -> tuple[list, str, str]:
     """חיפוש שבו גם האינדקס וגם ה-Rerank הם בדיוק מה שביקשנו - אחרת מחכים ומנסים שוב.
     מחזיר (כל המועמדים מדורגים, האינדקס, ה-Rerank).
 
@@ -48,7 +48,7 @@ def run_search(question: str, index: str) -> tuple[list, str, str]:
     קריאות Cohere על מועמדים שנמצאו בלי וקטורים.
     """
     for _ in range(6):
-        hits, used = candidates(question, embedder=index, fallback=False)
+        hits, used = candidates(question, embedder=index, fallback=False, timings=timings)
         if (used or "").startswith(index):
             break
         print(f"    (מגבלת קצב באינדקס {index} - מחכה 25 שניות)")
@@ -56,7 +56,7 @@ def run_search(question: str, index: str) -> tuple[list, str, str]:
     else:
         raise RuntimeError(f"vector search on {index} kept failing - try again later")
     for _ in range(4):
-        ranked, reranked_by = rerank_hits(question, hits, RERANKER)
+        ranked, reranked_by = rerank_hits(question, hits, RERANKER, timings=timings)
         if reranked_by.startswith(RERANKER):
             return ranked, used, reranked_by
         print(f"    (מגבלת קצב ב-{RERANKER} - מחכה 25 שניות)")
@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--types", default="answerable,not_on_site,personal")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
 
     types = args.types.split(",")
     rows = [r for r in csv.DictReader(open(config.ROOT / "data" / "questions.csv", encoding="utf-8-sig"))

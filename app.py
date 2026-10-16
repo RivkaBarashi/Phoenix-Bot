@@ -16,6 +16,7 @@ import html
 import logging
 import os
 import re
+import time
 
 import streamlit as st
 
@@ -34,6 +35,8 @@ WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה 
            "קישור לעמוד המקור. כשהמידע לא מופיע באתר - אגיד זאת ואפנה לשירות הלקוחות. "
            "אין לי גישה לפוליסה האישית שלכם. אפשר לשאול למשל:")
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
+STAGE_NAMES = {"condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
+               "llm": "מודל", "total": "סה\"כ"}
 ERROR_MESSAGE = ("משהו השתבש ולא הצלחתי לענות כרגע. אפשר לנסות שוב בעוד רגע, "
                  "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 LOAD_ERROR = ("הבוט לא הצליח להיטען. צריך לוודא שהאינדקס נבנה (python -m phoenix.chunk ואז "
@@ -97,7 +100,8 @@ def message_from_answer(a: bot.Answer) -> dict:
     """תוצאת הבוט -> הודעה לתצוגה: הטקסט בלי שורת המקור, והמקורות כקישורים עם שם העמוד."""
     text = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources מוסיף "המקור:" / "המקורות:" בסוף
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
-    meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score}
+    meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
+            "timings": a.timings}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
 
@@ -107,9 +111,25 @@ def error_message(reason: str) -> dict:
             "meta": {"kind": "error", "reason": reason, "llm": None, "reranker": "-", "top_score": None}}
 
 
-def render(message: dict):
+def stream_words(text: str):
+    """הצגה הדרגתית של תשובה שכבר עברה את כל הבדיקות. לא מזרימים ישר מהמודל: אחרי שהוא מסיים
+    הקוד עוד בודק את הציטוט והמספרים, ותשובה שנפסלה לא אמורה להופיע על המסך אפילו לרגע."""
+    for piece in re.split(r"(\s+)", text):
+        yield piece.replace("*", "\\*").replace("_", "\\_")  # בלי עיצוב Markdown באמצע ההקלדה
+        if piece.strip():
+            time.sleep(0.03)
+
+
+def render(message: dict, stream: bool = False):
     with st.chat_message(message["role"]):
-        st.markdown(f'<div class="answer">{to_html(message["content"])}</div>', unsafe_allow_html=True)
+        body = f'<div class="answer">{to_html(message["content"])}</div>'
+        if stream:
+            placeholder = st.empty()
+            with placeholder:
+                st.write_stream(stream_words(message["content"]))
+            placeholder.markdown(body, unsafe_allow_html=True)  # הגרסה הסופית: קישורים וטלפונים משמאל לימין
+        else:
+            st.markdown(body, unsafe_allow_html=True)
         if message.get("sources"):
             label = "המקור" if len(message["sources"]) == 1 else "המקורות"
             links = " · ".join(
@@ -122,6 +142,9 @@ def render(message: dict):
             with st.expander("פרטים טכניים"):
                 st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
                            f"מודל: {meta['llm'] or '-'}")
+                if meta.get("timings"):
+                    st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
+                                                      for k, v in meta["timings"].items()))
 
 
 def ask(question: str):
@@ -175,7 +198,7 @@ def main():
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)
         st.session_state.messages.append(reply)
-        render(reply)
+        render(reply, stream=True)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ def _gemini(model):
     # Gemma דרך אותו API לא תומך בהוראות מערכת ובמצב JSON - ההוראות נכנסות להודעה הראשונה
     is_gemma = model.startswith("gemma")
 
-    def call(messages, system, temperature, json_mode=False):
+    def call(messages, system, temperature, json_mode=False, timeout=None):
         if is_gemma and system:
             messages = [{"role": "user", "content": f"{system}\n\n{messages[0]['content']}"}, *messages[1:]]
         contents = [
@@ -57,6 +57,7 @@ def _gemini(model):
                 system_instruction=None if is_gemma else (system or None),
                 temperature=temperature,
                 response_mime_type="application/json" if json_mode and not is_gemma else None,
+                http_options=types.HttpOptions(timeout=int((timeout or config.HTTP_TIMEOUT) * 1000)),
             ),
         )
         return _non_empty(resp.text)
@@ -64,12 +65,12 @@ def _gemini(model):
 
 
 def _openai_compatible(provider, model):
-    def call(messages, system, temperature, json_mode=False):  # JSON: לפי ההוראות בפרומפט
+    def call(messages, system, temperature, json_mode=False, timeout=None):  # JSON: לפי ההוראות בפרומפט
         r = httpx.post(
             OPENAI_COMPATIBLE_URLS[provider],
             headers={"Authorization": f"Bearer {config.API_KEYS[provider]}"},
             json={"model": model, "temperature": temperature, "messages": _with_system(messages, system)},
-            timeout=config.HTTP_TIMEOUT,
+            timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
         return _non_empty(r.json()["choices"][0]["message"]["content"])
@@ -77,12 +78,12 @@ def _openai_compatible(provider, model):
 
 
 def _cohere(model):
-    def call(messages, system, temperature, json_mode=False):  # JSON: לפי ההוראות בפרומפט
+    def call(messages, system, temperature, json_mode=False, timeout=None):  # JSON: לפי ההוראות בפרומפט
         r = httpx.post(
             "https://api.cohere.com/v2/chat",
             headers={"Authorization": f"Bearer {config.API_KEYS['cohere']}"},
             json={"model": model, "temperature": temperature, "messages": _with_system(messages, system)},
-            timeout=config.HTTP_TIMEOUT,
+            timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
         return _non_empty("".join(part.get("text", "") for part in r.json()["message"]["content"]))
@@ -116,7 +117,7 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
 
     def checked(p: Provider) -> Provider:
         def call(messages, system, temperature):
-            text = p.call(messages, system, temperature, json_mode=json_mode)
+            text = p.call(messages, system, temperature, json_mode=json_mode, timeout=config.QUERY_TIMEOUT)
             if parse is None:
                 return text, None
             try:
@@ -125,7 +126,8 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
                 raise EmptyResult(f"unusable response: {exc}") from exc
         return Provider(p.name, call, p.enabled)
 
-    # הלקוחה מחכה לתשובה - לא מחכים הרבה על ספק עמוס, עוברים מהר לבא.
+    # הלקוחה מחכה לתשובה: מודל שלא עונה תוך QUERY_TIMEOUT או חסום - עוברים מיד לבא (config).
     (text, data), provider = run_chain("llm", [checked(p) for p in providers], messages, system, temperature,
-                                       retries=1, max_wait=3)
+                                       retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
+                                       deadline=config.QUERY_TIMEOUT)
     return ChatResult(text, provider, data)

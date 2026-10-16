@@ -8,6 +8,7 @@ import collections
 import logging
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -68,6 +69,17 @@ def _status_code(exc: Exception) -> int | None:
     return code if isinstance(code, int) else None
 
 
+def _error_text(exc: Exception) -> str:
+    """הודעת השגיאה כולל גוף התשובה: Groq כותב "tokens per day" רק בגוף, לא בשורת הסטטוס."""
+    text = str(exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            text += " " + exc.response.text[:1000]
+        except Exception:  # גוף שלא נקרא (stream)
+            pass
+    return text
+
+
 def classify(exc: Exception) -> str:
     if isinstance(exc, EmptyResult):
         return EMPTY
@@ -75,7 +87,7 @@ def classify(exc: Exception) -> str:
         return UNAVAILABLE
     code = _status_code(exc)
     if code == 429:
-        msg = str(exc).lower()
+        msg = _error_text(exc).lower()
         long_term = any(k in msg for k in ("perday", "per day", "per-day", "daily", "month"))
         return QUOTA if long_term else RATE_LIMIT
     if code == 402:
@@ -95,18 +107,41 @@ def retry_after(exc: Exception) -> float | None:
             return float(exc.response.headers.get("retry-after", ""))
         except ValueError:
             pass
-    # ג'מיני כותב את זה בהודעה: "retryDelay': '3068s'" או "Please retry in 51m8.04s" / "retry in 34.5s"
-    text = str(exc)
+    # בתוך ההודעה: ג'מיני "retryDelay': '3068s'" / "Please retry in 51m8.04s", Groq "try again in 34m37.9s"
+    text = _error_text(exc)
     if match := re.search(r"retryDelay'?\"?:\s*'?\"?([\d.]+)s", text):
         return float(match.group(1))
-    if match := re.search(r"retry in (?:(\d+)m)?([\d.]+)\s*s", text, re.IGNORECASE):
-        return int(match.group(1) or 0) * 60 + float(match.group(2))
+    if match := re.search(r"(?:retry|try again) in (?:(\d+)h)?\s*(?:(\d+)m)?\s*([\d.]+)\s*s", text, re.IGNORECASE):
+        return int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60 + float(match.group(3))
     return None
 
 
-def run_chain(purpose: str, providers: list[Provider], *args,
-              retries: int = 1, max_wait: float = 10.0, cooldown: bool = True, **kwargs):
-    """מחזיר (תוצאה, שם הספק שהצליח). זורק AllProvidersFailed אם כולם נכשלו."""
+def with_deadline(fn: Callable[..., Any], seconds: float, *args, **kwargs):
+    """מריץ fn עם מגבלת זמן אמיתית (שעון קיר). timeout של httpx הוא רק מרווח בין בתים, ו-OpenRouter
+    שולח רווחים כדי להשאיר את החיבור פתוח - כך בקשה "עם timeout של 15 שניות" נמשכה 166 שניות.
+    בקשה שלא סיימה בזמן ממשיכה ברקע עד שתיגמר, ואנחנו כבר עוברים לספק הבא."""
+    result: dict[str, Any] = {}
+
+    def run():
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 - מועבר הלאה כמו שהוא
+            result["error"] = exc
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        raise TimeoutError(f"no answer within {seconds:.0f}s")
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
+def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, max_wait: float = 10.0,
+              cooldown: bool = True, deadline: float | None = None, **kwargs):
+    """מחזיר (תוצאה, שם הספק שהצליח). זורק AllProvidersFailed אם כולם נכשלו.
+    deadline: מגבלת זמן לכל ניסיון אצל ספק (בשניות). ספק שלא עונה בזמן - עוברים לבא."""
     errors = []
     for p in providers:
         if not p.enabled:
@@ -117,6 +152,8 @@ def run_chain(purpose: str, providers: list[Provider], *args,
         for attempt in range(retries + 1):
             try:
                 CALLS[p.name] += 1
+                if deadline:
+                    return with_deadline(p.call, deadline, *args, **kwargs), p.name
                 return p.call(*args, **kwargs), p.name
             except StopChain:
                 raise
@@ -129,8 +166,9 @@ def run_chain(purpose: str, providers: list[Provider], *args,
                     continue
                 if cooldown and kind in COOLDOWN_SECONDS:
                     rest = COOLDOWN_SECONDS[kind]
-                    if kind == QUOTA and (reset := retry_after(exc)):  # מכסה יומית: לנוח עד האיפוס
-                        rest = max(rest, min(reset, 86400))
+                    reset = retry_after(exc)
+                    if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
+                        rest = min(max(reset, 1), 86400)
                     _resting_until[p.name] = time.time() + rest
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])

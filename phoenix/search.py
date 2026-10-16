@@ -8,7 +8,8 @@
    ציון ה-Rerank של הקטע הראשון הוא מה שיקבע אם בכלל יש תשובה באתר.
 """
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from . import bm25, config, embeddings, rerank
 from .fallback import AllProvidersFailed
@@ -37,6 +38,7 @@ class SearchResult:
     hits: list[Hit]
     embedder: str | None  # באיזה אינדקס וקטורי חיפשנו (None = רק מילות מפתח)
     reranker: str         # מי דירג ("none" = סדר RRF, בלי ציון מכויל)
+    timings: dict[str, float] = field(default_factory=dict)  # שניות לכל שלב: vector, bm25, rerank
 
 
 def vector_search(query: str, n: int, embedder: str | None = None, fallback: bool = True) -> tuple[list[Hit], str]:
@@ -54,14 +56,19 @@ def vector_search(query: str, n: int, embedder: str | None = None, fallback: boo
     return hits, used
 
 
-def candidates(query: str, n: int = CANDIDATES, embedder: str | None = None,
-               fallback: bool = True) -> tuple[list[Hit], str | None]:
-    """המועמדים משני החיפושים, מאוחדים ומסודרים לפי RRF. מחזיר (מועמדים, האינדקס הווקטורי)."""
+def candidates(query: str, n: int = CANDIDATES, embedder: str | None = None, fallback: bool = True,
+               timings: dict | None = None) -> tuple[list[Hit], str | None]:
+    """המועמדים משני החיפושים, מאוחדים ומסודרים לפי RRF. מחזיר (מועמדים, האינדקס הווקטורי).
+    timings: מילון שמקבל את זמני השלבים (vector = וקטור לשאלה + חיפוש באינדקס, bm25)."""
+    timings = {} if timings is None else timings
+    start = time.perf_counter()
     try:
         vector_hits, used = vector_search(query, n, embedder, fallback)
     except (AllProvidersFailed, RuntimeError) as exc:
         log.warning("vector search unavailable, using keywords only: %s", exc)
         vector_hits, used = [], None
+    timings["vector"] = time.perf_counter() - start
+    start = time.perf_counter()
     merged: dict[str, Hit] = {}
     for rank, hit in enumerate(vector_hits, 1):
         hit.vector_rank = rank
@@ -69,14 +76,19 @@ def candidates(query: str, n: int = CANDIDATES, embedder: str | None = None,
     for rank, (chunk, _) in enumerate(bm25.search(query, n), 1):
         hit = merged.setdefault(chunk["id"], Hit(chunk["id"], chunk["url"], chunk["title"], chunk["heading"], chunk["text"]))
         hit.bm25_rank = rank
+    timings["bm25"] = time.perf_counter() - start
     for hit in merged.values():
         hit.score = sum(1 / (RRF_K + r) for r in (hit.vector_rank, hit.bm25_rank) if r)
     return sorted(merged.values(), key=lambda h: -h.score), used
 
 
-def rerank_hits(query: str, hits: list[Hit], reranker: str | None = None) -> tuple[list[Hit], str]:
+def rerank_hits(query: str, hits: list[Hit], reranker: str | None = None,
+                timings: dict | None = None) -> tuple[list[Hit], str]:
     """מדרג את המועמדים מחדש. אם אין Rerank זמין - נשאר סדר ה-RRF."""
+    start = time.perf_counter()
     order, reranked_by = rerank.rerank(query, [h.text for h in hits], top_n=len(hits), only=reranker)
+    if timings is not None:
+        timings["rerank"] = time.perf_counter() - start
     if reranked_by == "none":
         return hits, reranked_by
     for i, score in order:
@@ -87,6 +99,7 @@ def rerank_hits(query: str, hits: list[Hit], reranker: str | None = None) -> tup
 def search(query: str, k: int = 5, embedder: str | None = None, fallback: bool = True,
            reranker: str | None = None) -> SearchResult:
     """k הקטעים הרלוונטיים ביותר. reranker: רק ספק Rerank אחד (לבדיקות)."""
-    hits, used = candidates(query, embedder=embedder, fallback=fallback)
-    hits, reranked_by = rerank_hits(query, hits, reranker)
-    return SearchResult(hits[:k], used, reranked_by)
+    timings: dict[str, float] = {}
+    hits, used = candidates(query, embedder=embedder, fallback=fallback, timings=timings)
+    hits, reranked_by = rerank_hits(query, hits, reranker, timings=timings)
+    return SearchResult(hits[:k], used, reranked_by, timings)

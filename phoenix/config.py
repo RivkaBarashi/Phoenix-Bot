@@ -70,7 +70,20 @@ THRESHOLD_RERANKER = "cohere"
 FETCH_CHAIN = ["direct", "firecrawl", "jina"]
 
 USER_AGENT = "PhoenixHackathonBot/0.1 (student RAG project; polite crawl)"
-HTTP_TIMEOUT = 30  # ספק שלא עונה תוך 30 שניות - עוברים לבא
+HTTP_TIMEOUT = 30  # ספק שלא עונה תוך 30 שניות - עוברים לבא (בניית האינדקס, איסוף עמודים)
+
+# בזמן שאלה (הצ'אט): כל ספק - מודל שפה, וקטור לשאלה, Rerank - מקבל עד QUERY_TIMEOUT שניות,
+# ועל 429 או תקלה עוברים מיד לספק הבא, בלי לחכות. (Gemini לא מקבל פחות מ-10 שניות.)
+# סקריפטי הבדיקות קוראים ל-patient() ומחכים יותר, כדי לא לעבור לגיבוי בגלל עומס רגעי.
+QUERY_TIMEOUT = 15
+QUERY_RETRIES = 0
+QUERY_MAX_WAIT = 0.0
+
+
+def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
+    """לסקריפטים בלבד (eval_*.py): המתנה ארוכה יותר לכל ספק."""
+    global QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT
+    QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT = timeout, retries, max_wait
 
 
 @lru_cache
