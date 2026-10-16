@@ -41,6 +41,17 @@ GENERIC_REFERRAL = "אפשר לפנות לשירות הלקוחות של הפנ�
 PERSONAL_GENERIC = ("אין לי גישה לפוליסה או לתביעה האישית שלכם, ואני לא נותן ייעוץ אישי - "
                     "את זה בודקים מול שירות הלקוחות או סוכן הביטוח.")
 OFF_TOPIC_TEXT = "אני הבוט של חברת הפניקס. אפשר לשאול אותי על ביטוחים, תביעות ושירות."
+PERSONAL_OPENING = "את הכיסוי בפוליסה האישית שלכם אפשר לבדוק רק מול שירות הלקוחות."
+REPHRASE_PROMPT = ('נסח מחדש את התשובה כך שלא תתחיל ב"כן" או ב"לא": זו שאלה על פוליסה אישית, ואין לנו גישה אליה. '
+                   f'פתח במשפט "{PERSONAL_OPENING} לפי האתר, באופן כללי..." והמשך עם אותו מידע בדיוק - בלי להוסיף '
+                   "ובלי להשמיט מספרים או פרטים. החזר רק את הטקסט המנוסח מחדש.")
+YES_NO_START = re.compile(r"^\s*(?:כן|לא)(?=[\s,.!:;\-–]|$)[\s,.!:;\-–]*")
+# שאלה בגוף ראשון על פוליסה/תביעה/כיסוי - אישית גם אם המודל סיווג אותה כ-answer (נבדק: "נזק מצנרת
+# מכוסה אצלי?" סווגה answer ונענתה "כן, נזק מצנרת מכוסה..."). "אבא שלי בן 70" או "הרכב שלי" - לא.
+PERSONAL_QUESTION = re.compile(
+    r"(?:פוליס|ביטוח|כיסוי|תביע)\S*(?:\s+\S+){0,2}\s+שלי\b|מכוס[הת]?\s+אצלי|אצלי\s+מכוס"
+    r"|\bאני\s+(?:מבוטח|מכוס)|\bהאם\s+אני\s+מכוס"
+)
 GREETING_REPLY = "שלום! אני הבוט של הפניקס. במה אוכל לעזור?"
 THANKS_REPLY = "בשמחה! אם יש עוד שאלה, אני כאן."
 ERROR_TEXT = ("יש כרגע תקלה זמנית ולא הצלחתי לבדוק את התשובה באתר. אפשר לנסות שוב בעוד רגע, "
@@ -57,10 +68,12 @@ SYSTEM_PROMPT = """אתה העוזר הדיגיטלי של אתר הפניקס (
      kind = "not_on_site", גם אם יש בקטעים כלל כללי שנראה קשור. אל תסיק ממנו.
      דבר עם שם דומה הוא לא אותו דבר (למשל "טרקטורון" ו"טרקטור").
 3. שאלה על הפוליסה, התביעה, הכיסוי או הסכום האישיים של הלקוח, או בקשה לייעוץ או להמלצה אישית
-   ("האם אני מכוסה", "כמה אקבל", "כדאי לי", "מה אתם ממליצים"): kind = "personal".
-   אין לך גישה למידע אישי ואתה לא נותן ייעוץ. כתוב בקצרה מה האתר אומר בנושא (רק אם זה מופיע בקטעים),
-   ואמור שאת המקרה האישי בודקים מול שירות הלקוחות או סוכן הביטוח.
-4. ניסוח: עד 5 משפטים קצרים וברורים, בלשון רבים ("אפשר", "תוכלו"). שאלת כן/לא - פתחו ב"כן" או ב"לא".
+   ("הפוליסה שלי", "מכוסה אצלי", "האם אני מכוסה", "כמה אקבל", "כדאי לי", "מה אתם ממליצים"): kind = "personal".
+   אין לך גישה למידע אישי ואתה לא נותן ייעוץ. אל תפתחו ב"כן" או ב"לא", גם אם זו שאלת כן/לא - הלקוח עלול
+   להבין שהפוליסה שלו מכסה. התחילו כך: "את הכיסוי בפוליסה האישית שלכם אפשר לבדוק רק מול שירות הלקוחות.
+   לפי האתר, באופן כללי..." - ואז מה שהאתר אומר בנושא (רק אם זה מופיע בקטעים), והפניה למוקד המתאים.
+4. ניסוח: עד 5 משפטים קצרים וברורים, בלשון רבים ("אפשר", "תוכלו"). שאלת כן/לא כללית - פתחו ב"כן" או ב"לא".
+   בשאלה אישית (הפוליסה, התביעה או המקרה של הלקוח) - לא פותחים ב"כן" או ב"לא" (כלל 3).
    כללו את הפרטים המעשיים שקשורים ישירות לשאלה (טלפון או מוקד, סכום, זמנים, תנאים). מספרים, טלפונים,
    סכומים, ימים ותנאים - בדיוק כמו בקטעים, בלי לשנות ובלי להוסיף.
    שאלה על טלפון, מייל, שעות פעילות או "למי פונים" - ענו לפי פרטי ההתקשרות בקטע C, אם המוקד מופיע שם.
@@ -160,6 +173,24 @@ def is_off_topic(question: str) -> bool:
     except AllProvidersFailed:
         return False
     return reply.data["related"] is False
+
+
+def is_personal_question(question: str) -> bool:
+    return bool(PERSONAL_QUESTION.search(question))
+
+
+def no_yes_no_opening(answer_text: str, texts: list[str]) -> tuple[str, str]:
+    """רשת ביטחון לשאלה אישית: תשובה שמתחילה ב"כן"/"לא" מנוסחת מחדש פעם אחת. אם זה לא עזר -
+    מורידים את המילה הראשונה ומוסיפים בתחילה את משפט ההפניה. מחזיר (טקסט, מה נעשה: ""/rephrased/stripped)."""
+    if not YES_NO_START.match(answer_text):
+        return answer_text, ""
+    try:
+        rephrased = llm.chat([{"role": "user", "content": answer_text}], system=REPHRASE_PROMPT, temperature=0).text.strip()
+        if rephrased and not YES_NO_START.match(rephrased) and not unsupported_numbers(rephrased, texts):
+            return rephrased, "rephrased"
+    except AllProvidersFailed:
+        pass
+    return f"{PERSONAL_OPENING} {YES_NO_START.sub('', answer_text, count=1)}", "stripped"
 
 
 def parse_reply(text: str) -> dict:
@@ -360,10 +391,14 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     if not referral or unsupported_numbers(referral, [contact_text()]):
         referral = GENERIC_REFERRAL
 
-    if data["kind"] == "off_topic":
+    kind = data["kind"]
+    if kind == "answer" and is_personal_question(standalone):
+        kind = "personal"  # שאלה על הפוליסה/הכיסוי של הלקוח - תמיד אישית
+
+    if kind == "off_topic":
         return Answer(OFF_TOPIC_TEXT, "off_topic", "off_topic", [], **base, **extra)
 
-    if data["kind"] == "answer":
+    if kind == "answer":
         if not cited:
             return not_on_site("no_source", **extra)
         if not any(quote_found(e, [text for _, text in cited]) for e in evidence):
@@ -377,14 +412,16 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         urls = [url for url, _ in cited]
         return Answer(f"{answer_text}\n\n{format_sources(urls)}", "answer", "verified", urls, **base, **extra)
 
-    if data["kind"] == "personal":
+    if kind == "personal":
         site_part_ok = not cited or any(quote_found(e, [text for _, text in cited]) for e in evidence)
         if (not answer_text or not site_part_ok or unsupported_numbers(answer_text, texts)
                 or terms_not_on_site(standalone)):
             answer_text, cited = PERSONAL_GENERIC, []
+        answer_text, fixed = no_yes_no_opening(answer_text, texts)
         text = answer_text if referral in answer_text else f"{answer_text} {referral}"
         urls = [url for url, _ in cited] + [CONTACT_URL]
-        return Answer(f"{text}\n\n{format_sources(urls)}", "personal", "personal", list(dict.fromkeys(urls)),
+        reason = f"personal:{fixed}" if fixed else "personal"
+        return Answer(f"{text}\n\n{format_sources(urls)}", "personal", reason, list(dict.fromkeys(urls)),
                       **base, **extra)
 
     return not_on_site("model_not_found", referral, **extra)
