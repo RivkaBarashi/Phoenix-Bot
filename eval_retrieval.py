@@ -31,8 +31,10 @@ def short(url: str) -> str:
     return url.replace(SITE, "")
 
 
-def same_page(a: str, b: str) -> bool:
-    return a.rstrip("/").lower() == b.rstrip("/").lower()
+def same_page(url: str, expected: str) -> bool:
+    """expected: כתובת אחת, או כמה כתובות מופרדות ברווח - לשאלה כללית שכמה עמודים עונים עליה
+    ("איך אני מבטלת את הביטוח שלי?": ביטול ביטוח דירה וביטול ביטוח רכב)."""
+    return any(url.rstrip("/").lower() == e.rstrip("/").lower() for e in expected.split())
 
 
 def best_rank(ranks) -> int | None:
