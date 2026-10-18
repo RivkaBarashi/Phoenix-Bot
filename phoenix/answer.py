@@ -57,6 +57,29 @@ COVERAGE_TERM = re.compile(r"מכוס|מכס|יכס|תכס|\bכולל|יכלול
 OWN_AMOUNT = re.compile(r"מגיע\s+לי\b|כמה\s+(?:כסף\s+)?(?:אקבל|יש\s+לי\b)")  # "כמה אקבל", "כמה יש לי"
 GREETING_REPLY = "שלום! אני הבוט של הפניקס. במה אוכל לעזור?"
 THANKS_REPLY = "בשמחה! אם יש עוד שאלה, אני כאן."
+
+# --- שאלת הבהרה: שאלה על ביטוח בלי סוג הביטוח ("איך מגישים תביעה?") - בלי חיפוש ובלי מודל ---
+# כל תחום מנהל את התביעות, הביטולים והמחירים שלו, ובשאלה כללית החיפוש מוצא עמוד של תחום מקרי (נבדק:
+# "איך מגישים תביעה?" - עמוד תביעות של ביטוח חבויות לעסקים). לכן קודם שואלים על איזה ביטוח מדובר.
+CLARIFY_TEXT = "על איזה ביטוח מדובר?"
+INSURANCE_TYPES = {  # כפתור -> (צורה רגילה, צורה מיודעת) לשילוב בשאלה: "ביטוח רכב" / "ביטוח הרכב שלי"
+    "רכב": ("רכב", "הרכב"), "דירה": ("דירה", "הדירה"), "בריאות": ("בריאות", "הבריאות"),
+    "חיים": ("חיים", "החיים"), 'נסיעות לחו"ל': ('נסיעות לחו"ל', 'הנסיעות לחו"ל'),
+}
+INSURANCE_WORD = re.compile(r"(?<![\w])[והבלמשכ]{0,3}(?:ביטוח|תביע|פוליס|כיסוי)\w*")
+# תחום ביטוח בשאלה: שם התחום, או מילה שמסגירה אותו (צנרת -> דירה, ניתוח -> בריאות, מזוודה -> נסיעות)
+DOMAIN_WORD = re.compile(
+    r"רכב|מקיף|צד\s*ג|צד\s+שלישי|חובה|נהג|טוטאל|מוסך|שמאי|אופנוע|משאית|גרר|תאונ"
+    r"|דיר[הת]|תכול|מבנה|משכנת|צנרת|צינור|נזיל|דליפ|הצפ|נזקי\s+מים|דוד|רטיבות|שיפוץ"
+    r"|בריאות|ניתוח|רופא|תרופ|פיזיותרפ|אשפוז|מחל[הו]|שיניים|הריון"
+    r"|חיים|אובדן\s+כושר|נכות|פטיר|סיעוד"
+    r"|נסיע|חו\"ל|טיס[הו]|מזווד"
+    r"|פנסי|גמל|השתלמות|חיסכון|חסכון|קרן"
+    r"|חיות\s+מחמד|חיית\s+מחמד|כלב|חתול|וטרינר|עסק|חבויות")
+# "ביטוח לחתונה", "ביטוח סייבר" - המילה שאחרי "ביטוח" היא הסוג. אחרי המילים האלה - עדיין אין סוג.
+GENERIC_AFTER_INSURANCE = {"שלי", "שלך", "שלכם", "שלנו", "שלו", "שלה", "שלהם", "אצלכם", "אצלי", "הזה", "הזו",
+                           "הזאת", "זה", "זו", "את", "על", "של", "עם", "אצל", "אם", "או", "אחר", "אחרת", "נוסף",
+                           "נוספת", "חדש", "חדשה", "זול", "טוב", "כלשהו", "כלשהי", "בהפניקס", "בפניקס", "מהפניקס"}
 ERROR_TEXT = ("יש כרגע תקלה זמנית ולא הצלחתי לבדוק את התשובה באתר. אפשר לנסות שוב בעוד רגע, "
               "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 TIMEOUT_TEXT = ("בדיקת התשובה באתר לוקחת כרגע יותר זמן מהרגיל, ולא רציתי להשאיר אתכם לחכות. אפשר לנסות שוב "
@@ -187,6 +210,48 @@ def split_greeting(text: str) -> tuple[str, bool, bool]:
         greeted, thanked = True, thanked or bool(m.group("thanks"))
         rest = rest[m.end():]
     return rest.strip(), greeted, thanked
+
+
+def has_insurance_type(text: str) -> bool:
+    """יש בטקסט תחום ביטוח ("רכב", "צנרת", "מחלות קשות"), או סוג אחרי "ביטוח" ("ביטוח לחתונה")."""
+    if DOMAIN_WORD.search(text):
+        return True
+    words = WORD.findall(text)
+    return any(re.fullmatch(r"[והבלמש]{0,3}ביטוח", w) and i + 1 < len(words)
+               and words[i + 1] not in GENERIC_AFTER_INSURANCE for i, w in enumerate(words))
+
+
+def needs_insurance_type(question: str) -> bool:
+    """שאלה על ביטוח (ביטוח/תביעה/פוליסה/כיסוי) שלא אומרת על איזה ביטוח - בקוד, בלי מודל."""
+    return bool(INSURANCE_WORD.search(question)) and not has_insurance_type(question)
+
+
+def with_insurance_type(question: str, kind: str) -> str:
+    """השאלה המקורית + סוג הביטוח שנבחר: "איך מגישים תביעה?" + רכב -> "איך מגישים תביעה בביטוח רכב?",
+    "איך מבטלים את הביטוח שלי?" + דירה -> "איך מבטלים את ביטוח הדירה שלי?". kind: כפתור, או מה שהלקוחה
+    כתבה אחרי "אחר" ("ביטוח לרחפן" -> "לרחפן")."""
+    kind = re.sub(r"^\s*[בל]?ביטוח\s+", "", kind.strip()).strip(" ?.")
+    short, definite = INSURANCE_TYPES.get(kind, (kind, kind))
+    q = question.strip()
+    replacements = [
+        (r"(?<![\w])([ובלמש]{0,2})הביטוח(\s+(?:שלי|שלנו|שלכם|שלו|שלה|שלהם))", rf"\1ביטוח {definite}\2"),
+        (r"(?<![\w])([ובלמש]{0,2})ה?פוליס[הת](\s+(?:שלי|שלנו|שלכם|שלו|שלה|שלהם))", rf"\1פוליסת ביטוח {definite}\2"),
+        (r"(?<![\w])([ובלמש]{0,2})הביטוח(?![\w])", rf"\1ביטוח {definite}"),
+        (r"(?<![\w])([והבלמש]{0,3})ביטוח(?![\w])", rf"\1ביטוח {short}"),
+        (r"(?<![\w])([ובלמש]{0,2})ה?פוליס[הת](?![\w])", rf"\1פוליסת ביטוח {short}"),
+    ]
+    for pattern, replacement in replacements:
+        new, count = re.subn(pattern, replacement, q, count=1)
+        if count:
+            return new
+    if m := INSURANCE_WORD.search(q):  # "איך מגישים תביעה?" -> "איך מגישים תביעה בביטוח רכב?"
+        return f"{q[:m.end()]} בביטוח {short}{q[m.end():]}"
+    return f"{q.rstrip('?').rstrip()} - ביטוח {short}?"
+
+
+def clarification(question: str) -> "Answer":
+    """ "על איזה ביטוח מדובר?" - בלי חיפוש, בלי Rerank ובלי מודל. הצ'אט מציג כפתורים לבחירת הסוג."""
+    return Answer(CLARIFY_TEXT, "clarify", "no_insurance_type", [], None, "none", question=question)
 
 
 def greeting_answer(question: str) -> "Answer | None":
@@ -558,6 +623,13 @@ def answer(question: str, history: list[dict] = ()) -> Answer:
     if greeted:  # "היי, איך מגישים תביעה?" - מתעלמים מהברכה ועונים על השאלה
         question = rest
     context = list(history) if history and needs_context(question) else []
+    # שאלה על ביטוח בלי סוג ("איך מגישים תביעה?") - שאלת הבהרה, בלי חיפוש. אם הסוג כבר נאמר קודם בשיחה
+    # ("יש לי ביטוח רכב..."), שאלת ההמשך משלימה אותו בניסוח מחדש ואין צורך לשאול.
+    if needs_insurance_type(question) and not any(has_insurance_type(m["content"]) for m in context
+                                                  if m["role"] == "user"):
+        clarify = clarification(question)
+        clarify.timings["total"] = time.perf_counter() - start
+        return clarify
     with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
         standalone = standalone_question(question, context)
         condense = time.perf_counter() - start

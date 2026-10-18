@@ -29,7 +29,7 @@ RERANKER = "cohere"
 COHERE_PAUSE = 6.5  # מפתח Trial של Cohere: עד 10 קריאות Rerank בדקה
 THRESHOLDS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 QUESTIONS = config.ROOT / "data" / "questions.csv"
-TYPES = ["answerable", "not_on_site", "personal", "greeting", "off_topic", "injection"]
+TYPES = ["answerable", "not_on_site", "personal", "greeting", "off_topic", "injection", "clarify"]
 
 
 def select_rows(path: str | Path, only: str | None, category: str | None) -> list[tuple[int, dict]]:

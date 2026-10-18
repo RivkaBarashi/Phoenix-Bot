@@ -254,3 +254,59 @@ def test_leaked_answer_with_a_valid_quote_is_not_shown(monkeypatch):
 
 def test_leaked_referral_is_replaced():
     assert not A.valid_referral("פנו למוקד שירות לקוחות בטלפון 054-9893455. kind: answer")
+
+
+# ---------------------------------------------------------------- שאלת הבהרה: על איזה ביטוח מדובר?
+
+@pytest.mark.parametrize("question", [
+    "כמה יעלה לי לעשות ביטוח?", "איך מגישים תביעה?", "מה הכיסוי?", "איך מבטלים ביטוח?",
+    "איך אני מגישה תביעה על הביטוח שלי?", "איפה אני מעדכנת פרטים בפוליסה שלי?",
+])
+def test_needs_insurance_type(question):
+    assert A.needs_insurance_type(question)
+
+
+@pytest.mark.parametrize("question", [
+    "יש לכם סניף לקבלת קהל בבאר שבע?",                 # 21: אין מילת ביטוח
+    "מה הסטטוס של תביעת הרכב שהגשתי לפני שבועיים?",    # 32: יש תחום (רכב)
+    "איך מגישים תביעה בביטוח רכב?",
+    "יש לכם ביטוח לחתונה?",                            # הסוג אחרי "ביטוח"
+    "יש לכם ביטוח לרחפן צילום?",
+    "נשבר לי צינור, האם הביטוח מכסה?",                 # צינור = דירה
+    "כמה עולה ביטוח מקיף לטויוטה?",                    # מקיף = רכב
+    "מה הכיסוי לנזקי צנרת?",                           # צנרת = דירה
+    "מה מזג האוויר מחר?",
+])
+def test_no_clarification_needed(question):
+    assert not A.needs_insurance_type(question)
+
+
+@pytest.mark.parametrize("question, kind, full", [
+    ("כמה יעלה לי לעשות ביטוח?", "רכב", "כמה יעלה לי לעשות ביטוח רכב?"),
+    ("איך מגישים תביעה?", "רכב", "איך מגישים תביעה בביטוח רכב?"),
+    ("מה הכיסוי?", "דירה", "מה הכיסוי בביטוח דירה?"),
+    ("איך מבטלים ביטוח?", "דירה", "איך מבטלים ביטוח דירה?"),
+    ("איך אני מגישה תביעה על הביטוח שלי?", "בריאות", "איך אני מגישה תביעה על ביטוח הבריאות שלי?"),
+    ("איפה אני מעדכנת פרטים בפוליסה שלי?", "חיים", "איפה אני מעדכנת פרטים בפוליסת ביטוח החיים שלי?"),
+    ("איך מגישים תביעה?", "ביטוח לרחפן", "איך מגישים תביעה בביטוח לרחפן?"),  # "אחר" - מה שהלקוחה כתבה
+])
+def test_with_insurance_type(question, kind, full):
+    assert A.with_insurance_type(question, kind) == full
+    assert not A.needs_insurance_type(full)  # אחרי הבחירה - שאלה רגילה, בלי הבהרה נוספת
+
+
+def test_clarification_without_search_or_model(monkeypatch):
+    def no_search(*args, **kwargs):
+        raise AssertionError("שאלת הבהרה לא אמורה לחפש")
+    monkeypatch.setattr(A, "search", no_search)
+    a = A.answer("איך מגישים תביעה?")
+    assert (a.kind, a.text) == ("clarify", A.CLARIFY_TEXT)
+
+
+def test_no_clarification_when_the_type_was_said_earlier(monkeypatch):
+    calls = []
+    monkeypatch.setattr(A, "search", lambda *a, **k: calls.append("search") or SearchResult([], None, "none"))
+    monkeypatch.setattr(A, "standalone_question", lambda q, h: "איך מגישים תביעה בביטוח רכב?")
+    history = [{"role": "user", "content": "יש לי ביטוח רכב אצלכם"}, {"role": "assistant", "content": "..."}]
+    a = A.answer("ואיך מגישים תביעה?", history)
+    assert a.kind != "clarify" and calls == ["search"]

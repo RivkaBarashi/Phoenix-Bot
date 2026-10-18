@@ -82,7 +82,7 @@ def injection_blocked(record: dict, threshold: float) -> bool:
     if record["top"] < threshold and not record.get("personal_rule"):
         return True
     text = record["answer"]
-    fixed = (record["decision"] in ("off_topic", "not_on_site", "greeting")
+    fixed = (record["decision"] in ("off_topic", "not_on_site", "greeting", "clarify")
              or (record["decision"] == "personal" and text.startswith(answer_layer.PERSONAL_GENERIC)))
     return fixed and not any(marker in text.lower() for marker in LEAK_MARKERS)
 
@@ -183,6 +183,7 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
                 sum(r["verdict"] == "correct" for r in of_type("personal") if outcome(r, t) == "personal"),
                 sum(1 for r in of_type("personal") if outcome(r, t) == "personal" and r["verdict"] != "n/a")),
             "greeting_ok": ok("greeting", "greeting"), "off_topic_ok": ok("off_topic", "off_topic"),
+            "clarify_ok": ok("clarify", "clarify"),
             "injection_blocked": eval_history.ratio(sum(injection_blocked(r, t) for r in injections), len(injections)),
             "llm_calls": sum(CALLS[n] for n in llm_names), "llm_cache_hits": sum(llm.CACHE_HITS.values()),
             "mean_total_s": round(stats.mean(chat_s), 1) if chat_s else "",
@@ -194,8 +195,8 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
 def outcome(record: dict, threshold: float) -> str:
     """מה הבוט היה עונה בסף הזה. ברכה - תמיד ברכה (לפני החיפוש). מתחת לסף - off_topic אם בדיקת
     הנושא אמרה שזה לא קשור לביטוח (נבדקת לשאלות שמתחת לסף הנוכחי), אחרת not_on_site."""
-    if record["decision"] == "greeting":
-        return "greeting"
+    if record["decision"] in ("greeting", "clarify"):  # לפני החיפוש - לא תלוי בסף
+        return record["decision"]
     if record["top"] < threshold and not record.get("personal_rule"):  # שאלה אישית לפי הכלל - לפני הסף
         return "off_topic" if record.get("topic_off") else "not_on_site"
     return record["decision"]
@@ -239,6 +240,16 @@ def main():
             print(f"\n[{n}] ({row['type']}) {row['question']}\n    -> greeting (בלי חיפוש)\n    {greeting.text}")
             continue
         question = answer_layer.split_greeting(row["question"])[0] or row["question"]
+        if answer_layer.needs_insurance_type(question):  # כמו בצ'אט: "על איזה ביטוח מדובר?", בלי חיפוש
+            records.append({"n": n, "type": row["type"], "question": row["question"], "top": 0.0,
+                            "decision": "clarify", "reason": "no_insurance_type", "llm": "", "sources": "",
+                            "answer": answer_layer.CLARIFY_TEXT, "verdict": "", "judge_reason": "",
+                            "cited_correct": "", "timings": {}, "chat_s": 0.0, "chat_calls": 0,
+                            "calls": {"answer": 0, "topic": 0, "judge": 0, "cache": 0}, "chat_requests": 0})
+            print()
+            print(f"[{n}] ({row['type']}) {row['question']}")
+            print(f"    -> clarify (בלי חיפוש): {answer_layer.CLARIFY_TEXT}")
+            continue
         try:
             ranked, used, reranked_by = run_search(question, args.index, timings)
         except RuntimeError as exc:  # החיפוש לא הצליח גם אחרי המתנות - נרשם כתקלה, ולא כתשובה

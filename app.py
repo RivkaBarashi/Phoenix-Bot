@@ -14,6 +14,9 @@
 
 יומן ומשוב: כל שאלה נרשמת ב-logs/conversations.jsonl (report.py מסכם), ומתחת לכל תשובה 👍/👎 שנשמר
 ביומן. בתשובה אישית או "לא מופיע באתר" - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
+
+שאלת הבהרה: שאלה על ביטוח בלי סוג ("איך מגישים תביעה?") מקבלת "על איזה ביטוח מדובר?" עם כפתורים.
+לחיצה שולחת את השאלה המקורית + הסוג ("איך מגישים תביעה בביטוח רכב?"), כאילו הלקוחה כתבה אותה.
 """
 import html
 import logging
@@ -45,6 +48,9 @@ STAGE_NAMES = {"condense": "השלמת שאלה", "vector": "חיפוש וקטו
 # העברה לנציג אנושי: הוואטסאפ של שירות הלקוחות (054-9893455, מעמוד צור קשר באתר)
 WHATSAPP_URL = "https://wa.me/972549893455"
 HANDOFF_LABEL = "💬 המשך עם נציג בוואטסאפ"
+OTHER_TYPE_LABEL = "אחר"
+OTHER_TYPE_TEXT = "איזה ביטוח? כתבו את סוג הביטוח בתיבה למטה (למשל: ביטוח משכנתא, ביטוח לעסק)."
+OTHER_TYPE_MAX_WORDS = 4  # אחרי "אחר": תשובה קצרה = סוג הביטוח; ארוכה יותר = שאלה חדשה
 STREAK_NOTICE = "לא מצאתי באתר תשובה לשתי השאלות האחרונות. נציג אנושי יוכל לעזור - ההודעה בוואטסאפ כבר מוכנה:"
 ERROR_MESSAGE = ("משהו השתבש ולא הצלחתי לענות כרגע. אפשר לנסות שוב בעוד רגע, "
                  "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
@@ -161,7 +167,19 @@ def stream_words(text: str):
             time.sleep(0.03)
 
 
-def render(message: dict, stream: bool = False):
+def render_type_buttons(message: dict):
+    """כפתורי סוג הביטוח מתחת ל"על איזה ביטוח מדובר?" - רק בהודעה האחרונה, כדי שכפתור ישן לא ישלח שוב."""
+    original = message["meta"].get("question", "")
+    labels = list(bot.INSURANCE_TYPES) + [OTHER_TYPE_LABEL]
+    widths = [len(label) + 4 for label in labels]  # עמודה לפי אורך הכפתור - "נסיעות לחו"ל" לא נחתך
+    for column, label in zip(st.columns(widths, gap="small"), labels):
+        if label == OTHER_TYPE_LABEL:
+            column.button(label, key=f"type-{message.get('id')}-other", on_click=ask_other_type, args=(original,))
+        else:
+            column.button(label, key=f"type-{message.get('id')}-{label}", on_click=choose_type, args=(original, label))
+
+
+def render(message: dict, stream: bool = False, last: bool = False):
     with st.chat_message(message["role"]):
         body = f'<div class="answer">{to_html(message["content"])}</div>'
         if stream:
@@ -177,6 +195,8 @@ def render(message: dict, stream: bool = False):
                 f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{html.escape(title)}</a>'
                 for title, url in message["sources"])
             st.markdown(f'<div class="sources">📄 {label}: {links}</div>', unsafe_allow_html=True)
+        if last and (message.get("meta") or {}).get("kind") == "clarify":
+            render_type_buttons(message)
         if handoff := message.get("handoff"):
             if handoff["streak"]:
                 st.info(STREAK_NOTICE)
@@ -226,8 +246,23 @@ def ask(question: str):
     st.session_state.pending = question
 
 
+def choose_type(original: str, kind: str):
+    """כפתור סוג ביטוח: השאלה המקורית + הסוג נשלחת לבוט, ומופיעה בצ'אט כאילו הלקוחה כתבה אותה."""
+    st.session_state.pop("awaiting_type", None)
+    st.session_state.pending = bot.with_insurance_type(original, kind)
+
+
+def ask_other_type(original: str):
+    """"אחר": מבקשים לכתוב את סוג הביטוח. מה שייכתב (אם זה קצר) יתחבר לשאלה המקורית."""
+    st.session_state.awaiting_type = original
+    st.session_state.messages.append({"role": "assistant", "content": OTHER_TYPE_TEXT,
+                                      "meta": {"kind": "clarify_other", "reason": "other_type", "llm": None,
+                                               "reranker": "-", "top_score": None}})
+
+
 def new_chat():
     st.session_state.messages = []
+    st.session_state.pop("awaiting_type", None)
 
 
 def main():
@@ -253,6 +288,10 @@ def main():
     if typed is not None and not typed.strip():
         st.toast("כתבו שאלה ואז שלחו")
     question = (typed or "").strip() or st.session_state.pop("pending", None)
+    if typed and typed.strip() and (original := st.session_state.pop("awaiting_type", None)):
+        # אחרי "אחר": תשובה קצרה היא סוג הביטוח, ומתחברת לשאלה המקורית; ארוכה יותר - שאלה חדשה
+        if len(typed.split()) <= OTHER_TYPE_MAX_WORDS:
+            question = bot.with_insurance_type(original, typed)
 
     with st.chat_message("assistant"):
         st.markdown(f'<div class="answer">{to_html(WELCOME)}</div>', unsafe_allow_html=True)
@@ -260,8 +299,8 @@ def main():
             for i, example in enumerate(EXAMPLES):
                 st.button(example, key=f"example-{i}", on_click=ask, args=(example,))
 
-    for message in st.session_state.messages:
-        render(message)
+    for i, message in enumerate(st.session_state.messages):  # כפתורי סוג ביטוח - רק בהודעה האחרונה שעוד מחכה
+        render(message, last=i == len(st.session_state.messages) - 1 and not question)
 
     if question:
         user_message = {"role": "user", "content": question}
@@ -280,7 +319,7 @@ def main():
                 reply = error_message(type(exc).__name__)
                 reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
         st.session_state.messages.append(reply)
-        render(reply, stream=True)
+        render(reply, stream=True, last=True)
 
 
 if __name__ == "__main__":
