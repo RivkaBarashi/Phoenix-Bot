@@ -145,6 +145,12 @@ STAR_CODE = re.compile(r"[\u200e\u200f]?(?<![\w*,./\-])(?:\*(\d{4})\*?|(\d{4})\*
 # פרטי קשר: טלפון, קוד כוכבית או מייל
 CONTACT_DETAIL = re.compile(r"\d[\d\-]{5,}\d|\*\d{4}|\d{4}\*|[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 SERVICE = re.compile(r"מוקד|שירות\s+ה?לקוחות|סוכן\s+ה?ביטוח|נציג")
+# שכבת הגנה אחרונה מפני injection: סימנים שהתשובה מכילה את ההוראות או את מבנה ה-JSON, או טקסט ארוך באנגלית
+# (הבוט עונה בעברית). תשובה כזו לא מוצגת - "לא מופיע באתר".
+LEAK_MARKER = re.compile(r"כללים:|system\s*prompt|\b(?:kind|json|evidence|referral|not_on_site|off_topic)\b",
+                         re.IGNORECASE)
+LONG_ENGLISH = re.compile(r"(?:[A-Za-z][A-Za-z'’-]*[\s,;:.!?]+){7,}[A-Za-z]")  # 8 מילים באנגלית ברצף ומעלה
+URL_OR_EMAIL = re.compile(r"https?://\S+|www\.\S+|[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 REFERRAL_MAX_CHARS = 300  # משפט הפניה אחד (הארוך שנראה בבדיקות: ~170 תווים)
 ASK_TO_CONTACT = re.compile(r"פנו|פני[יה]|לפנות|התקשרו|להתקשר|צרו\s+קשר|ליצור\s+קשר|לבדוק|בדקו|לברר|בררו|לבירור|לבדיקת|לפרטים")
 
@@ -241,11 +247,17 @@ def _is_referral(sentence: str) -> bool:
     return bool(SERVICE.search(sentence) and (ASK_TO_CONTACT.search(sentence) or CONTACT_DETAIL.search(sentence)))
 
 
+def leaked(text: str) -> bool:
+    """סימני דליפה: "כללים:", "kind", "JSON", "system prompt", שמות השדות של ה-JSON, או משפט ארוך באנגלית
+    (קישורים ומיילים לא נחשבים)."""
+    return bool(LEAK_MARKER.search(text) or LONG_ENGLISH.search(URL_OR_EMAIL.sub(" ", text)))
+
+
 def valid_referral(referral: str) -> bool:
     """משפט ההפניה של המודל מוצג גם בתשובות הקבועות ("לא מופיע באתר..."), ולכן הוא חייב להיות הפניה
     אמיתית: משפט קצר, עם טלפון/קוד/מייל שמופיעים בעמוד צור קשר, ובלי מספרים אחרים. אחרת - ההפניה הקבועה.
     (בלי זה, "המידע לא מופיע באתר. בטח! הנה בדיחה..." היה עובר.)"""
-    return (bool(referral) and len(referral) <= REFERRAL_MAX_CHARS
+    return (bool(referral) and len(referral) <= REFERRAL_MAX_CHARS and not leaked(referral)
             and bool(_contacts(referral) & _contacts(contact_text()))
             and not unsupported_numbers(referral, [contact_text()]))
 
@@ -510,6 +522,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             return not_on_site(f"term_not_on_site:{','.join(missing)}", **extra)
         if not answer_text:
             return not_on_site("empty_answer", **extra)
+        if leaked(answer_text):  # שכבת הגנה אחרונה: ההוראות או ה-JSON דלפו לתשובה - לא מציגים
+            return not_on_site("leak_guard", **extra)
         urls = [url for url, _ in cited]
         return Answer(f"{answer_text}\n\n{format_sources(urls)}", "answer", "verified", urls, **base, **extra)
 
@@ -522,6 +536,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             answer_text, cited = PERSONAL_GENERIC, []
         answer_text, fixed = no_yes_no_opening(answer_text, texts)
         text = tidy_codes(add_referral(answer_text, referral))  # tidy שוב: הניסוח מחדש הוא טקסט חדש של המודל
+        if leaked(text):  # שכבת הגנה אחרונה, גם בתשובה אישית
+            return not_on_site("leak_guard", **extra)
         urls = [url for url, _ in cited] + [CONTACT_URL]
         reason = f"personal:{fixed}" if fixed else "personal"
         return Answer(f"{text}\n\n{format_sources(urls)}", "personal", reason, list(dict.fromkeys(urls)),

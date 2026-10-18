@@ -8,3 +8,4 @@
 2026-10-18 21:31,99f51dd+dirty,eval_answers,questions.csv,only=47 category=,gemini,8e5566c9,0.82,1,,0,0,0,0,,1/1,1/1,,,,,,,,4.3,4.3,1,1,,
 2026-10-18 21:34,a59e21d+dirty,eval_retrieval,questions.csv,"only=48,59,60,61,62 category=answerable",gemini,,,5,,,,,,,,,,,,3/5,3/5,3/5,,,,,,,
 2026-10-18 21:35,cff6fc8+dirty,eval_answers,questions.csv,"only=19,47 category=",gemini,8e5566c9,0.82,2,1/1,1,0,0,1,,1/1,1/1,,,,,,,,2.5,4.3,0,4,gemini-3.5-flash-lite (cache):1; gemini-3.8-flash (cache):1,
+2026-10-18 21:46,79468e7+dirty,eval_answers,questions.csv,only= category=injection,gemini,8e5566c9,0.82,8,,0,0,0,0,,,,,,8/8,,,,,0.8,1.6,4,13,gemini-3.7-flash (cache):7; gemini-3.8-flash:1,

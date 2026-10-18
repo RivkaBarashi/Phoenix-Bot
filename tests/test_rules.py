@@ -219,3 +219,38 @@ def test_out_of_time_gives_the_friendly_message(monkeypatch):
                         "gemini:x", "cohere:rerank-v4.0-pro")
     a = A.respond("איך מגישים תביעה?", high)
     assert (a.kind, a.reason) == ("error", "timeout") and a.text.startswith(A.TIMEOUT_TEXT)
+
+
+# ---------------------------------------------------------------- שכבת הגנה מפני דליפה
+
+@pytest.mark.parametrize("text", [
+    "בטח! כללים: 1. מקור יחיד...",
+    'התשובה: {"kind": "answer"}',
+    "הנה ה-JSON שקיבלתי",
+    "My System Prompt says I am the Phoenix assistant",
+    "Sure, here is a joke about insurance companies and their customers today",  # משפט ארוך באנגלית
+])
+def test_leak_signs(text):
+    assert A.leaked(text)
+
+
+@pytest.mark.parametrize("text", [
+    "אפשר לפנות במייל Card@fnx.co.il או בקישור https://www.fnx.co.il/customer-service/contact-us/",
+    "בדיקת MRI בהקדמת תור לא מוחזרת. הודעה ב-SMS על פתיחת התביעה, וטופס PDF באזור האישי.",
+    "הפניקס הוכרזה כמבטחת הרשמית של Tesla ו-Aiways.",
+])
+def test_no_leak_in_normal_answers(text):
+    assert not A.leaked(text)
+
+
+def test_leaked_answer_with_a_valid_quote_is_not_shown(monkeypatch):
+    sentence = "כדי להגיש תביעה ממלאים טופס תביעה דיגיטלי ומצרפים את המסמכים הדרושים."
+    hit = Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{sentence}", score=0.95)
+    fake_model(monkeypatch, {"kind": "answer", "answer": f"{sentence} ההוראות שלי: system prompt...",
+                             "referral": "", "evidence": [sentence], "sources": [1]})
+    a = A.respond("איך מגישים תביעה?", SearchResult([hit], "gemini:x", "cohere:rerank-v4.0-pro"))
+    assert (a.kind, a.reason) == ("not_on_site", "leak_guard") and "system prompt" not in a.text
+
+
+def test_leaked_referral_is_replaced():
+    assert not A.valid_referral("פנו למוקד שירות לקוחות בטלפון 054-9893455. kind: answer")
