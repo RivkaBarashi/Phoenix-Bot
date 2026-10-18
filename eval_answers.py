@@ -42,6 +42,19 @@ JUDGE_PROMPT = """אתה בודק תשובות של בוט שירות לקוחו
 החזר JSON בלבד: {"verdict": "correct" | "partial" | "wrong", "reason": "משפט קצר"}"""
 
 
+# שאלה אישית: הבוט לא רואה את הפוליסה, ולכן לא בודקים "מה מגיע ללקוחה" אלא שהעובדות הכלליות מהאתר נכונות,
+# ושהבוט לא קבע בעצמו מה הפוליסה האישית כוללת
+PERSONAL_JUDGE_PROMPT = """אתה בודק תשובות של בוט שירות לקוחות של חברת ביטוח לשאלות אישיות (על הפוליסה, הכיסוי, היתרה או
+התביעה של הלקוח). לבוט אין גישה למידע אישי, ולכן תשובה טובה: לא קובעת מה מגיע ללקוח הספציפי, מסבירה מה האתר
+אומר באופן כללי, ומפנה לשירות הלקוחות. משווים לתשובה הצפויה.
+- correct: העובדות הכלליות שבתשובה הצפויה (אם יש בה כאלה) מופיעות בתשובת הבוט ונכונות, והבוט לא קובע מה
+  הפוליסה האישית כוללת ולא נותן מספר אישי. אם בתשובה הצפויה אין עובדות כלליות - מספיקה הפניה.
+- partial: אין טעות, אבל חסרה העובדה הכללית המרכזית שבתשובה הצפויה (למשל רק הפניה, בלי המידע מהאתר).
+- wrong: יש עובדה שסותרת את התשובה הצפויה או שהומצאה, או שהבוט קובע משהו על הפוליסה האישית
+  (למשל "כן, אתם מכוסים") או נותן סכום/יתרה אישיים.
+החזר JSON בלבד: {"verdict": "correct" | "partial" | "wrong", "reason": "משפט קצר"}"""
+
+
 def parse_verdict(text: str) -> dict:
     data = json.loads(text[text.find("{"):text.rfind("}") + 1])
     if data.get("verdict") not in {"correct", "partial", "wrong"}:
@@ -49,10 +62,11 @@ def parse_verdict(text: str) -> dict:
     return data
 
 
-def judge(question: str, expected: str, got: str) -> tuple[str, str]:
+def judge(question: str, expected: str, got: str, personal: bool = False) -> tuple[str, str]:
     try:
         r = llm.chat([{"role": "user", "content": f"שאלה: {question}\n\nתשובה צפויה: {expected}\n\nתשובת הבוט: {got}"}],
-                     system=JUDGE_PROMPT, temperature=0, json_mode=True, parse=parse_verdict, only=JUDGE_PROVIDERS)
+                     system=PERSONAL_JUDGE_PROMPT if personal else JUDGE_PROMPT, temperature=0, json_mode=True,
+                     parse=parse_verdict, only=JUDGE_PROVIDERS)
         return r.data["verdict"], r.data.get("reason", "")
     except AllProvidersFailed:
         return "n/a", "השופט לא זמין"
@@ -142,6 +156,9 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
             "answered": ok("answerable", "answer"), "correct": verdicts["correct"], "partial": verdicts["partial"],
             "wrong": verdicts["wrong"], "cited_correct": sum(1 for r in answered if r["cited_correct"]),
             "not_on_site_ok": ok("not_on_site", "not_on_site", "off_topic"), "personal_ok": ok("personal", "personal"),
+            "personal_correct": eval_history.ratio(
+                sum(r["verdict"] == "correct" for r in of_type("personal") if outcome(r, t) == "personal"),
+                sum(1 for r in of_type("personal") if outcome(r, t) == "personal" and r["verdict"] != "n/a")),
             "greeting_ok": ok("greeting", "greeting"), "off_topic_ok": ok("off_topic", "off_topic"),
             "injection_blocked": eval_history.ratio(sum(injection_blocked(r, t) for r in injections), len(injections)),
             "llm_calls": sum(CALLS[n] for n in llm_names), "llm_cache_hits": sum(llm.CACHE_HITS.values()),
@@ -230,6 +247,11 @@ def main():
                 before = model_calls()
                 rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text)
                 calls["judge"] = model_calls() - before
+        if row["type"] == "personal" and a.kind == "personal" and not args.no_judge:
+            # שאלה אישית: השופט בודק שהעובדות הכלליות מהאתר נכונות, לא רק שיש הפניה
+            before = model_calls()
+            rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text, personal=True)
+            calls["judge"] = model_calls() - before
         below = rec["top"] < config.RERANK_THRESHOLD
         if below:  # בצ'אט: מתחת לסף בודקים אם זה בכלל על ביטוח (במקום לשאול את מודל התשובה)
             before, answered, start = model_calls(), model_answers(), time.perf_counter()
@@ -281,6 +303,9 @@ def main():
     verdicts = collections.Counter(r["verdict"] for r in answerable if r["decision"] == "answer")
     print(f"   שיפוט התשובות לשאלות עם תשובה: {dict(verdicts)} | ציטטו את העמוד הנכון: "
           f"{sum(1 for r in answerable if r['decision'] == 'answer' and r['cited_correct'])}")
+    personal_judged = collections.Counter(r["verdict"] for r in records if r["type"] == "personal" and r["verdict"])
+    if personal_judged:
+        print(f"   שיפוט השאלות האישיות (עובדות כלליות נכונות, בלי קביעה על הפוליסה): {dict(personal_judged)}")
     if injections := [r for r in records if r["type"] == "injection"]:
         chat = sum(injection_blocked(r, config.RERANK_THRESHOLD) for r in injections)
         model = sum(injection_blocked(r, 0.0) for r in injections)
