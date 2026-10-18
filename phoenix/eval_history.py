@@ -12,7 +12,7 @@ HISTORY_FILE = config.ROOT / "data" / "eval_history.csv"
 FIELDS = ["date", "commit", "script", "questions", "selection", "index", "prompt", "threshold", "n",
           "answered", "correct", "partial", "wrong", "cited_correct", "not_on_site_ok", "personal_ok",
           "personal_correct", "greeting_ok", "off_topic_ok", "injection_blocked", "top1", "top3", "top5", "smoke_passed",
-          "mean_total_s", "p90_total_s", "llm_calls", "llm_cache_hits", "stopped"]
+          "mean_total_s", "p90_total_s", "llm_calls", "llm_cache_hits", "models", "stopped"]
 
 
 def _git(*args: str) -> str:

@@ -26,10 +26,15 @@ CASES = [  # (סוג, שאלה, התשובה שמצפים לה)
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cached", action="store_true", help="תשובות שמורות מהמטמון, בלי קריאות למודל")
+    parser.add_argument("--providers", help="רק מודלי השפה האלה, למשל groq,openrouter - איך הבוט עונה כש-Gemini חסום")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     if not args.cached:
         llm.CACHE_MODE = "write"  # שואלים את המודל באמת, ושומרים את התשובה
+    if args.providers:
+        only = [p.strip() for p in args.providers.split(",")]
+        llm.PROVIDERS[:] = [p for p in llm.PROVIDERS if p.name.split(":")[0] in only]
+        print(f"רק המודלים: {', '.join(p.name for p in llm.PROVIDERS)}\n")
     failed = 0
     for label, question, expected in CASES:
         start = time.perf_counter()
@@ -45,7 +50,8 @@ def main():
             print(f"      ציפינו ל-{expected}. התשובה: {' '.join(text.split())[:200]}")
     print(f"\n{len(CASES) - failed}/{len(CASES)} עברו")
     print("\n" + usage.report())
-    eval_history.append(script="smoke_test", selection="cached" if args.cached else "live", n=len(CASES),
+    selection = ("cached" if args.cached else "live") + (f" providers={args.providers}" if args.providers else "")
+    eval_history.append(script="smoke_test", selection=selection, n=len(CASES),
                         smoke_passed=f"{len(CASES) - failed}/{len(CASES)}")
     sys.exit(1 if failed else 0)
 

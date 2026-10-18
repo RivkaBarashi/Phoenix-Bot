@@ -134,6 +134,27 @@ def print_timings_and_calls(records: list[dict]):
     print("    כולל כאלה שנכשלו ועברו לגיבוי - הם שנספרים במכסה. מהמטמון: תשובות שלא נשלחו שוב)")
 
 
+def models_used(records: list[dict]) -> collections.Counter:
+    """איזה מודל כתב את התשובה לכל שאלה (בלי ברכות), ובנפרד - כמה מהן הגיעו מהמטמון."""
+    return collections.Counter(r["llm"] for r in records if r["llm"])
+
+
+def print_models(records: list[dict]):
+    used = models_used(records)
+    if not used:
+        return
+    by_model = collections.Counter()
+    cached = collections.Counter()
+    for name, count in used.items():
+        model = name.removesuffix(" (cache)")
+        by_model[model] += count
+        cached[model] += count if name.endswith(" (cache)") else 0
+    print("\n=== מי ענה (מודל התשובה, לכל שאלה - פירוט בעמודה llm בקובץ התוצאות) ===")
+    for model, count in by_model.most_common():
+        print(f"   {model:<45}{count:>4}" + (f"  (מהמטמון: {cached[model]})" if cached[model] else ""))
+    print("   (מתחת לסף הצ'אט מציג טקסט קבוע; בבדיקה המודל נשאל על כל שאלה, בשביל טבלת הכיול)")
+
+
 def run_metrics(records: list[dict], args, version: str, partial, stopped: bool) -> dict:
     """המדדים של הריצה לשורה ב-data/eval_history.csv - מה שהצ'אט היה מציג בסף הנוכחי."""
     t = config.RERANK_THRESHOLD
@@ -164,6 +185,7 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
             "llm_calls": sum(CALLS[n] for n in llm_names), "llm_cache_hits": sum(llm.CACHE_HITS.values()),
             "mean_total_s": round(stats.mean(chat_s), 1) if chat_s else "",
             "p90_total_s": round(stats.p90(chat_s), 1) if chat_s else "",
+            "models": "; ".join(f"{m.split(':', 1)[-1]}:{c}" for m, c in models_used(records).most_common()),
             "stopped": "yes" if stopped else ""}
 
 
@@ -328,6 +350,7 @@ def main():
               f"{pers.count('personal'):>11} / {pers.count('not_on_site'):>5} / {pers.count('answer'):>5}{mark}")
 
     print_timings_and_calls(records)
+    print_models(records)
 
     question_set = Path(args.questions).stem.removeprefix("questions").strip("_")  # "" או "holdout"
     partial = args.only or args.category or stopped
