@@ -78,6 +78,9 @@ HTTP_TIMEOUT = 30  # ספק שלא עונה תוך 30 שניות - עוברים 
 QUERY_TIMEOUT = 15
 QUERY_RETRIES = 0
 QUERY_MAX_WAIT = 0.0
+# זמן כולל לשאלה אחת בצ'אט - כל השלבים יחד (השלמת שאלת המשך, חיפוש, Rerank, מודל). כל ניסיון אצל ספק מקבל
+# רק את מה שנשאר; כשנשארות פחות מ-3 שניות - הודעה ידידותית, בלי ניסיון נוסף. (הבדיקות לא מוגבלות.)
+QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
 
 
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):

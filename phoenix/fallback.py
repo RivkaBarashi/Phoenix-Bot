@@ -5,6 +5,8 @@ run_chain מנסה ספק אחרי ספק לפי הסדר. על עומס (429) �
 (דקה על מגבלה לדקה, שעה על מכסה יומית) כדי שלא נבזבז עליו זמן בכל בקשה.
 """
 import collections
+import contextlib
+import contextvars
 import logging
 import random
 import re
@@ -61,6 +63,31 @@ class AllProvidersFailed(Exception):
         self.purpose = purpose
         self.errors = errors
         super().__init__(f"{purpose}: all providers failed: " + " | ".join(errors))
+
+
+class OutOfTime(AllProvidersFailed):
+    """נגמר הזמן הכולל לשאלה (time_budget) - לא שולחים עוד ניסיון לאף ספק."""
+
+
+# זמן כולל לשאלה אחת בצ'אט: כל ניסיון אצל ספק מקבל רק את מה שנשאר. פחות מ-MIN_ATTEMPT_SECONDS - לא
+# מנסים בכלל: מודל לא יספיק לענות, והבקשה עדיין תיספר במכסה.
+MIN_ATTEMPT_SECONDS = 3.0
+_question_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar("question_deadline", default=None)
+
+
+@contextlib.contextmanager
+def time_budget(seconds: float | None):
+    """with time_budget(20): ... - כל הקריאות בתוך הבלוק (באותו thread) חולקות 20 שניות. None = בלי מגבלה."""
+    token = _question_deadline.set(time.monotonic() + seconds if seconds else None)
+    try:
+        yield
+    finally:
+        _question_deadline.reset(token)
+
+
+def time_left() -> float | None:
+    deadline = _question_deadline.get()
+    return None if deadline is None else deadline - time.monotonic()
 
 
 @dataclass
@@ -158,16 +185,28 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
             errors.append(f"{p.name}: resting")
             continue
         for attempt in range(retries + 1):
+            left = time_left()
+            if left is not None and left < MIN_ATTEMPT_SECONDS:  # נגמר הזמן לשאלה - בלי ניסיון נוסף
+                errors.append(f"{p.name}: out of time")
+                LAST_ERRORS[purpose] = errors
+                raise OutOfTime(purpose, errors)
+            limit = deadline if left is None else min(deadline or left, left)
+            cut = left is not None and (not deadline or left < deadline)  # הניסיון מוגבל בזמן שנשאר לשאלה
             try:
                 CALLS[p.name] += 1
-                if deadline:
-                    return with_deadline(p.call, deadline, *args, **kwargs), p.name
+                if limit:
+                    return with_deadline(p.call, limit, *args, **kwargs), p.name
                 return p.call(*args, **kwargs), p.name
             except StopChain:
                 raise
             except Exception as exc:
                 FAILED[p.name] += 1
                 kind = classify(exc)
+                if isinstance(exc, TimeoutError) and cut:
+                    # הניסיון קוצר בגלל הזמן הכולל לשאלה - זו לא אשמת הספק, ולכן הוא לא "נח"
+                    errors.append(f"{p.name}: cut short by the question time limit")
+                    LAST_ERRORS[purpose] = errors
+                    raise OutOfTime(purpose, errors) from exc
                 if kind in RETRYABLE and attempt < retries:
                     wait = min(max_wait, retry_after(exc) or 2 ** (attempt + 1) + random.random())
                     log.info("%s: %s %s, retrying in %.0fs", purpose, p.name, kind, wait)

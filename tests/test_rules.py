@@ -3,11 +3,12 @@
 הרצה:  .venv\\Scripts\\python -m pytest
 """
 import json
+import time
 
 import pytest
 
 from phoenix import answer as A
-from phoenix import llm
+from phoenix import fallback, llm
 from phoenix.search import Hit, SearchResult
 
 LRM = "\u200e"
@@ -181,3 +182,40 @@ def test_regular_question_below_threshold_still_not_on_site(monkeypatch):
     fake_model(monkeypatch, {"related": True})  # בדיקת הנושא: קשור לביטוח
     a = A.respond("יש לכם סניף באילת?", LOW_HIT)
     assert (a.kind, a.reason) == ("not_on_site", "below_threshold")
+
+
+# ---------------------------------------------------------------- זמן כולל לשאלה (ספקים מדומים, בלי API)
+
+def test_question_time_budget_stops_the_chain(monkeypatch):
+    monkeypatch.setattr(fallback, "MIN_ATTEMPT_SECONDS", 0.2)
+    called = []
+
+    def slow(*args):
+        called.append("slow")
+        time.sleep(2)
+        return "late"
+
+    providers = [fallback.Provider("test:slow", slow), fallback.Provider("test:fast", lambda *a: called.append("fast"))]
+    with fallback.time_budget(0.6):
+        with pytest.raises(fallback.OutOfTime):
+            fallback.run_chain("test", providers, deadline=15, retries=0)
+    assert called == ["slow"]                      # אחרי שהזמן נגמר - בלי ניסיון נוסף
+    assert "test:slow" not in fallback.resting()   # הספק לא "נח": נגמר הזמן של השאלה, לא הוא היה איטי
+
+
+def test_no_attempt_when_almost_no_time_left():
+    called = []
+    with fallback.time_budget(1.0):  # פחות מ-MIN_ATTEMPT_SECONDS (3)
+        with pytest.raises(fallback.OutOfTime):
+            fallback.run_chain("test", [fallback.Provider("test:x", lambda *a: called.append(1))], deadline=15, retries=0)
+    assert called == []
+
+
+def test_out_of_time_gives_the_friendly_message(monkeypatch):
+    def out_of_time(*args, **kwargs):
+        raise fallback.OutOfTime("llm", ["test: out of time"])
+    monkeypatch.setattr(llm, "chat", out_of_time)
+    high = SearchResult([Hit("x", A.CONTACT_URL, "צור קשר", "", "כל הדרכים ליצור איתנו קשר", score=0.95)],
+                        "gemini:x", "cohere:rerank-v4.0-pro")
+    a = A.respond("איך מגישים תביעה?", high)
+    assert (a.kind, a.reason) == ("error", "timeout") and a.text.startswith(A.TIMEOUT_TEXT)

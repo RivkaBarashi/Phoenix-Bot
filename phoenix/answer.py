@@ -24,7 +24,7 @@ from functools import lru_cache
 
 from . import bm25, config, llm
 from .chunk import CHUNKS_FILE, SENTENCE_END
-from .fallback import AllProvidersFailed
+from .fallback import AllProvidersFailed, OutOfTime, time_budget
 from .search import Hit, SearchResult, search
 
 CONTEXT_CHUNKS = 5
@@ -59,6 +59,8 @@ GREETING_REPLY = "שלום! אני הבוט של הפניקס. במה אוכל �
 THANKS_REPLY = "בשמחה! אם יש עוד שאלה, אני כאן."
 ERROR_TEXT = ("יש כרגע תקלה זמנית ולא הצלחתי לבדוק את התשובה באתר. אפשר לנסות שוב בעוד רגע, "
               "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
+TIMEOUT_TEXT = ("בדיקת התשובה באתר לוקחת כרגע יותר זמן מהרגיל, ולא רציתי להשאיר אתכם לחכות. אפשר לנסות שוב "
+                "בעוד רגע, או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 
 SYSTEM_PROMPT = """אתה העוזר הדיגיטלי של אתר הפניקס (fnx.co.il). אתה עונה ללקוחות בעברית, אך ורק לפי קטעי האתר שמופיעים בהודעה.
 
@@ -473,8 +475,11 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     start = time.perf_counter()
     try:  # שכבה 2
         reply = _ask_model(question, standalone, history, hits)
-    except AllProvidersFailed:
+    except AllProvidersFailed as exc:
         timings["llm"] = time.perf_counter() - start
+        if isinstance(exc, OutOfTime):  # נגמר הזמן הכולל לשאלה - הודעה ידידותית, בלי ניסיון נוסף
+            return Answer(f"{TIMEOUT_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "timeout",
+                          [CONTACT_URL], **base)
         return Answer(f"{ERROR_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "llm_unavailable",
                       [CONTACT_URL], **base)
     timings["llm"] = time.perf_counter() - start
@@ -537,9 +542,10 @@ def answer(question: str, history: list[dict] = ()) -> Answer:
     if greeted:  # "היי, איך מגישים תביעה?" - מתעלמים מהברכה ועונים על השאלה
         question = rest
     context = list(history) if history and needs_context(question) else []
-    standalone = standalone_question(question, context)
-    condense = time.perf_counter() - start
-    result = respond(question, search(standalone, k=CONTEXT_CHUNKS), context, standalone=standalone)
+    with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
+        standalone = standalone_question(question, context)
+        condense = time.perf_counter() - start
+        result = respond(question, search(standalone, k=CONTEXT_CHUNKS), context, standalone=standalone)
     if context:
         result.timings["condense"] = condense
     result.timings["total"] = time.perf_counter() - start
