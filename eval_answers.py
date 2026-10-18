@@ -307,7 +307,9 @@ def main():
         print(f"\n[{n}] ({row['type']}) {row['question']}")
         print(f"    rerank {rec['top']:.3f} -> {a.kind} ({a.reason}) {rec['verdict']} {source_mark}  [{a.llm}]")
         print("    " + " ".join(a.text.split())[:220])
-        failure = "llm: all models failed" if a.kind == "error" else "judge: unavailable" if rec["verdict"] == "n/a" else None
+        # תשובה אישית קבועה כי אין מודל - נראית תקינה, אבל המודלים לא זמינים, וזו תקלה לעניין העצירה
+        model_down = a.kind == "error" or a.reason == "personal_no_model"
+        failure = "llm: all models failed" if model_down else "judge: unavailable" if rec["verdict"] == "n/a" else None
         if stopped := streak.add(n, failure):
             print(streak.report())
             break

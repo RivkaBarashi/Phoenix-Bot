@@ -310,3 +310,26 @@ def test_no_clarification_when_the_type_was_said_earlier(monkeypatch):
     history = [{"role": "user", "content": "יש לי ביטוח רכב אצלכם"}, {"role": "assistant", "content": "..."}]
     a = A.answer("ואיך מגישים תביעה?", history)
     assert a.kind != "clarify" and calls == ["search"]
+
+
+# ---------------------------------------------------------------- תשובה אישית בלי מודל
+
+HIGH_HIT = SearchResult([Hit("x", A.CONTACT_URL, "צור קשר", "", "כל הדרכים ליצור איתנו קשר", score=0.95)],
+                        "gemini:x", "cohere:rerank-v4.0-pro")
+
+
+@pytest.mark.parametrize("error", [fallback.AllProvidersFailed, fallback.OutOfTime])
+def test_personal_question_without_a_model(monkeypatch, error):
+    def unavailable(*args, **kwargs):
+        raise error("llm", ["all models: quota"])
+    monkeypatch.setattr(llm, "chat", unavailable)
+    a = A.respond("האם הביטוח שלי כולל רכב חלופי?", HIGH_HIT)
+    assert (a.kind, a.reason) == ("personal", "personal_no_model")
+    assert a.text.startswith(A.PERSONAL_GENERIC) and A.GENERIC_REFERRAL in a.text
+
+
+def test_regular_question_without_a_model_is_still_an_error(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise fallback.AllProvidersFailed("llm", ["all models: quota"])
+    monkeypatch.setattr(llm, "chat", unavailable)
+    assert A.respond("מה המספר של מוקד תביעות רכב?", HIGH_HIT).reason == "llm_unavailable"

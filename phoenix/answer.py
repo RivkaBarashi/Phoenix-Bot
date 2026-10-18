@@ -554,6 +554,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         reply = _ask_model(question, standalone, history, hits)
     except AllProvidersFailed as exc:
         timings["llm"] = time.perf_counter() - start
+        if personal:  # שאלה אישית לא צריכה מודל: הטקסט האישי הקבוע + הפניה, ולא "תקלה זמנית"
+            return Answer(f"{PERSONAL_GENERIC} {GENERIC_REFERRAL}\n\n{format_sources([CONTACT_URL])}", "personal",
+                          "personal_no_model", [CONTACT_URL], **base)
         if isinstance(exc, OutOfTime):  # נגמר הזמן הכולל לשאלה - הודעה ידידותית, בלי ניסיון נוסף
             return Answer(f"{TIMEOUT_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "timeout",
                           [CONTACT_URL], **base)
