@@ -119,6 +119,8 @@ def print_timings_and_calls(records: list[dict]):
         if count:
             print(f"   {label:<24}{count:>6}{avg:>8.1f}{high:>8.1f}")
     print("   (סה\"כ כמו בצ'אט = חיפוש + מודל התשובה מעל הסף, או חיפוש + בדיקת נושא מתחתיו; בלי השופט)")
+    slow = sum(1 for r in searched if r["chat_s"] > config.QUESTION_TIMEOUT)
+    print(f"   מעל {config.QUESTION_TIMEOUT:.0f} שניות (בצ'אט הן היו מקבלות את הודעת הזמן): {slow} מתוך {len(searched)}")
 
     print("\n=== קריאות למודל לכל סוג שאלה ===")
     head = ("סוג", "שאלות", "בצ'אט: בקשות לשאלה", "יצאו בריצה: תשובה / נושא / שופט", "מהמטמון")
