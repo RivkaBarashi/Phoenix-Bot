@@ -153,8 +153,56 @@ def print_models(records: list[dict]):
         cached[model] += count if name.endswith(" (cache)") else 0
     print("\n=== מי ענה (מודל התשובה, לכל שאלה - פירוט בעמודה llm בקובץ התוצאות) ===")
     for model, count in by_model.most_common():
-        print(f"   {model:<45}{count:>4}" + (f"  (מהמטמון: {cached[model]})" if cached[model] else ""))
+        numbers = ", ".join(str(r["n"]) for r in records if r["llm"].removesuffix(" (cache)") == model)
+        print(f"   {model:<45}{count:>4}" + (f"  (מהמטמון: {cached[model]})" if cached[model] else "")
+              + f"\n      שאלות: {numbers}")
     print("   (מתחת לסף הצ'אט מציג טקסט קבוע; בבדיקה המודל נשאל על כל שאלה, בשביל טבלת הכיול)")
+
+
+def print_final_summary(records: list[dict]):
+    """הסיכום לריצה הסופית - מה שהצ'אט היה מציג בסף הנוכחי."""
+    t = config.RERANK_THRESHOLD
+
+    def of(kind):
+        return [r for r in records if r["type"] == kind]
+
+    def numbers(rows):
+        return ", ".join(str(r["n"]) for r in rows) or "-"
+
+    answerable, personal = of("answerable"), of("personal")
+    answered = [r for r in answerable if outcome(r, t) == "answer"]
+    personal_shown = [r for r in personal if outcome(r, t) == "personal"]
+    verdicts = collections.Counter(r["verdict"] for r in answered)
+    personal_verdicts = collections.Counter(r["verdict"] for r in personal_shown)
+    refused_wrongly = [r for r in answerable if outcome(r, t) in ("not_on_site", "off_topic")]
+    clarified = [r for r in answerable if outcome(r, t) == "clarify"]
+    not_on_site, off_topic = of("not_on_site"), of("off_topic")
+    refused = [r for r in not_on_site if outcome(r, t) in ("not_on_site", "off_topic")]
+    leaks = [r for r in not_on_site if outcome(r, t) in ("answer", "personal")]
+    invented = [r for r in answered + personal_shown if r["verdict"] == "wrong"] + leaks
+    injections = of("injection")
+    searched = [r for r in records if r["decision"] not in ("greeting", "error", "clarify")]
+    chat_s = [r["chat_s"] for r in searched]
+    errors = [r for r in records if outcome(r, t) == "error"]
+    print("\n=== סיכום הריצה (מה שהצ'אט מציג בסף הנוכחי) ===")
+    print(f"   שאלות עם תשובה באתר ({len(answerable)}): מלאות {verdicts['correct']} | חלקיות {verdicts['partial']} | "
+          f"שגויות {verdicts['wrong']} | לא נשפטו {verdicts['n/a'] + verdicts['']} | סירוב בטעות {len(refused_wrongly)} "
+          f"({numbers(refused_wrongly)}) | שאלת הבהרה {len(clarified)} ({numbers(clarified)})")
+    print(f"   שאלות אישיות ({len(personal)}): קיבלו תשובה אישית {len(personal_shown)} - מלאות "
+          f"{personal_verdicts['correct']} | חלקיות {personal_verdicts['partial']} | שגויות {personal_verdicts['wrong']}")
+    print(f"   סירובים נכונים: אין תשובה באתר {len(refused)}/{len(not_on_site)} | לא קשורות לביטוח "
+          f"{sum(outcome(r, t) == 'off_topic' for r in off_topic)}/{len(off_topic)} | ברכות "
+          f"{sum(outcome(r, t) == 'greeting' for r in of('greeting'))}/{len(of('greeting'))} | שאלות הבהרה "
+          f"{sum(outcome(r, t) == 'clarify' for r in of('clarify'))}/{len(of('clarify'))}")
+    print(f"   המציא: {len(invented)} - תשובות שהשופט מצא בהן עובדה שגויה או מומצאת ({numbers(invented[:len(invented) - len(leaks)])})"
+          f", שאלות בלי תשובה באתר שקיבלו תשובה ({numbers(leaks)})")
+    print(f"   injection: נחסמו {sum(injection_blocked(r, t) for r in injections)}/{len(injections)}")
+    if chat_s:
+        print(f"   זמנים (כמו בצ'אט): ממוצע {stats.mean(chat_s):.1f} ש' | p90 {stats.p90(chat_s):.1f} ש' | "
+              f"מעל {config.QUESTION_TIMEOUT:.0f} ש': {sum(s > config.QUESTION_TIMEOUT for s in chat_s)}")
+    if errors:
+        print(f"   תקלות (בלי תשובה בכלל): {numbers(errors)}")
+    print("   איזה מודל ענה על כל שאלה: בטבלה 'מי ענה' למעלה, ובעמודה llm בקובץ התוצאות")
 
 
 def run_metrics(records: list[dict], args, version: str, partial, stopped: bool) -> dict:
@@ -197,6 +245,8 @@ def outcome(record: dict, threshold: float) -> str:
     הנושא אמרה שזה לא קשור לביטוח (נבדקת לשאלות שמתחת לסף הנוכחי), אחרת not_on_site."""
     if record["decision"] in ("greeting", "clarify"):  # לפני החיפוש - לא תלוי בסף
         return record["decision"]
+    if record["reason"].startswith("search_failed"):  # החיפוש נכשל - אין מה להציג
+        return "error"
     if record["top"] < threshold and not record.get("personal_rule"):  # שאלה אישית לפי הכלל - לפני הסף
         return "off_topic" if record.get("topic_off") else "not_on_site"
     return record["decision"]
@@ -366,6 +416,7 @@ def main():
 
     print_timings_and_calls(records)
     print_models(records)
+    print_final_summary(records)
 
     question_set = Path(args.questions).stem.removeprefix("questions").strip("_")  # "" או "holdout"
     partial = args.only or args.category or stopped
