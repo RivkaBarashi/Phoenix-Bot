@@ -17,11 +17,12 @@ import logging
 import os
 import re
 import time
+import uuid
 
 import streamlit as st
 
 from phoenix import answer as bot
-from phoenix import bm25, config, embeddings, index, llm
+from phoenix import bm25, config, conversation_log, embeddings, index, llm
 
 log = logging.getLogger("phoenix.app")
 
@@ -193,6 +194,7 @@ def main():
     st.set_page_config(page_title="הבוט של אתר הפניקס", page_icon="💬", layout="centered")
     st.markdown(RTL_CSS, unsafe_allow_html=True)
     st.session_state.setdefault("messages", [])
+    st.session_state.setdefault("session_id", uuid.uuid4().hex[:8])  # מזהה אנונימי של השיחה, ליומן
 
     title_col, button_col = st.columns([4, 1], vertical_alignment="bottom")
     title_col.title("שאלו את הבוט של הפניקס")
@@ -226,12 +228,16 @@ def main():
         st.session_state.messages.append(user_message)
         render(user_message)
         with st.spinner("מחפש באתר..."):
+            session = st.session_state.session_id
             try:
                 history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
-                reply = message_from_answer(bot.answer(question, history), question)
+                result = bot.answer(question, history)
+                reply = message_from_answer(result, question)
+                reply["id"] = conversation_log.log_answer(session, question, result)
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)
+                reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
         st.session_state.messages.append(reply)
         render(reply, stream=True)
 

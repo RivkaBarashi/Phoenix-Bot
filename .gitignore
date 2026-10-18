@@ -6,3 +6,6 @@ data/chroma/
 .streamlit/secrets.toml
 data/cache/
 ~$*
+
+# יומן השיחות של הצ'אט (שאלות של משתמשים)
+logs/

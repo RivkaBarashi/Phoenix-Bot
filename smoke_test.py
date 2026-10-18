@@ -11,7 +11,7 @@ import argparse
 import sys
 import time
 
-from phoenix import llm, usage
+from phoenix import eval_history, llm, usage
 from phoenix.answer import answer
 
 CASES = [  # (סוג, שאלה, התשובה שמצפים לה)
@@ -45,6 +45,8 @@ def main():
             print(f"      ציפינו ל-{expected}. התשובה: {' '.join(text.split())[:200]}")
     print(f"\n{len(CASES) - failed}/{len(CASES)} עברו")
     print("\n" + usage.report())
+    eval_history.append(script="smoke_test", selection="cached" if args.cached else "live", n=len(CASES),
+                        smoke_passed=f"{len(CASES) - failed}/{len(CASES)}")
     sys.exit(1 if failed else 0)
 
 

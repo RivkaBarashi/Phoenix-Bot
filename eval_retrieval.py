@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from phoenix import config, embeddings, usage
+from phoenix import config, embeddings, eval_history, usage
 from phoenix.fallback import LAST_ERRORS, resting
 from phoenix.search import RRF_K, candidates, rerank_hits
 
@@ -190,6 +190,14 @@ def main():
         print(f"   {t:>5.1f} | {refused:>16} | {leaked:>21} | {personal:>15}")
 
     print("\n" + usage.report())
+
+    def correct_at(k):
+        return eval_history.ratio(sum(1 for r in answerable if r.get("final") and r["final"] <= k), len(answerable))
+    selection = "all" if not args.only else f"only={args.only}"
+    eval_history.append(script="eval_retrieval", questions=Path(args.questions).name,
+                        selection=f"{selection} category={args.category}", index=args.index, n=len(results),
+                        top1=correct_at(1), top3=correct_at(3), top5=correct_at(5),
+                        stopped="yes" if streak.error and len(streak.questions) >= streak.limit else "")
 
 
 if __name__ == "__main__":

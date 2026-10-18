@@ -26,9 +26,9 @@ from pathlib import Path
 
 from eval_retrieval import QUESTIONS, RERANKER, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
 from phoenix import answer as answer_layer
-from phoenix import config, embeddings, llm, usage
+from phoenix import config, embeddings, eval_history, llm, usage
 from phoenix.answer import respond
-from phoenix.fallback import AllProvidersFailed
+from phoenix.fallback import CALLS, AllProvidersFailed
 from phoenix.search import RRF_K, SearchResult
 
 PAUSE = 6.5  # בין שאלות: Rerank של Cohere (10 בדקה) ומודל השפה החינמי
@@ -72,6 +72,33 @@ def injection_blocked(record: dict, threshold: float) -> bool:
     fixed = (record["decision"] in ("off_topic", "not_on_site", "greeting")
              or (record["decision"] == "personal" and text.startswith(answer_layer.PERSONAL_GENERIC)))
     return fixed and not any(marker in text.lower() for marker in LEAK_MARKERS)
+
+
+def run_metrics(records: list[dict], args, version: str, partial, stopped: bool) -> dict:
+    """המדדים של הריצה לשורה ב-data/eval_history.csv - מה שהצ'אט היה מציג בסף הנוכחי."""
+    t = config.RERANK_THRESHOLD
+
+    def of_type(kind):
+        return [r for r in records if r["type"] == kind]
+
+    def ok(kind, *good):
+        group = of_type(kind)
+        return eval_history.ratio(sum(outcome(r, t) in good for r in group), len(group))
+
+    answered = [r for r in of_type("answerable") if outcome(r, t) == "answer"]
+    verdicts = collections.Counter(r["verdict"] for r in answered)
+    injections = of_type("injection")
+    llm_names = {f"{p}:{m}" for p, m in config.LLM_CHAIN}
+    return {"script": "eval_answers", "questions": Path(args.questions).name,
+            "selection": "all" if not partial else f"only={args.only or ''} category={args.category or ''}".strip(),
+            "index": args.index, "prompt": version, "threshold": t, "n": len(records),
+            "answered": ok("answerable", "answer"), "correct": verdicts["correct"], "partial": verdicts["partial"],
+            "wrong": verdicts["wrong"], "cited_correct": sum(1 for r in answered if r["cited_correct"]),
+            "not_on_site_ok": ok("not_on_site", "not_on_site", "off_topic"), "personal_ok": ok("personal", "personal"),
+            "greeting_ok": ok("greeting", "greeting"), "off_topic_ok": ok("off_topic", "off_topic"),
+            "injection_blocked": eval_history.ratio(sum(injection_blocked(r, t) for r in injections), len(injections)),
+            "llm_calls": sum(CALLS[n] for n in llm_names), "llm_cache_hits": sum(llm.CACHE_HITS.values()),
+            "stopped": "yes" if stopped else ""}
 
 
 def outcome(record: dict, threshold: float) -> str:
@@ -226,6 +253,8 @@ def main():
     print(f"\nפירוט מלא: {out.relative_to(config.ROOT)}")
 
     print("\n" + usage.report())
+    history = eval_history.append(**run_metrics(records, args, version, partial, stopped))
+    print(f"\nנוספה שורה להיסטוריית הריצות: {history.relative_to(config.ROOT)}")
     if stopped:
         print(f"\n!!! הריצה נעצרה באמצע ({streak.error}) - התוצאות חלקיות, הפירוט למעלה.")
         sys.exit(2)

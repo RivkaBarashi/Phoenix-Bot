@@ -1,0 +1,85 @@
+"""סיכום יומן השיחות של הצ'אט (logs/conversations.jsonl).
+
+מה שואלים, מה הבוט החליט, כמה זמן זה לקח (ממוצע ו-p90), איזה מודל ענה, מה המשוב (👍/👎), אילו
+תשובות קיבלו 👎 (לבדיקה), ומה אנשים מחפשים ולא מוצאים באתר.
+
+הרצה:  .venv\\Scripts\\python report.py
+       .venv\\Scripts\\python report.py --since 2026-10-20
+       .venv\\Scripts\\python report.py --log path\\to\\conversations.jsonl
+"""
+import argparse
+import collections
+import sys
+from pathlib import Path
+
+from phoenix import conversation_log, stats
+
+STAGES = ["total", "condense", "vector", "bm25", "rerank", "llm", "topic"]
+STAGE_NAMES = {"total": "סה\"כ", "condense": "השלמת שאלת המשך", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח",
+               "rerank": "Rerank", "llm": "מודל", "topic": "בדיקת נושא"}
+FEEDBACK = {"up": "👍", "down": "👎", None: "בלי משוב"}
+
+
+def short(text: str, n: int = 110) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= n else text[:n] + "..."
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--log", default=str(conversation_log.LOG_FILE))
+    parser.add_argument("--since", help="רק מהתאריך הזה, למשל 2026-10-20")
+    args = parser.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    entries = [e for e in conversation_log.read_log(Path(args.log)) if not args.since or e["time"] >= args.since]
+    if not entries:
+        print(f"אין שיחות ביומן ({args.log}).")
+        return
+    n = len(entries)
+    print(f"יומן: {args.log}\n{n} שאלות ב-{len({e['session'] for e in entries})} שיחות, "
+          f"{entries[0]['time']} עד {entries[-1]['time']}")
+
+    print("\n=== מה הבוט החליט ===")
+    for kind, count in collections.Counter(e["kind"] for e in entries).most_common():
+        print(f"   {kind:<12} {count:>4}  ({count / n:.0%})")
+    reasons = collections.Counter(e["reason"].split(":")[0] for e in entries if e["kind"] in ("not_on_site", "error"))
+    if reasons:
+        print("   סיבות ל'לא מופיע באתר' ולתקלות: " + ", ".join(f"{k}: {v}" for k, v in reasons.most_common()))
+
+    print("\n=== משוב ===")
+    counts = collections.Counter(e["feedback"] for e in entries)
+    print("   " + " | ".join(f"{FEEDBACK[k]}: {counts[k]}" for k in ("up", "down", None)))
+    by_kind = collections.defaultdict(collections.Counter)
+    for e in entries:
+        if e["feedback"]:
+            by_kind[e["kind"]][e["feedback"]] += 1
+    for kind, c in by_kind.items():
+        print(f"   {kind:<12} 👍 {c['up']}  👎 {c['down']}")
+
+    print("\n=== זמנים (שניות) ===")
+    print(f"   {'שלב':<18}{'שאלות':>7}{'ממוצע':>8}{'p90':>7}")
+    for stage, count, avg, high in stats.stage_table([e["timings"] for e in entries], STAGES):
+        print(f"   {STAGE_NAMES.get(stage, stage):<18}{count:>7}{avg:>8.1f}{high:>7.1f}")
+
+    print("\n=== מי ענה ===")
+    for model, count in collections.Counter(e["llm"] or "- (בלי מודל)" for e in entries).most_common():
+        print(f"   {model:<45} {count:>4}")
+
+    follow_ups = [e for e in entries if e.get("standalone")]
+    handoffs = sum(1 for e in entries if e.get("handoff"))
+    print(f"\nשאלות המשך שנוסחו מחדש: {len(follow_ups)} | הוצע להמשיך עם נציג בוואטסאפ: {handoffs}")
+
+    if down := [e for e in entries if e["feedback"] == "down"]:
+        print("\n=== קיבלו 👎 - לבדיקה ===")
+        for e in down:
+            print(f"   [{e['time']}] {e['question']}  ->  {e['kind']} ({e['reason']})\n      {short(e.get('answer'))}")
+
+    if missing := [e for e in entries if e["kind"] == "not_on_site"]:
+        print(f"\n=== 'לא מופיע באתר' - מה חיפשו ({len(missing)}, האחרונות) ===")
+        for e in missing[-15:]:
+            print(f"   {e['question']}" + (f"  (כלומר: {e['standalone']})" if e.get("standalone") else ""))
+
+
+if __name__ == "__main__":
+    main()
