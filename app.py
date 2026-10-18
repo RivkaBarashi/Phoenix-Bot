@@ -9,8 +9,8 @@
 ריק או לא מוגדר = שרשרת המודלים הרגילה (Gemini קודם). ההגדרה משפיעה רק על הממשק -
 הבדיקות (eval_*.py) לא קוראות אותה.
 
-שאלות המשך: בינתיים כל שאלה נשלחת לבוט לבד, בלי השיחה הקודמת. ההיסטוריה מוצגת על
-המסך, והבנת ההקשר משאלה קודמת תיבנה בהמשך.
+שאלות המשך: השיחה עד עכשיו (בלי הודעת הפתיחה ובלי הודעות שגיאה) נשלחת לבוט עם כל שאלה. הבוט
+משתמש בה רק כשהשאלה תלויה בשיחה ("ותוך כמה זמן?") - ראו answer.needs_context.
 """
 import html
 import logging
@@ -109,12 +109,20 @@ def to_html(text: str) -> str:
     return "".join(parts).replace("\n", "<br>")
 
 
-def message_from_answer(a: bot.Answer) -> dict:
+def chat_history(messages: list[dict]) -> list[dict]:
+    """השיחה עד עכשיו, לשאלות המשך: שאלות ותשובות בלבד. הודעת הפתיחה לא נשמרת בשיחה, והודעות שגיאה
+    ("משהו השתבש...") לא עוזרות להבין את השאלה הבאה."""
+    return [{"role": m["role"], "content": m["content"]} for m in messages
+            if m["role"] == "user" or (m.get("meta") or {}).get("kind") != "error"]
+
+
+def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     """תוצאת הבוט -> הודעה לתצוגה: הטקסט בלי שורת המקור, והמקורות כקישורים עם שם העמוד."""
     text = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources מוסיף "המקור:" / "המקורות:" בסוף
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
-            "timings": a.timings}
+            "timings": a.timings,
+            "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
 
@@ -166,6 +174,8 @@ def render(message: dict, stream: bool = False):
             with st.expander("פרטים טכניים"):
                 st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
                            f"מודל: {meta['llm'] or '-'}")
+                if meta.get("standalone"):
+                    st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
                 if meta.get("timings"):
                     st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
                                                       for k, v in meta["timings"].items()))
@@ -217,7 +227,8 @@ def main():
         render(user_message)
         with st.spinner("מחפש באתר..."):
             try:
-                reply = message_from_answer(bot.answer(question))
+                history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
+                reply = message_from_answer(bot.answer(question, history), question)
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)

@@ -112,6 +112,18 @@ GREETING_PREFIX = re.compile(
     rf"|(?P<thanks>{_THANKS})(?=\s*(?:{_PUNCT}|$)))[\s,.!?…:;\-–]*"
 )
 
+# שאלת המשך = שאלה שלא מובנת בלי השיחה: פותחת בהמשך ("ומה עם...", "ואם...", "גם..."), מפנה למשהו
+# שנאמר קודם ("זה", "שלהם", "בה"), או קצרה מאוד ("ותוך כמה זמן?"). רק לה מצרפים את השיחה ומנסחים
+# אותה מחדש (קריאה למודל). שאלה עצמאית באמצע שיחה נענית בדיוק כמו שאלה ראשונה.
+FOLLOW_UP_START = re.compile(r"^(?:ומה|ומי|ואיך|וכמה|ומתי|ואיפה|ולמה|והאם|ואם|וגם|ותוך|ובמקרה|ולגבי|ואז|אז|גם|לגבי"
+                             r"|מה\s+(?:לגבי|עם))(?=\s|$|[?,.!])")
+REFERENCE_WORD = re.compile(r"(?<![\w\"'])(?:זה|זו|זאת|הזה|הזו|הזאת|אותו|אותה|אותם|אותן|עליו|עליה|עליהם|עליהן"
+                            r"|שלו|שלה|שלהם|שלהן|בו|בה|בהם|בהן|לו|לה|להם|להן|ממנו|ממנה|מהם|ביניהם|ביניהן"
+                            r"|כזה|כזו|כזאת|כאלה|האלה|האלו|ההוא|ההיא|הנ\"ל)(?![\w\"'])")
+SHORT_QUESTION_WORDS = 3
+# בשאלה ארוכה מילת הפניה מפנה בדרך כלל לתוך השאלה עצמה ("...אחרי שמבוטח שלהם פגע ברכב שלי?")
+REFERENCE_MAX_WORDS = 7
+
 CONDENSE_PROMPT = ("נסח מחדש את השאלה האחרונה של הלקוח כשאלה עצמאית ומלאה בעברית, לפי השיחה. "
                    "אם היא כבר עצמאית - החזר אותה כמו שהיא. החזר רק את השאלה, בלי שום דבר נוסף.")
 
@@ -314,6 +326,18 @@ def terms_not_on_site(question: str) -> list[str]:
             if len(w) >= 3 and w not in bm25.STOPWORDS and re.search(r"[א-ת]", w) and not on_site(w)]
 
 
+def own_terms_not_on_site(standalone: str, question: str, history: list[dict]) -> list[str]:
+    """terms_not_on_site לשאלה שמחפשים, אבל רק מילים שהלקוח עצמו כתב. בשאלת המשך השאלה העצמאית היא ניסוח
+    של המודל, ושגיאת כתיב שלו ("תותוך כמה זמן...", נבדק) לא אמורה להפוך תשובה ל"לא מופיע באתר".
+    מילה של הלקוח נמצאת גם בנטייה אחרת: "טרקטורון" בשאלה העצמאית ~ "טרקטורונים" שהלקוח כתב קודם."""
+    missing = terms_not_on_site(standalone)
+    if standalone == question or not missing:
+        return missing
+    own = " ".join([question] + [m["content"] for m in history if m["role"] == "user"])
+    stems = {v.translate(FINAL_LETTERS)[:4] for w in WORD.findall(own.lower()) for v in bm25.variants(w)}
+    return [w for w in missing if any(v.translate(FINAL_LETTERS)[:4] in stems for v in bm25.variants(w))]
+
+
 def focus(text: str, question: str, max_chars: int) -> str:
     """קיצור קטע להקשר מצומצם: המשפטים שהכי קשורים לשאלה, בסדר המקורי, עד max_chars."""
     if len(text) <= max_chars:
@@ -336,6 +360,14 @@ def format_sources(urls: list[str]) -> str:
     if len(urls) == 1:
         return f"המקור: {urls[0]}"
     return "המקורות:\n" + "\n".join(f"- {u}" for u in urls)
+
+
+def needs_context(question: str) -> bool:
+    """האם השאלה תלויה בשיחה ("ותוך כמה זמן?", "כמה זה עולה?") - בלי קריאה למודל."""
+    q = question.strip()
+    words = len(WORD.findall(q))
+    return bool(FOLLOW_UP_START.match(q) or words <= SHORT_QUESTION_WORDS
+                or (REFERENCE_WORD.search(q) and words <= REFERENCE_MAX_WORDS))
 
 
 def standalone_question(question: str, history: list[dict]) -> str:
@@ -452,7 +484,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             return not_on_site("unverified_evidence", **extra)
         if bad := unsupported_numbers(answer_text, texts):
             return not_on_site(f"unsupported_numbers:{','.join(bad)}", **extra)
-        if missing := terms_not_on_site(standalone):
+        if missing := own_terms_not_on_site(standalone, question, history):
             return not_on_site(f"term_not_on_site:{','.join(missing)}", **extra)
         if not answer_text:
             return not_on_site("empty_answer", **extra)
@@ -462,7 +494,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     if kind == "personal":
         site_part_ok = not cited or any(quote_found(e, [text for _, text in cited]) for e in evidence)
         if (not answer_text or not site_part_ok or unsupported_numbers(answer_text, texts)
-                or terms_not_on_site(standalone)):
+                or own_terms_not_on_site(standalone, question, history)):
             answer_text, cited = PERSONAL_GENERIC, []
         answer_text, fixed = no_yes_no_opening(answer_text, texts)
         text = tidy_codes(add_referral(answer_text, referral))  # tidy שוב: הניסוח מחדש הוא טקסט חדש של המודל
@@ -475,7 +507,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
 
 def answer(question: str, history: list[dict] = ()) -> Answer:
-    """history: [{"role": "user" | "assistant", "content": "..."}] - לשאלות המשך."""
+    """history: [{"role": "user" | "assistant", "content": "..."}] - השיחה עד עכשיו, לשאלות המשך.
+    השיחה נכנסת לתמונה רק כשהשאלה תלויה בה (needs_context): אז מנסחים שאלה עצמאית לחיפוש, והמודל
+    רואה גם את השיחה. שאלה עצמאית נענית כמו שאלה ראשונה - בלי קריאה נוספת ובלי השיחה."""
     start = time.perf_counter()
     if greeting := greeting_answer(question):
         greeting.timings["total"] = time.perf_counter() - start
@@ -483,10 +517,11 @@ def answer(question: str, history: list[dict] = ()) -> Answer:
     rest, greeted, _ = split_greeting(question)
     if greeted:  # "היי, איך מגישים תביעה?" - מתעלמים מהברכה ועונים על השאלה
         question = rest
-    standalone = standalone_question(question, list(history))
+    context = list(history) if history and needs_context(question) else []
+    standalone = standalone_question(question, context)
     condense = time.perf_counter() - start
-    result = respond(question, search(standalone, k=CONTEXT_CHUNKS), list(history), standalone=standalone)
-    if history:
+    result = respond(question, search(standalone, k=CONTEXT_CHUNKS), context, standalone=standalone)
+    if context:
         result.timings["condense"] = condense
     result.timings["total"] = time.perf_counter() - start
     log.info("timings %s | %s", " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items()), question[:60])
