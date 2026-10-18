@@ -1,4 +1,10 @@
-﻿date,commit,script,questions,selection,index,prompt,threshold,n,answered,correct,partial,wrong,cited_correct,not_on_site_ok,personal_ok,greeting_ok,off_topic_ok,injection_blocked,top1,top3,top5,smoke_passed,mean_total_s,p90_total_s,llm_calls,llm_cache_hits,stopped
-2026-10-18 20:54,208a362+dirty,eval_answers,questions.csv,only=19 category=,gemini,8e5566c9,0.82,1,1/1,1,0,0,1,,,,,,,,,,,,1,1,
-2026-10-18 21:06,4a19338+dirty,eval_answers,questions.csv,"only=19,22,36,41,51 category=",gemini,8e5566c9,0.82,5,1/1,1,0,0,1,1/1,,1/1,1/1,1/1,,,,,2.1,5.8,5,6,
-2026-10-18 21:08,4a19338+dirty,eval_answers,questions.csv,"only=19,22,36,41,51 category=",gemini,8e5566c9,0.82,5,1/1,1,0,0,1,1/1,,1/1,1/1,1/1,,,,,1.6,4.4,0,8,
+﻿date,commit,script,questions,selection,index,prompt,threshold,n,answered,correct,partial,wrong,cited_correct,not_on_site_ok,personal_ok,personal_correct,greeting_ok,off_topic_ok,injection_blocked,top1,top3,top5,smoke_passed,mean_total_s,p90_total_s,llm_calls,llm_cache_hits,models,stopped
+2026-10-18 20:54,208a362+dirty,eval_answers,questions.csv,only=19 category=,gemini,8e5566c9,0.82,1,1/1,1,0,0,1,,,,,,,,,,,,,1,1,,
+2026-10-18 21:06,4a19338+dirty,eval_answers,questions.csv,"only=19,22,36,41,51 category=",gemini,8e5566c9,0.82,5,1/1,1,0,0,1,1/1,,,1/1,1/1,1/1,,,,,2.1,5.8,5,6,,
+2026-10-18 21:08,4a19338+dirty,eval_answers,questions.csv,"only=19,22,36,41,51 category=",gemini,8e5566c9,0.82,5,1/1,1,0,0,1,1/1,,,1/1,1/1,1/1,,,,,1.6,4.4,0,8,,
+2026-10-18 21:09,73a6ca9,smoke_test,,cached,,,,5,,,,,,,,,,,,,,,5/5,,,,,,
+2026-10-18 21:28,73a6ca9+dirty,eval_answers,questions.csv,"only=7,45 category=",gemini,8e5566c9,0.82,2,,0,0,0,0,,2/2,1/2,,,,,,,,9.4,18.2,6,1,,
+2026-10-18 21:30,99f51dd+dirty,eval_answers,questions.csv,"only=22,47 category=",gemini,8e5566c9,0.82,2,,0,0,0,0,1/1,1/1,0/1,,,,,,,,10.9,16.4,6,1,,
+2026-10-18 21:31,99f51dd+dirty,eval_answers,questions.csv,only=47 category=,gemini,8e5566c9,0.82,1,,0,0,0,0,,1/1,1/1,,,,,,,,4.3,4.3,1,1,,
+2026-10-18 21:34,a59e21d+dirty,eval_retrieval,questions.csv,"only=48,59,60,61,62 category=answerable",gemini,,,5,,,,,,,,,,,,3/5,3/5,3/5,,,,,,,
+2026-10-18 21:35,cff6fc8+dirty,eval_answers,questions.csv,"only=19,47 category=",gemini,8e5566c9,0.82,2,1/1,1,0,0,1,,1/1,1/1,,,,,,,,2.5,4.3,0,4,gemini-3.5-flash-lite (cache):1; gemini-3.8-flash (cache):1,
