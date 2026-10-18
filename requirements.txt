@@ -18,3 +18,6 @@ streamlit
 truststore  # משתמש בתעודות של Windows (נחוץ בגלל סינון Netspark)
 python-dotenv
 tqdm
+
+# --- בדיקות יחידה (tests/, בלי API) ---
+pytest
