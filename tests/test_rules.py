@@ -2,9 +2,13 @@
 
 הרצה:  .venv\\Scripts\\python -m pytest
 """
+import json
+
 import pytest
 
 from phoenix import answer as A
+from phoenix import llm
+from phoenix.search import Hit, SearchResult
 
 LRM = "\u200e"
 
@@ -155,3 +159,25 @@ def test_no_duplicate_referral():
     result = A.add_referral(text, referral)
     assert result.endswith(referral) and "לפרטים פנו" not in result  # ההפניה בלי טלפון הוחלפה
     assert A.add_referral(result, referral) == result               # כבר יש הפניה עם טלפון - לא מוסיפים
+
+
+# ---------------------------------------------------------------- שאלה אישית לפני הסף (מודל מדומה, בלי API)
+
+LOW_HIT = SearchResult([Hit("x", A.CONTACT_URL, "צור קשר", "", "כל הדרכים ליצור איתנו קשר", score=0.5)],
+                       "gemini:x", "cohere:rerank-v4.0-pro")  # 0.5 - מתחת לסף
+
+
+def fake_model(monkeypatch, data: dict):
+    monkeypatch.setattr(llm, "chat", lambda *args, **kwargs: llm.ChatResult(json.dumps(data), "fake:model", data))
+
+
+def test_personal_question_below_threshold_gets_a_personal_answer(monkeypatch):
+    fake_model(monkeypatch, {"kind": "not_on_site", "answer": "", "referral": "", "evidence": [], "sources": []})
+    a = A.respond("מה היתרה בקרן הפנסיה שלי?", LOW_HIT)
+    assert a.kind == "personal" and a.text.startswith(A.PERSONAL_GENERIC)  # לא "לא מופיע באתר"
+
+
+def test_regular_question_below_threshold_still_not_on_site(monkeypatch):
+    fake_model(monkeypatch, {"related": True})  # בדיקת הנושא: קשור לביטוח
+    a = A.respond("יש לכם סניף באילת?", LOW_HIT)
+    assert (a.kind, a.reason) == ("not_on_site", "below_threshold")

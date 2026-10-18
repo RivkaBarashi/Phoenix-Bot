@@ -458,7 +458,11 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
     if not hits:
         return not_on_site("no_results")
-    if calibrated and hits[0].score < threshold:  # שכבה 1
+    # שאלה אישית לפי הכלל בקוד (כיסוי, זכאות או יתרה בגוף ראשון) מקבלת תשובה אישית גם מתחת לסף. הסף
+    # מחליט אם יש באתר תשובה לשאלה - ולשאלה אישית התשובה היא תמיד הפניה, ומה שהאתר אומר באופן כללי אם
+    # יש (נבדק: "מה היתרה בקרן הפנסיה שלי?" קיבלה 0.805 ונענתה "לא מופיע באתר").
+    personal = is_personal_question(standalone)
+    if calibrated and hits[0].score < threshold and not personal:  # שכבה 1
         start = time.perf_counter()
         off_topic = is_off_topic(standalone)
         timings["topic"] = time.perf_counter() - start
@@ -484,8 +488,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         referral = GENERIC_REFERRAL
 
     kind = data["kind"]
-    if kind == "answer" and is_personal_question(standalone):
-        kind = "personal"  # שאלה על הפוליסה/הכיסוי של הלקוח - תמיד אישית
+    if personal:
+        kind = "personal"  # שאלה על הכיסוי/היתרה של הלקוח - תמיד תשובה אישית, לא answer ולא "לא מופיע באתר"
 
     if kind == "off_topic":
         return Answer(OFF_TOPIC_TEXT, "off_topic", "off_topic", [], **base, **extra)
