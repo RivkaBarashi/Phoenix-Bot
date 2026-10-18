@@ -11,6 +11,9 @@
 
 שאלות המשך: השיחה עד עכשיו (בלי הודעת הפתיחה ובלי הודעות שגיאה) נשלחת לבוט עם כל שאלה. הבוט
 משתמש בה רק כשהשאלה תלויה בשיחה ("ותוך כמה זמן?") - ראו answer.needs_context.
+
+יומן ומשוב: כל שאלה נרשמת ב-logs/conversations.jsonl (report.py מסכם), ומתחת לכל תשובה 👍/👎 שנשמר
+ביומן. בתשובה אישית או "לא מופיע באתר" - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
 """
 import html
 import logging
@@ -18,6 +21,7 @@ import os
 import re
 import time
 import uuid
+from urllib.parse import quote
 
 import streamlit as st
 
@@ -38,6 +42,10 @@ WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה 
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
 STAGE_NAMES = {"condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
                "llm": "מודל", "total": "סה\"כ"}
+# העברה לנציג אנושי: הוואטסאפ של שירות הלקוחות (054-9893455, מעמוד צור קשר באתר)
+WHATSAPP_URL = "https://wa.me/972549893455"
+HANDOFF_LABEL = "💬 המשך עם נציג בוואטסאפ"
+STREAK_NOTICE = "לא מצאתי באתר תשובה לשתי השאלות האחרונות. נציג אנושי יוכל לעזור - ההודעה בוואטסאפ כבר מוכנה:"
 ERROR_MESSAGE = ("משהו השתבש ולא הצלחתי לענות כרגע. אפשר לנסות שוב בעוד רגע, "
                  "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 LOAD_ERROR = ("הבוט לא הצליח להיטען. צריך לוודא שהאינדקס נבנה (python -m phoenix.chunk ואז "
@@ -122,7 +130,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     text = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources מוסיף "המקור:" / "המקורות:" בסוף
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
-            "timings": a.timings,
+            "timings": a.timings, "question": question,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
@@ -169,6 +177,12 @@ def render(message: dict, stream: bool = False):
                 f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{html.escape(title)}</a>'
                 for title, url in message["sources"])
             st.markdown(f'<div class="sources">📄 {label}: {links}</div>', unsafe_allow_html=True)
+        if handoff := message.get("handoff"):
+            if handoff["streak"]:
+                st.info(STREAK_NOTICE)
+            st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
+        if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
+            st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
         if message.get("meta"):
             meta = message["meta"]
             score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
@@ -180,6 +194,32 @@ def render(message: dict, stream: bool = False):
                 if meta.get("timings"):
                     st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
                                                       for k, v in meta["timings"].items()))
+
+
+def save_feedback(entry_id: str):
+    value = st.session_state.get(f"feedback-{entry_id}")  # 1 = 👍, 0 = 👎, None = בוטל
+    conversation_log.log_feedback(entry_id, {1: "up", 0: "down"}.get(value))
+
+
+def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:
+    """כפתור "המשך עם נציג בוואטסאפ" לתשובה personal או not_on_site, עם הודעה מוכנה שמסכמת את השאלה
+    (בשאלת המשך - השאלה העצמאית, שמובנת גם בלי השיחה). אחרי 2 "לא מופיע באתר" ברצף - הודעה בולטת,
+    וההודעה המוכנה מסכמת את שתי השאלות. earlier: ההודעות שלפני התשובה הזו."""
+    meta = reply["meta"]
+    if meta["kind"] not in ("personal", "not_on_site"):
+        return None
+    question = (meta.get("standalone") or meta.get("question") or "")[:200]
+    answers = [m for m in earlier if m["role"] == "assistant"]
+    previous = answers[-1]["meta"] if answers and answers[-1].get("meta") else {}
+    streak = meta["kind"] == "not_on_site" and previous.get("kind") == "not_on_site"
+    if streak:
+        first = (previous.get("standalone") or previous.get("question") or "")[:200]
+        text = f"שלום, שאלתי את הבוט באתר הפניקס ולא מצאתי באתר תשובה לשתי שאלות: 1) {first} 2) {question}"
+    elif meta["kind"] == "personal":
+        text = f"שלום, יש לי שאלה על הפוליסה האישית שלי: {question}"
+    else:
+        text = f"שלום, שאלתי את הבוט באתר הפניקס ולא מצאתי באתר תשובה לשאלה: {question}"
+    return {"streak": streak, "url": f"{WHATSAPP_URL}?text={quote(text)}"}
 
 
 def ask(question: str):
@@ -233,7 +273,8 @@ def main():
                 history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
                 result = bot.answer(question, history)
                 reply = message_from_answer(result, question)
-                reply["id"] = conversation_log.log_answer(session, question, result)
+                reply["handoff"] = handoff_for(reply, st.session_state.messages)
+                reply["id"] = conversation_log.log_answer(session, question, result, handoff=bool(reply["handoff"]))
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)
