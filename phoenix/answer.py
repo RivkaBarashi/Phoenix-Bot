@@ -429,7 +429,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         return Answer(f"{ERROR_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "llm_unavailable",
                       [CONTACT_URL], **base)
     timings["llm"] = time.perf_counter() - start
-    data, extra = reply.data, dict(llm=reply.provider, raw=reply.data)
+    data, extra = reply.data, dict(llm=reply.provider + (" (cache)" if reply.cached else ""), raw=reply.data)
     texts = [h.text for h in hits] + [contact_text()]
     cited = _cited(data.get("sources"), hits)
     evidence = [e for e in _as_list(data.get("evidence")) if isinstance(e, str)]

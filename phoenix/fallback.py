@@ -38,6 +38,14 @@ _resting_until: dict[str, float] = {}
 
 # כמה קריאות נשלחו לכל ספק בתהליך הנוכחי (כולל כאלה שנכשלו) - כדי לעקוב אחרי מכסות
 CALLS: collections.Counter = collections.Counter()
+FAILED: collections.Counter = collections.Counter()  # מתוכן - כמה נכשלו
+LAST_ERRORS: dict[str, list[str]] = {}  # לכל מטרה (llm, rerank...): השגיאות בפעם האחרונה שכל הספקים נכשלו
+
+
+def resting() -> dict[str, float]:
+    """ספקים ש"נחים" עכשיו (אחרי מכסה/עומס) -> כמה שניות נשארו."""
+    now = time.time()
+    return {name: until - now for name, until in _resting_until.items() if until > now}
 
 
 class EmptyResult(Exception):
@@ -158,6 +166,7 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
             except StopChain:
                 raise
             except Exception as exc:
+                FAILED[p.name] += 1
                 kind = classify(exc)
                 if kind in RETRYABLE and attempt < retries:
                     wait = min(max_wait, retry_after(exc) or 2 ** (attempt + 1) + random.random())
@@ -173,4 +182,5 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])
                 break
+    LAST_ERRORS[purpose] = errors
     raise AllProvidersFailed(purpose, errors)

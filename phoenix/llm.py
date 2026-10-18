@@ -5,7 +5,19 @@
     result.text, result.provider
 
 אם הספק הראשון ב-config.LLM_CHAIN נחסם או נופל, עוברים לבא בתור.
+
+מטמון (חיסכון במכסה): תשובה של מודל נשמרת ב-data/cache/llm.json לפי ההוראות (system), ההודעות (השאלה
+והקטעים) וההגדרות. אותה בקשה בדיוק - התשובה מהמטמון, בלי לשלוח שוב. כל שינוי בהוראות או בקטעים הוא
+מפתח אחר, כלומר "גרסה חדשה", ונשלח למודל מחדש. CACHE_MODE: on (ברירת מחדל) / write (תמיד לשאול
+ולשמור - לבדיקה "טרייה") / off.
 """
+import collections
+import hashlib
+import json
+import logging
+import os
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -19,13 +31,63 @@ OPENAI_COMPATIBLE_URLS = {
     "groq": "https://api.groq.com/openai/v1/chat/completions",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
 }
+log = logging.getLogger("phoenix")
+
+CACHE_FILE = config.ROOT / "data" / "cache" / "llm.json"
+CACHE_MODE = "on"
+CACHE_HITS: collections.Counter = collections.Counter()  # תשובות שהגיעו מהמטמון, לפי המודל שענה במקור
+TOKENS: collections.Counter = collections.Counter()      # טוקנים שהספקים דיווחו (קלט + פלט), לפי מודל
+_cache: dict[str, dict] | None = None
+_cache_lock = threading.Lock()
 
 
 @dataclass
 class ChatResult:
     text: str
-    provider: str     # הספק שענה בפועל, למשל "gemini:gemini-3.5-flash"
-    data: Any = None  # התוצאה של parse (אם ביקשו), למשל JSON מפוענח
+    provider: str         # הספק שענה בפועל, למשל "gemini:gemini-3.5-flash"
+    data: Any = None      # התוצאה של parse (אם ביקשו), למשל JSON מפוענח
+    cached: bool = False  # התשובה הגיעה מהמטמון, בלי קריאה למודל
+
+
+def _read_cache_file() -> dict[str, dict]:
+    try:
+        return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _cache_get(key: str) -> dict | None:
+    global _cache
+    with _cache_lock:
+        if _cache is None:
+            _cache = _read_cache_file()
+        return _cache.get(key)
+
+
+def _cache_put(key: str, entry: dict):
+    """שמירה בטוחה גם כשהצ'אט והבדיקות רצים יחד: ממזגים עם מה שבקובץ ומחליפים אותו בפעולה אחת."""
+    global _cache
+    with _cache_lock:
+        merged = _read_cache_file() | (_cache or {})
+        merged[key] = entry
+        _cache = merged
+        try:
+            CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CACHE_FILE.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, CACHE_FILE)
+        except OSError as exc:  # המטמון הוא רק חיסכון - תקלה בו לא עוצרת תשובה
+            log.warning("llm cache not saved: %s", exc)
+
+
+def cache_key(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None) -> str:
+    payload = json.dumps([system, messages, temperature, json_mode, sorted(only or [])], ensure_ascii=False)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _count_tokens(name: str, tokens) -> None:
+    if isinstance(tokens, int) and tokens > 0:
+        TOKENS[name] += tokens
 
 
 def _non_empty(text: str | None) -> str:
@@ -60,6 +122,7 @@ def _gemini(model):
                 http_options=types.HttpOptions(timeout=int((timeout or config.HTTP_TIMEOUT) * 1000)),
             ),
         )
+        _count_tokens(f"gemini:{model}", getattr(resp.usage_metadata, "total_token_count", None))
         return _non_empty(resp.text)
     return call
 
@@ -73,7 +136,9 @@ def _openai_compatible(provider, model):
             timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
-        return _non_empty(r.json()["choices"][0]["message"]["content"])
+        body = r.json()
+        _count_tokens(f"{provider}:{model}", (body.get("usage") or {}).get("total_tokens"))
+        return _non_empty(body["choices"][0]["message"]["content"])
     return call
 
 
@@ -86,7 +151,10 @@ def _cohere(model):
             timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
-        return _non_empty("".join(part.get("text", "") for part in r.json()["message"]["content"]))
+        body = r.json()
+        used = (body.get("usage") or {}).get("tokens") or {}
+        _count_tokens(f"cohere:{model}", int(used.get("input_tokens") or 0) + int(used.get("output_tokens") or 0))
+        return _non_empty("".join(part.get("text", "") for part in body["message"]["content"]))
     return call
 
 
@@ -113,6 +181,16 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
            פגומה ועוברים לספק הבא.
     only: רק ספקים מהסוגים האלה, למשל ["groq", "openrouter"].
     """
+    key = cache_key(messages, system, temperature, json_mode, only)
+    if CACHE_MODE == "on" and (hit := _cache_get(key)):
+        try:
+            data = parse(hit["text"]) if parse else None
+        except ValueError:  # הבודק השתנה מאז ששמרנו - שואלים את המודל מחדש
+            pass
+        else:
+            CACHE_HITS[hit["provider"]] += 1
+            return ChatResult(hit["text"], hit["provider"], data, cached=True)
+
     providers = [p for p in PROVIDERS if not only or p.name.split(":")[0] in only]
 
     def checked(p: Provider) -> Provider:
@@ -130,4 +208,6 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
     (text, data), provider = run_chain("llm", [checked(p) for p in providers], messages, system, temperature,
                                        retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
                                        deadline=config.QUERY_TIMEOUT)
+    if CACHE_MODE != "off":
+        _cache_put(key, {"text": text, "provider": provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
     return ChatResult(text, provider, data)

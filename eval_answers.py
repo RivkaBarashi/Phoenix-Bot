@@ -4,22 +4,31 @@
 בבדיקה המודל נשאל על כל שאלה - גם מתחת לסף - כדי לחשב מה היה קורה בכל סף.
 שופט מספק אחר (Groq, לא Gemini שעונה) משווה כל תשובה לתשובה הצפויה.
 
-הרצה:  .venv\\Scripts\\python eval_answers.py
-פירוט מלא, כולל טקסט התשובות: data/eval_answers_<index>.csv
+הרצה:  .venv\\Scripts\\python eval_answers.py                     (כל השאלות)
+       .venv\\Scripts\\python eval_answers.py --only 3,7,12       (רק השאלות האלה)
+       .venv\\Scripts\\python eval_answers.py --category personal (רק סוג אחד, או כמה: answerable,personal)
+       .venv\\Scripts\\python eval_answers.py --questions data/questions_holdout.csv
+פירוט מלא, כולל טקסט התשובות: data/eval_answers_<index>[_holdout][_partial].csv
+
+חיסכון במכסה: תשובות המודל והשופט נשמרות במטמון (llm.py) - שאלה שכבר נענתה, עם אותם קטעים ואותן
+הוראות, לא נשלחת שוב. --fresh: לשאול את המודלים מחדש. 3 שאלות ברצף שנכשלות באותה שגיאה - הריצה
+נעצרת ומדווחת. בסוף: כמה קריאות יצאו לכל שירות.
 """
 import argparse
 import collections
 import csv
+import hashlib
 import json
 import statistics
 import sys
 import time
+from pathlib import Path
 
-from eval_retrieval import RERANKER, best_rank, run_search, same_page, short
+from eval_retrieval import QUESTIONS, RERANKER, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
 from phoenix import answer as answer_layer
-from phoenix import config, embeddings, llm, rerank
+from phoenix import config, embeddings, llm, usage
 from phoenix.answer import respond
-from phoenix.fallback import CALLS, AllProvidersFailed
+from phoenix.fallback import AllProvidersFailed
 from phoenix.search import RRF_K, SearchResult
 
 PAUSE = 6.5  # בין שאלות: Rerank של Cohere (10 בדקה) ומודל השפה החינמי
@@ -64,22 +73,28 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--index", default=config.EMBEDDER, choices=[p.name.split(":")[0] for p in embeddings.PROVIDERS])
     parser.add_argument("--no-judge", action="store_true")
-    parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 12,13,30")
+    parser.add_argument("--questions", default=str(QUESTIONS), help="קובץ השאלות (למשל data/questions_holdout.csv)")
+    parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
+    parser.add_argument("--category", help="רק הסוגים האלה: " + ", ".join(TYPES))
+    parser.add_argument("--fresh", action="store_true", help="לשאול את המודלים מחדש, בלי המטמון")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
     # בבדיקה בלי Cohere כמודל שפה: הוא חולק את מכסת ה-Trial (1,000 בחודש) עם ה-Rerank
     answer_layer.COMPACT_LLMS = [p for p in answer_layer.COMPACT_LLMS if p != "cohere"]
+    if args.fresh:
+        llm.CACHE_MODE = "write"
 
-    rows = list(csv.DictReader(open(config.ROOT / "data" / "questions.csv", encoding="utf-8-sig")))
-    numbers = {int(n) for n in args.only.split(",")} if args.only else None
-    print(f"אינדקס: {args.index} | Rerank: {RERANKER} | סף נוכחי: {config.RERANK_THRESHOLD} | {len(rows)} שאלות")
+    selected = select_rows(args.questions, args.only, args.category)
+    version = hashlib.sha1(answer_layer.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
+    print(f"אינדקס: {args.index} | Rerank: {RERANKER} | סף נוכחי: {config.RERANK_THRESHOLD} | "
+          f"{len(selected)} שאלות מ-{Path(args.questions).name} | גרסת הוראות {version} | "
+          f"מטמון: {'בלי (--fresh)' if args.fresh else 'כן'}")
 
     records = []
-    for n, row in enumerate(rows, 1):
-        if numbers and n not in numbers:
-            continue
-        if records:
+    streak, stopped = FailureStreak(), False
+    for i, (n, row) in enumerate(selected):
+        if i:
             time.sleep(PAUSE)
         timings = {}
         # כמו בצ'אט: ברכה נענית בקוד לפני החיפוש, וברכה שאחריה שאלה - עונים רק על השאלה
@@ -91,7 +106,17 @@ def main():
             print(f"\n[{n}] ({row['type']}) {row['question']}\n    -> greeting (בלי חיפוש)\n    {greeting.text}")
             continue
         question = answer_layer.split_greeting(row["question"])[0] or row["question"]
-        ranked, used, reranked_by = run_search(question, args.index, timings)
+        try:
+            ranked, used, reranked_by = run_search(question, args.index, timings)
+        except RuntimeError as exc:  # החיפוש לא הצליח גם אחרי המתנות - נרשם כתקלה, ולא כתשובה
+            records.append({"n": n, "type": row["type"], "question": row["question"], "top": 0.0, "decision": "error",
+                            "reason": f"search_failed: {exc}", "llm": "", "sources": "", "answer": "", "verdict": "",
+                            "judge_reason": "", "cited_correct": "", "timings": timings})
+            print(f"\n[{n}] ({row['type']}) {row['question']}\n    נכשל: {exc}")
+            if stopped := streak.add(n, f"search: {exc}"):
+                print(streak.report())
+                break
+            continue
         a = respond(question, SearchResult(ranked[:5], used, reranked_by, timings), threshold=0.0)
         rec = {"n": n, "type": row["type"], "question": row["question"], "top": ranked[0].score if ranked else 0.0,
                "decision": a.kind, "reason": a.reason, "llm": a.llm or "", "sources": " ".join(a.sources),
@@ -114,6 +139,10 @@ def main():
         print(f"\n[{n}] ({row['type']}) {row['question']}")
         print(f"    rerank {rec['top']:.3f} -> {a.kind} ({a.reason}) {rec['verdict']} {source_mark}  [{a.llm}]")
         print("    " + " ".join(a.text.split())[:220])
+        failure = "llm: all models failed" if a.kind == "error" else "judge: unavailable" if rec["verdict"] == "n/a" else None
+        if stopped := streak.add(n, failure):
+            print(streak.report())
+            break
 
     answerable = [r for r in records if r["type"] == "answerable"]
     total = len(answerable)
@@ -159,7 +188,10 @@ def main():
     print("   " + " | ".join(f"{k}: {statistics.mean(r['timings'][k] for r in records if k in r['timings']):.1f}"
                             for k in stages))
 
-    out = config.ROOT / "data" / f"eval_answers_{args.index}{'_partial' if numbers else ''}.csv"
+    question_set = Path(args.questions).stem.removeprefix("questions").strip("_")  # "" או "holdout"
+    partial = args.only or args.category or stopped
+    out = config.ROOT / "data" / (f"eval_answers_{args.index}" + (f"_{question_set}" if question_set else "")
+                                  + ("_partial" if partial else "") + ".csv")
     fields = ["n", "type", "question", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",
               "sources", "answer"]
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
@@ -168,12 +200,10 @@ def main():
         writer.writerows(records)
     print(f"\nפירוט מלא: {out.relative_to(config.ROOT)}")
 
-    print("\n=== קריאות שיצאו ===")
-    for name, count in sorted(rerank.API_REQUESTS.items()):
-        print(f"   {name}: {count} קריאות API אמיתיות ({rerank.CACHE_HITS[name]} ציונים מהמטמון)")
-    for name, count in sorted(CALLS.items()):
-        if not name.startswith(("cohere:rerank", "voyage:rerank")):
-            print(f"   {name}: {count} ניסיונות")
+    print("\n" + usage.report())
+    if stopped:
+        print(f"\n!!! הריצה נעצרה באמצע ({streak.error}) - התוצאות חלקיות, הפירוט למעלה.")
+        sys.exit(2)
 
 
 if __name__ == "__main__":
