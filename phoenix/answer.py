@@ -118,6 +118,14 @@ WORD = re.compile(r"\w+")
 HEBREW_ACRONYM_QUOTE = re.compile(r'(?<=[א-ת])"(?=[א-ת])')
 log = logging.getLogger("phoenix")
 NUMBER = re.compile(r"\d[\d\-./:,]*\d|\d")
+# קוד כוכבית: באתר הוא כתוב "5432*" (כדי שיוצג נכון מימין לשמאל), והמודל מעתיק אותו כך או כותב
+# "*5432*". בתשובה הוא תמיד "*5432", כמו שמחייגים, עם סימן כיוון LRM (U+200E) לפניו - כך הכוכבית
+# מוצגת משמאל למספר גם בטקסט עברי פשוט (קובצי הבדיקה, אקסל), ולא רק בצ'אט.
+STAR_CODE = re.compile(r"[\u200e\u200f]?(?<![\w*,./\-])(?:\*(\d{4})\*?|(\d{4})\*)(?![\w*])")
+# פרטי קשר: טלפון, קוד כוכבית או מייל
+CONTACT_DETAIL = re.compile(r"\d[\d\-]{5,}\d|\*\d{4}|\d{4}\*|[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+SERVICE = re.compile(r"מוקד|שירות\s+ה?לקוחות|סוכן\s+ה?ביטוח|נציג")
+ASK_TO_CONTACT = re.compile(r"פנו|פני[יה]|לפנות|התקשרו|להתקשר|צרו\s+קשר|ליצור\s+קשר|לבדוק|בדקו|לברר|בררו|לבירור|לבדיקת|לפרטים")
 
 
 @dataclass
@@ -195,6 +203,38 @@ def no_yes_no_opening(answer_text: str, texts: list[str]) -> tuple[str, str]:
     except AllProvidersFailed:
         pass
     return f"{PERSONAL_OPENING} {YES_NO_START.sub('', answer_text, count=1)}", "stripped"
+
+
+def tidy_codes(text: str) -> str:
+    """קוד כוכבית בצורה אחת: "5432*", "*5432*" או "*5432" -> "*5432" (עם LRM לפניו, ראו STAR_CODE)."""
+    return STAR_CODE.sub(lambda m: "\u200e*" + (m.group(1) or m.group(2)), text)
+
+
+def _contacts(text: str) -> set[str]:
+    """פרטי הקשר שבטקסט, בצורה אחידה: "054-9893455" -> "0549893455", "5432*" -> "5432"."""
+    return {re.sub(r"[^\w@.]", "", d).lower() for d in CONTACT_DETAIL.findall(text)}
+
+
+def _is_referral(sentence: str) -> bool:
+    """משפט שמפנה למוקד, לשירות הלקוחות או לסוכן: "לפרטים פנו למוקד שירות הלקוחות", "מוקד דירה: 5432*"."""
+    return bool(SERVICE.search(sentence) and (ASK_TO_CONTACT.search(sentence) or CONTACT_DETAIL.search(sentence)))
+
+
+def add_referral(answer_text: str, referral: str) -> str:
+    """משפט ההפניה בסוף תשובה אישית - בלי הפניה כפולה. נבדק: המודל סיים ב"לפרטים פנו למוקד שירות הלקוחות
+    לתחום רכב." או כתב בעצמו את הטלפון של המוקד, והקוד הוסיף אחרי זה עוד משפט הפניה.
+    - המודל כבר כתב הפניה עם פרטי קשר, או את פרטי הקשר שבמשפט ההפניה - לא מוסיפים.
+    - המשפט האחרון שלו הוא הפניה בלי פרטי קשר - משפט ההפניה (שיש בו טלפון) בא במקומו.
+    - אחרת - מוסיפים בסוף. משפט הפתיחה הקבוע של שאלה אישית ("...רק מול שירות הלקוחות.") הוא לא הפניה."""
+    if answer_text == PERSONAL_GENERIC:  # הטקסט הקבוע שלנו - בלי טלפון, ההפניה משלימה אותו
+        return f"{answer_text} {referral}"
+    body = answer_text.removeprefix(PERSONAL_OPENING).strip()
+    sentences = [s for s in SENTENCE_END.split(body) if s.strip()]
+    if _contacts(referral) & _contacts(body) or any(_is_referral(s) and CONTACT_DETAIL.search(s) for s in sentences):
+        return answer_text
+    if len(sentences) > 1 and _is_referral(sentences[-1]) and CONTACT_DETAIL.search(referral):
+        return f"{answer_text[:answer_text.rindex(sentences[-1])].rstrip()} {referral}"
+    return f"{answer_text} {referral}"
 
 
 def parse_reply(text: str) -> dict:
@@ -390,8 +430,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     texts = [h.text for h in hits] + [contact_text()]
     cited = _cited(data.get("sources"), hits)
     evidence = [e for e in _as_list(data.get("evidence")) if isinstance(e, str)]
-    answer_text = str(data.get("answer") or "").strip()
-    referral = str(data.get("referral") or "").strip()
+    answer_text = tidy_codes(str(data.get("answer") or "").strip())
+    referral = tidy_codes(str(data.get("referral") or "").strip())
     if not referral or unsupported_numbers(referral, [contact_text()]):
         referral = GENERIC_REFERRAL
 
@@ -422,7 +462,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                 or terms_not_on_site(standalone)):
             answer_text, cited = PERSONAL_GENERIC, []
         answer_text, fixed = no_yes_no_opening(answer_text, texts)
-        text = answer_text if referral in answer_text else f"{answer_text} {referral}"
+        text = tidy_codes(add_referral(answer_text, referral))  # tidy שוב: הניסוח מחדש הוא טקסט חדש של המודל
         urls = [url for url, _ in cited] + [CONTACT_URL]
         reason = f"personal:{fixed}" if fixed else "personal"
         return Answer(f"{text}\n\n{format_sources(urls)}", "personal", reason, list(dict.fromkeys(urls)),

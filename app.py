@@ -47,17 +47,22 @@ RTL_CSS = """
 .stApp, [data-testid="stChatMessage"], [data-testid="stChatInput"] { direction: rtl; text-align: right; }
 [data-testid="stChatInput"] textarea { direction: rtl; text-align: right; }
 .answer { line-height: 1.7; }
+.answer bdi { white-space: nowrap; }  /* טלפון לא נשבר בין שורות אחרי המקף ("073-" ו-"2076100") */
 .sources { font-size: 0.9rem; border-top: 1px solid rgba(128, 128, 128, 0.3); margin-top: 0.5rem; padding-top: 0.4rem; }
 </style>
 """
 
-# טלפונים, קישורים ומיילים מוצגים משמאל לימין בתוך הטקסט העברי, כדי שלא יתהפכו
+# טלפונים, קישורים, מיילים וקודי כוכבית מוצגים משמאל לימין בתוך הטקסט העברי, כדי שלא יתהפכו.
+# מייל - רק אותיות לטיניות: ב"ל-Healthd@Fnx.co.il" ה-"ל-" שייכת לעברית ונשארת מימין למייל.
 LTR_TOKEN = re.compile(
     r"(?P<url>https?://[^\s<>\"']*[^\s<>\"'.,;:!?)\]])"
-    r"|(?P<email>[\w.+-]+@[\w-]+(?:\.[\w-]+)+)"
-    r"|(?P<star>\*\d{3,5}\b|\b\d{3,5}\*)"
+    r"|(?P<email>[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)"
+    r"|(?P<star>\*\d{3,5}\*?(?!\w)|\b\d{3,5}\*)"
     r"|(?P<phone>\b0\d{1,2}-?\d{3}-?\d{4}\b)"
 )
+BIDI_MARKS = re.compile("[\u200e\u200f\u2066-\u2069]")  # סימני כיוון שכבר בטקסט - כאן bdi עושה את העבודה
+LRI, PDI = "\u2066", "\u2069"  # בידוד משמאל לימין בטקסט רגיל (בזמן ההקלדה) - כמו bdi ב-HTML
+WORD_JOINER = "\u2060"  # אחרי המקף בטלפון: בלי שבירת שורה בזמן ההקלדה (בגרסה הסופית זה ב-CSS)
 
 
 @st.cache_resource(show_spinner="טוען את הבוט...")
@@ -77,22 +82,30 @@ def load_bot() -> dict:
     return {"chunks": len(chunks), "vectors": vectors, "llms": [p.name for p in llm.PROVIDERS if p.enabled]}
 
 
-def to_html(text: str) -> str:
-    """טקסט -> HTML בטוח: הכול עובר escape, קישורים נפתחים בלשונית חדשה, וטלפונים/קישורים/מיילים
-    עטופים ב-bdi כדי שיוצגו נכון בתוך עברית. קודי כוכבית ("5432*") מוצגים כמו שמחייגים: ‎*5432."""
-    parts, last = [], 0
+def ltr_segments(text: str):
+    """הטקסט בקטעים: (None, טקסט רגיל) או (סוג, ערך) לקישור, מייל, קוד כוכבית או טלפון.
+    קוד כוכבית מוצג כמו שמחייגים: "5432*" ו-"*5432*" -> "*5432"."""
+    text = BIDI_MARKS.sub("", text)
+    last = 0
     for m in LTR_TOKEN.finditer(text):
-        parts.append(html.escape(text[last:m.start()]))
-        value = m.group(0)
-        if m.lastgroup == "url":
+        yield None, text[last:m.start()]
+        yield m.lastgroup, "*" + m.group(0).strip("*") if m.lastgroup == "star" else m.group(0)
+        last = m.end()
+    yield None, text[last:]
+
+
+def to_html(text: str) -> str:
+    """טקסט -> HTML בטוח: הכול עובר escape, קישורים נפתחים בלשונית חדשה, וטלפונים, קישורים, מיילים
+    וקודי כוכבית עטופים ב-bdi כדי שיוצגו נכון ובסדר הנכון בתוך עברית."""
+    parts = []
+    for kind, value in ltr_segments(text):
+        if kind is None:
+            parts.append(html.escape(value))
+        elif kind == "url":
             href = html.escape(value, quote=True)
             parts.append(f'<a href="{href}" target="_blank" rel="noopener noreferrer"><bdi dir="ltr">{html.escape(value)}</bdi></a>')
         else:
-            if m.lastgroup == "star" and value.endswith("*"):
-                value = "*" + value[:-1]
             parts.append(f'<bdi dir="ltr">{html.escape(value)}</bdi>')
-        last = m.end()
-    parts.append(html.escape(text[last:]))
     return "".join(parts).replace("\n", "<br>")
 
 
@@ -111,10 +124,21 @@ def error_message(reason: str) -> dict:
             "meta": {"kind": "error", "reason": reason, "llm": None, "reranker": "-", "top_score": None}}
 
 
+def _isolated(kind: str | None, value: str) -> str:
+    """קטע בזרם ההקלדה: טלפון, קוד, מייל או קישור מבודדים משמאל לימין, וטלפון לא נשבר אחרי המקף."""
+    if kind is None:
+        return value
+    if kind == "phone":
+        value = value.replace("-", "-" + WORD_JOINER)
+    return f"{LRI}{value}{PDI}"
+
+
 def stream_words(text: str):
     """הצגה הדרגתית של תשובה שכבר עברה את כל הבדיקות. לא מזרימים ישר מהמודל: אחרי שהוא מסיים
-    הקוד עוד בודק את הציטוט והמספרים, ותשובה שנפסלה לא אמורה להופיע על המסך אפילו לרגע."""
-    for piece in re.split(r"(\s+)", text):
+    הקוד עוד בודק את הציטוט והמספרים, ותשובה שנפסלה לא אמורה להופיע על המסך אפילו לרגע.
+    טלפונים וקודי כוכבית מבודדים משמאל לימין כבר בזמן ההקלדה, ולא רק בגרסה הסופית."""
+    shown = "".join(_isolated(kind, value) for kind, value in ltr_segments(text))
+    for piece in re.split(r"(\s+)", shown):
         yield piece.replace("*", "\\*").replace("_", "\\_")  # בלי עיצוב Markdown באמצע ההקלדה
         if piece.strip():
             time.sleep(0.03)
