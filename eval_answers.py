@@ -19,16 +19,15 @@ import collections
 import csv
 import hashlib
 import json
-import statistics
 import sys
 import time
 from pathlib import Path
 
 from eval_retrieval import QUESTIONS, RERANKER, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
 from phoenix import answer as answer_layer
-from phoenix import config, embeddings, eval_history, llm, usage
+from phoenix import config, embeddings, eval_history, llm, stats, usage
 from phoenix.answer import respond
-from phoenix.fallback import CALLS, AllProvidersFailed
+from phoenix.fallback import CALLS, FAILED, AllProvidersFailed
 from phoenix.search import RRF_K, SearchResult
 
 PAUSE = 6.5  # בין שאלות: Rerank של Cohere (10 בדקה) ומודל השפה החינמי
@@ -74,6 +73,53 @@ def injection_blocked(record: dict, threshold: float) -> bool:
     return fixed and not any(marker in text.lower() for marker in LEAK_MARKERS)
 
 
+LLM_NAMES = {f"{p}:{m}" for p, m in config.LLM_CHAIN}
+STAGES = [("vector", "חיפוש וקטורי"), ("bm25", "מילות מפתח"), ("rerank", "Rerank"), ("llm", "מודל התשובה"),
+          ("topic", "בדיקת נושא (מתחת לסף)")]
+
+
+def model_calls() -> int:
+    """ניסיונות שיצאו למודלי שפה עד עכשיו (כולל כאלה שנכשלו - גם הם נספרים במגבלות)."""
+    return sum(CALLS[n] for n in LLM_NAMES)
+
+
+def cache_hits() -> int:
+    return sum(llm.CACHE_HITS.values())
+
+
+def model_answers() -> int:
+    """בקשות שקיבלו תשובה - מהמודל או מהמטמון (בלי הניסיונות שנכשלו): כמה תשובות השאלה צריכה."""
+    return sum(CALLS[n] - FAILED[n] for n in LLM_NAMES) + cache_hits()
+
+
+def print_timings_and_calls(records: list[dict]):
+    """זמן ממוצע ו-p90 לכל שלב, ומספר הקריאות למודל לכל סוג שאלה."""
+    searched = [r for r in records if r["decision"] not in ("greeting", "error")]
+    print("\n=== זמנים לכל שלב (שניות, בלי ברכות): ממוצע ו-p90 (90% מהשאלות מתחתיו) ===")
+    print(f"   {'שלב':<24}{'שאלות':>6}{'ממוצע':>8}{'p90':>8}")
+    rows = [(label, *row[1:]) for key, label in STAGES
+            for row in stats.stage_table([r["timings"] for r in searched], [key])]
+    rows.append(("סה\"כ - כמו בצ'אט", len(searched), stats.mean([r["chat_s"] for r in searched]),
+                 stats.p90([r["chat_s"] for r in searched])))
+    for label, count, avg, high in rows:
+        if count:
+            print(f"   {label:<24}{count:>6}{avg:>8.1f}{high:>8.1f}")
+    print("   (סה\"כ כמו בצ'אט = חיפוש + מודל התשובה מעל הסף, או חיפוש + בדיקת נושא מתחתיו; בלי השופט)")
+
+    print("\n=== קריאות למודל לכל סוג שאלה ===")
+    head = ("סוג", "שאלות", "בצ'אט: בקשות לשאלה", "יצאו בריצה: תשובה / נושא / שופט", "מהמטמון")
+    print(f"   {head[0]:<12}{head[1]:>6} | {head[2]:>14} | {head[3]:>31} | {head[4]:>7}")
+    for kind in TYPES:
+        group = [r for r in records if r["type"] == kind and "calls" in r]
+        if group:
+            total = {k: sum(r["calls"][k] for r in group) for k in ("answer", "topic", "judge", "cache")}
+            per_chat = stats.mean([r["chat_requests"] for r in group])
+            print(f"   {kind:<12}{len(group):>6} | {per_chat:>14.1f} | "
+                  f"{total['answer']:>14} / {total['topic']:>5} / {total['judge']:>5}  | {total['cache']:>7}")
+    print("   (בצ'אט: כמה תשובות ממודל השאלה צריכה - מהמודל או מהמטמון. יצאו: ניסיונות שנשלחו בפועל,")
+    print("    כולל כאלה שנכשלו ועברו לגיבוי - הם שנספרים במכסה. מהמטמון: תשובות שלא נשלחו שוב)")
+
+
 def run_metrics(records: list[dict], args, version: str, partial, stopped: bool) -> dict:
     """המדדים של הריצה לשורה ב-data/eval_history.csv - מה שהצ'אט היה מציג בסף הנוכחי."""
     t = config.RERANK_THRESHOLD
@@ -88,7 +134,8 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
     answered = [r for r in of_type("answerable") if outcome(r, t) == "answer"]
     verdicts = collections.Counter(r["verdict"] for r in answered)
     injections = of_type("injection")
-    llm_names = {f"{p}:{m}" for p, m in config.LLM_CHAIN}
+    llm_names = LLM_NAMES
+    chat_s = [r["chat_s"] for r in records if r["decision"] not in ("greeting", "error")]
     return {"script": "eval_answers", "questions": Path(args.questions).name,
             "selection": "all" if not partial else f"only={args.only or ''} category={args.category or ''}".strip(),
             "index": args.index, "prompt": version, "threshold": t, "n": len(records),
@@ -98,6 +145,8 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
             "greeting_ok": ok("greeting", "greeting"), "off_topic_ok": ok("off_topic", "off_topic"),
             "injection_blocked": eval_history.ratio(sum(injection_blocked(r, t) for r in injections), len(injections)),
             "llm_calls": sum(CALLS[n] for n in llm_names), "llm_cache_hits": sum(llm.CACHE_HITS.values()),
+            "mean_total_s": round(stats.mean(chat_s), 1) if chat_s else "",
+            "p90_total_s": round(stats.p90(chat_s), 1) if chat_s else "",
             "stopped": "yes" if stopped else ""}
 
 
@@ -143,7 +192,8 @@ def main():
         if greeting := answer_layer.greeting_answer(row["question"]):
             rec = {"n": n, "type": row["type"], "question": row["question"], "top": 0.0, "decision": "greeting",
                    "reason": "greeting", "llm": "", "sources": "", "answer": greeting.text, "verdict": "",
-                   "judge_reason": "", "cited_correct": "", "timings": {}}
+                   "judge_reason": "", "cited_correct": "", "timings": {}, "chat_s": 0.0, "chat_calls": 0,
+                   "calls": {"answer": 0, "topic": 0, "judge": 0, "cache": 0}, "chat_requests": 0}
             records.append(rec)
             print(f"\n[{n}] ({row['type']}) {row['question']}\n    -> greeting (בלי חיפוש)\n    {greeting.text}")
             continue
@@ -159,10 +209,14 @@ def main():
                 print(streak.report())
                 break
             continue
+        calls, cache_before = {"answer": 0, "topic": 0, "judge": 0}, cache_hits()
+        before, answered = model_calls(), model_answers()
         a = respond(question, SearchResult(ranked[:5], used, reranked_by, timings), threshold=0.0)
+        calls["answer"], answer_requests = model_calls() - before, model_answers() - answered
         rec = {"n": n, "type": row["type"], "question": row["question"], "top": ranked[0].score if ranked else 0.0,
                "decision": a.kind, "reason": a.reason, "llm": a.llm or "", "sources": " ".join(a.sources),
-               "answer": a.text, "verdict": "", "judge_reason": "", "cited_correct": "", "timings": a.timings}
+               "answer": a.text, "verdict": "", "judge_reason": "", "cited_correct": "", "timings": a.timings,
+               "calls": calls}
         if row["type"] == "answerable":
             correct = [h for h in ranked if same_page(h.url, row["source_url"])]
             by_rrf = sorted(ranked, key=lambda h: -sum(1 / (RRF_K + r) for r in (h.vector_rank, h.bm25_rank) if r))
@@ -173,9 +227,21 @@ def main():
                 cited_correct=any(same_page(u, row["source_url"]) for u in a.sources),
             )
             if a.kind == "answer" and not args.no_judge:
+                before = model_calls()
                 rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text)
-        if rec["top"] < config.RERANK_THRESHOLD:  # בצ'אט: מתחת לסף בודקים אם זה בכלל על ביטוח
+                calls["judge"] = model_calls() - before
+        below = rec["top"] < config.RERANK_THRESHOLD
+        if below:  # בצ'אט: מתחת לסף בודקים אם זה בכלל על ביטוח (במקום לשאול את מודל התשובה)
+            before, answered, start = model_calls(), model_answers(), time.perf_counter()
             rec["topic_off"] = answer_layer.is_off_topic(question)
+            rec["timings"]["topic"] = time.perf_counter() - start
+            calls["topic"], topic_requests = model_calls() - before, model_answers() - answered
+        calls["cache"] = cache_hits() - cache_before
+        # מה הצ'אט היה עושה: חיפוש, ואז מודל התשובה (מעל הסף) או רק בדיקת הנושא (מתחת לסף)
+        search_s = sum(rec["timings"].get(k, 0.0) for k in ("vector", "bm25", "rerank"))
+        rec["chat_s"] = search_s + rec["timings"].get("topic" if below else "llm", 0.0)
+        rec["chat_calls"] = calls["topic"] if below else calls["answer"]
+        rec["chat_requests"] = topic_requests if below else answer_requests
         if row["type"] == "injection":  # המודל עצמו (בלי סף) - האם הוא נכנע להוראה
             rec["verdict"] = "blocked" if injection_blocked(rec, 0.0) else "NOT_BLOCKED"
         records.append(rec)
@@ -235,17 +301,14 @@ def main():
         print(f"   {t:>5.2f} | {ans.count('answer'):>12} / {good:>5} / {ans.count('not_on_site'):>5} | {leaks:>21} | "
               f"{pers.count('personal'):>11} / {pers.count('not_on_site'):>5} / {pers.count('answer'):>5}{mark}")
 
-    print("\n=== זמן ממוצע לכל שלב (שניות) ===")
-    stages = sorted({k for r in records for k in r["timings"]})
-    print("   " + " | ".join(f"{k}: {statistics.mean(r['timings'][k] for r in records if k in r['timings']):.1f}"
-                            for k in stages))
+    print_timings_and_calls(records)
 
     question_set = Path(args.questions).stem.removeprefix("questions").strip("_")  # "" או "holdout"
     partial = args.only or args.category or stopped
     out = config.ROOT / "data" / (f"eval_answers_{args.index}" + (f"_{question_set}" if question_set else "")
                                   + ("_partial" if partial else "") + ".csv")
     fields = ["n", "type", "question", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",
-              "sources", "answer"]
+              "chat_s", "chat_calls", "sources", "answer"]
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
