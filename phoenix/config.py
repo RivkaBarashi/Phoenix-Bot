@@ -31,7 +31,7 @@ API_KEYS = {
 # המספר הוא המספר בשם המשתנה (GEMINI_API_KEY = 1, GEMINI_API_KEY_2 = 2 ...) - כך הוא מופיע בדוחות, בלי הערך.
 GEMINI_KEYS: list[tuple[int, str]] = [
     (number, key) for number, key in
-    [(1, API_KEYS["gemini"].strip())] + [(n, os.getenv(f"GEMINI_API_KEY_{n}", "").strip()) for n in range(2, 10)]
+    [(1, API_KEYS["gemini"].strip())] + [(n, os.getenv(f"GEMINI_API_KEY_{n}", "").strip()) for n in range(2, 21)]
     if key
 ]
 
