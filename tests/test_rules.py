@@ -388,6 +388,22 @@ def test_invalid_key_rests_on_all_models(monkeypatch):
     assert called == ["m2#2"]                         # מפתח 1 לא נוסה גם במודל השני
 
 
+def test_invalid_key_found_by_embeddings_is_skipped_by_the_chat_too(monkeypatch):
+    """403 (פרויקט חסום) בווקטור לשאלה: אותו מפתח לא נוסה יותר גם במודלי הצ'אט - עד הפעלה מחדש."""
+    from phoenix import embeddings
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    real = next(p for p in embeddings.PROVIDERS if p.key)
+
+    def denied(*args):
+        raise FakeApiError(403, "Your project has been denied access. Please contact support.")
+    with pytest.raises(fallback.AllProvidersFailed):
+        fallback.run_chain("embed_query", [fallback.Provider(real.name, denied, group=real.group, key=real.key)],
+                           retries=0)
+    chat = [p for p in llm.PROVIDERS if p.key]
+    assert all(fallback.is_resting(p) == (p.key == real.key) for p in chat)  # רק המפתח הזה, בכל המודלים
+    assert fallback.resting()[real.key] == float("inf")
+
+
 # ---------------------------------------------------------------- עומס: 5 דקות, ומעבר מיד למודל הבא
 
 def test_overload_rests_the_model_five_minutes_on_all_keys(monkeypatch):
