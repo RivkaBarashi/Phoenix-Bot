@@ -39,6 +39,7 @@ class SearchResult:
     embedder: str | None  # באיזה אינדקס וקטורי חיפשנו (None = רק מילות מפתח)
     reranker: str         # מי דירג ("none" = סדר RRF, בלי ציון מכויל)
     timings: dict[str, float] = field(default_factory=dict)  # שניות לכל שלב: vector, bm25, rerank
+    pages: int = 0        # כמה עמודים שונים היו בין המועמדים (לחיווי בצ'אט: "נבדק מול X עמודים")
 
 
 def vector_search(query: str, n: int, embedder: str | None = None, fallback: bool = True) -> tuple[list[Hit], str]:
@@ -101,9 +102,13 @@ def rerank_hits(query: str, hits: list[Hit], reranker: str | None = None,
 
 
 def search(query: str, k: int = 5, embedder: str | None = None, fallback: bool = True,
-           reranker: str | None = None) -> SearchResult:
-    """k הקטעים הרלוונטיים ביותר. reranker: רק ספק Rerank אחד (לבדיקות)."""
+           reranker: str | None = None, on_stage=None) -> SearchResult:
+    """k הקטעים הרלוונטיים ביותר. reranker: רק ספק Rerank אחד (לבדיקות).
+    on_stage: נקרא בתחילת שלב הדירוג ("rerank", pages=כמה עמודים שונים נמצאו) - לחיווי בצ'אט."""
     timings: dict[str, float] = {}
     hits, used = candidates(query, embedder=embedder, fallback=fallback, timings=timings)
+    pages = len({h.url for h in hits})
+    if on_stage:
+        on_stage("rerank", pages=pages)
     hits, reranked_by = rerank_hits(query, hits, reranker, timings=timings)
-    return SearchResult(hits[:k], used, reranked_by, timings)
+    return SearchResult(hits[:k], used, reranked_by, timings, pages)

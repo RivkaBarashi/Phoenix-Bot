@@ -488,3 +488,55 @@ def test_eval_is_never_parallel(monkeypatch):
     fake_race(monkeypatch, {"chain": (0.0, VALID)})
     monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בבדיקות אין בקשות במקביל"))
     assert A.respond("איך מגישים תביעה?", RACE_HIT).llm == "gemini:chain#1"
+
+
+# ---------------------------------------------------------------- חיווי שלבים בצ'אט (חיפוש ומודל מזויפים, בלי API)
+
+def stages_for(monkeypatch, question: str, *, score: float = 0.95, parallel: bool = False, cached: bool = False):
+    """השלבים שהבוט מדווח, לפי הסדר. 3 קטעים משני עמודים שונים -> "rerank:2"."""
+    from dataclasses import replace as copy
+    from phoenix import search as search_module
+    site = [Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE}"),
+            Hit("y", "https://www.fnx.co.il/a/", "a", "", "טקסט"), Hit("z", "https://www.fnx.co.il/a/", "a", "", "עוד")]
+    monkeypatch.setattr(search_module, "candidates", lambda *a, **k: ([copy(h) for h in site], "gemini:x"))
+
+    def rerank(query, found, reranker=None, timings=None):
+        for h in found:
+            h.score = score
+        return found, "cohere:rerank-v4.0-pro"
+    monkeypatch.setattr(search_module, "rerank_hits", rerank)
+    monkeypatch.setattr(A.config, "PARALLEL_LLM", parallel)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    monkeypatch.setattr(llm, "race_pair", lambda service="gemini": [["gemini:a#1"], ["gemini:b#2"]])
+
+    def chat(messages, names=None, system="", **kwargs):
+        if system == A.TOPIC_PROMPT:
+            return llm.ChatResult('{"related": true}', "gemini:m#1", {"related": True})
+        return llm.ChatResult(json.dumps(VALID), names[0] if names else "gemini:m#1", VALID, cached=cached)
+    monkeypatch.setattr(llm, "chat", chat)
+    monkeypatch.setattr(llm, "lookup", lambda *a, **k: llm.ChatResult(json.dumps(VALID), "gemini:m#1", VALID, cached=True)
+                        if cached else None)
+    seen = []
+    A.answer(question, on_stage=lambda stage, **info: seen.append(f"{stage}:{info['pages']}" if info else stage))
+    return seen
+
+
+REGULAR = "מה המספר של מוקד תביעות רכב?"
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_stages_regular_question(monkeypatch, parallel):
+    assert stages_for(monkeypatch, REGULAR, parallel=parallel) == ["search", "rerank:2", "compose", "verify"]
+
+
+def test_stages_below_threshold(monkeypatch):
+    assert stages_for(monkeypatch, REGULAR, score=0.5) == ["search", "rerank:2", "below_threshold"]
+
+
+@pytest.mark.parametrize("question", ["שלום", "איך מגישים תביעה?"])  # ברכה, שאלת הבהרה
+def test_no_stages_for_greeting_or_clarification(monkeypatch, question):
+    assert stages_for(monkeypatch, question) == []
+
+
+def test_cached_answer_skips_the_model_stages(monkeypatch):
+    assert stages_for(monkeypatch, REGULAR, cached=True) == ["search", "rerank:2"]

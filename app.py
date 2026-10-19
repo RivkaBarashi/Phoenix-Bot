@@ -17,6 +17,10 @@
 
 שאלת הבהרה: שאלה על ביטוח בלי סוג ("איך מגישים תביעה?") מקבלת "על איזה ביטוח מדובר?" עם כפתורים.
 לחיצה שולחת את השאלה המקורית + הסוג ("איך מגישים תביעה בביטוח רכב?"), כאילו הלקוחה כתבה אותה.
+
+חיווי בשלבים: בזמן התשובה הבועה של הבוט מראה את השלב האמיתי - חיפוש, דירוג, ניסוח, אימות. answer.answer
+קורא ל-on_stage בתחילת כל שלב, ולכן שלב מתחלף רק כשהקודם באמת הסתיים (בלי טיימרים). ברכה ושאלת הבהרה -
+בלי שלבים; תשובה מהמטמון - בלי ניסוח ואימות. מעבר למודל גיבוי לא מוצג ללקוחה, רק ב"פרטים טכניים" וביומן.
 """
 import html
 import logging
@@ -24,6 +28,7 @@ import os
 import re
 import time
 import uuid
+from functools import partial
 from urllib.parse import quote
 
 import streamlit as st
@@ -45,6 +50,14 @@ WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה 
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
 STAGE_NAMES = {"condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
                "llm": "מודל", "total": "סה\"כ"}
+# החיווי בשלבים: שורה ראשית ללקוחה, ומתחתיה המונח המקצועי באפור. pages = כמה עמודים שונים נמצאו בחיפוש.
+STAGE_LINES = {
+    "search": ("🔍 מחפש את התשובה באתר הפניקס...", "חיפוש משולב: משמעות + מילות מפתח"),
+    "rerank": ("📑 נמצאו {pages} עמודים מתאימים. בודק איזה מהם עונה בדיוק על השאלה...", "דירוג רלוונטיות (Rerank)"),
+    "compose": ("✍️ מנסח תשובה מתוך המידע שנמצא...", "מודל שפה, רק מתוך הקטעים מהאתר"),
+    "verify": ("✅ מוודא שכל פרט בתשובה כתוב באתר...", "אימות ציטוט ומספרים מול המקור"),
+    "below_threshold": ("🔎 בדקתי את העמודים הרלוונטיים, והמידע הזה לא מופיע באתר", "ציון הרלוונטיות מתחת לסף"),
+}
 # העברה לנציג אנושי: הוואטסאפ של שירות הלקוחות (054-9893455, מעמוד צור קשר באתר)
 WHATSAPP_URL = "https://wa.me/972549893455"
 HANDOFF_LABEL = "💬 המשך עם נציג בוואטסאפ"
@@ -64,6 +77,11 @@ RTL_CSS = """
 .answer { line-height: 1.7; }
 .answer bdi { white-space: nowrap; }  /* טלפון לא נשבר בין שורות אחרי המקף ("073-" ו-"2076100") */
 .sources { font-size: 0.9rem; border-top: 1px solid rgba(128, 128, 128, 0.3); margin-top: 0.5rem; padding-top: 0.4rem; }
+.stage-main { line-height: 1.7; animation: stage-pulse 1.6s ease-in-out infinite; }  /* הבוט עובד - לא תקוע */
+.stage-term, .checked { font-size: 0.8rem; opacity: 0.65; }  /* אפור, גם בערכת צבעים כהה */
+.checked { margin-top: 0.2rem; }
+@keyframes stage-pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .stage-main { animation: none; } }
 </style>
 """
 
@@ -137,7 +155,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     text = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources מוסיף "המקור:" / "המקורות:" בסוף
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
-            "timings": a.timings, "question": question, "race": a.race,
+            "timings": a.timings, "question": question, "race": a.race, "pages": a.pages,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
@@ -182,41 +200,60 @@ def render_type_buttons(message: dict):
 
 def render(message: dict, stream: bool = False, last: bool = False):
     with st.chat_message(message["role"]):
-        body = f'<div class="answer">{to_html(message["content"])}</div>'
-        if stream:
-            placeholder = st.empty()
-            with placeholder:
-                st.write_stream(stream_words(message["content"]))
-            placeholder.markdown(body, unsafe_allow_html=True)  # הגרסה הסופית: קישורים וטלפונים משמאל לימין
-        else:
-            st.markdown(body, unsafe_allow_html=True)
-        if message.get("sources"):
-            label = "המקור" if len(message["sources"]) == 1 else "המקורות"
-            links = " · ".join(
-                f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{html.escape(title)}</a>'
-                for title, url in message["sources"])
-            st.markdown(f'<div class="sources">📄 {label}: {links}</div>', unsafe_allow_html=True)
-        if last and (message.get("meta") or {}).get("kind") == "clarify":
-            render_type_buttons(message)
-        if handoff := message.get("handoff"):
-            if handoff["streak"]:
-                st.info(STREAK_NOTICE)
-            st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
-        if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
-            st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
-        if message.get("meta"):
-            meta = message["meta"]
-            score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
-            with st.expander("פרטים טכניים"):
-                st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
-                           f"מודל: {llm.describe(meta['llm'])}")
-                if meta.get("race"):  # בקשות במקביל ומעבר לגיבוי - רק כאן וביומן, לא ללקוחה
-                    st.caption(f"{meta['race']} · ענה: {llm.describe(meta['llm'])}")
-                if meta.get("standalone"):
-                    st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
-                if meta.get("timings"):
-                    st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
-                                                      for k, v in meta["timings"].items()))
+        render_body(message, stream, last)
+
+
+def render_body(message: dict, stream: bool = False, last: bool = False):
+    """תוכן ההודעה, בתוך בועה שכבר פתוחה (של render, או הבועה שבה הוצג החיווי בשלבים)."""
+    meta = message.get("meta") or {}
+    body = f'<div class="answer">{to_html(message["content"])}</div>'
+    if stream:
+        placeholder = st.empty()
+        with placeholder:
+            st.write_stream(stream_words(message["content"]))
+        placeholder.markdown(body, unsafe_allow_html=True)  # הגרסה הסופית: קישורים וטלפונים משמאל לימין
+    else:
+        st.markdown(body, unsafe_allow_html=True)
+    if message.get("sources"):
+        label = "המקור" if len(message["sources"]) == 1 else "המקורות"
+        links = " · ".join(
+            f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{html.escape(title)}</a>'
+            for title, url in message["sources"])
+        st.markdown(f'<div class="sources">📄 {label}: {links}</div>', unsafe_allow_html=True)
+        if meta.get("pages") and meta.get("kind") != "error":  # מול כמה עמודים נבדקה התשובה, ותוך כמה זמן
+            seconds = (meta.get("timings") or {}).get("total", 0)
+            st.markdown(f'<div class="checked">נבדק מול {meta["pages"]} עמודים באתר · {seconds:.1f} שניות</div>',
+                        unsafe_allow_html=True)
+    if last and meta.get("kind") == "clarify":
+        render_type_buttons(message)
+    if handoff := message.get("handoff"):
+        if handoff["streak"]:
+            st.info(STREAK_NOTICE)
+        st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
+    if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
+        st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
+    if meta:
+        score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
+        with st.expander("פרטים טכניים"):
+            st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
+                       f"מודל: {llm.describe(meta['llm'])}")
+            if meta.get("race"):  # בקשות במקביל ומעבר לגיבוי - רק כאן וביומן, לא ללקוחה
+                st.caption(f"{meta['race']} · ענה: {llm.describe(meta['llm'])}")
+            if meta.get("standalone"):
+                st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
+            if meta.get("timings"):
+                st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
+                                                  for k, v in meta["timings"].items()))
+
+
+def show_stage(slot, stage: str, **info):
+    """החיווי בשלבים: השלב שהבוט התחיל עכשיו מחליף את הקודם, באותו מקום בבועה. נקרא מתוך answer.answer
+    (on_stage), ולכן מתחלף רק כשהשלב הקודם באמת הסתיים."""
+    if stage not in STAGE_LINES or (stage == "rerank" and not info.get("pages")):  # אין מועמדים - אין מה לדרג
+        return
+    line, term = STAGE_LINES[stage]
+    slot.markdown(f'<div class="stage"><div class="stage-main">{html.escape(line.format(**info))}</div>'
+                  f'<div class="stage-term">{html.escape(term)}</div></div>', unsafe_allow_html=True)
 
 
 def save_feedback(entry_id: str):
@@ -309,11 +346,12 @@ def main():
         user_message = {"role": "user", "content": question}
         st.session_state.messages.append(user_message)
         render(user_message)
-        with st.spinner("מחפש באתר..."):
+        with st.chat_message("assistant"):  # החיווי בשלבים, ואחריו התשובה - באותה בועה
+            status = st.empty()
             session = st.session_state.session_id
             try:
                 history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
-                result = bot.answer(question, history)
+                result = bot.answer(question, history, on_stage=partial(show_stage, status))
                 reply = message_from_answer(result, question)
                 reply["handoff"] = handoff_for(reply, st.session_state.messages)
                 reply["id"] = conversation_log.log_answer(session, question, result, handoff=bool(reply["handoff"]),
@@ -322,8 +360,9 @@ def main():
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)
                 reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
-        st.session_state.messages.append(reply)
-        render(reply, stream=True, last=True)
+            status.empty()
+            st.session_state.messages.append(reply)
+            render_body(reply, stream=True, last=True)
 
 
 if __name__ == "__main__":

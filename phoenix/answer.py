@@ -194,6 +194,7 @@ class Answer:
     hits: list[Hit] = field(default_factory=list)
     raw: dict | None = None   # התשובה הגולמית של המודל
     timings: dict[str, float] = field(default_factory=dict)  # שניות לכל שלב (vector, bm25, rerank, llm, total)
+    pages: int = 0             # כמה עמודים שונים נבדקו בחיפוש (לשורה בסוף התשובה בצ'אט)
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
 
 
@@ -493,11 +494,15 @@ def _user_message(question: str, standalone: str, history: list[dict], hits: lis
     return "\n\n".join(parts)
 
 
-def _ask_model(question: str, standalone: str, history: list[dict], hits: list[Hit]) -> llm.ChatResult:
+def _ask_model(question: str, standalone: str, history: list[dict], hits: list[Hit],
+               on_stage=None) -> llm.ChatResult:
     """קודם Gemini עם 5 קטעים מלאים; אם אף מודל של Gemini לא זמין - הגיבויים, עם 3 קטעים מקוצרים."""
     def ask(context: list[Hit], providers: list[str]) -> llm.ChatResult:
-        return llm.chat([{"role": "user", "content": _user_message(question, standalone, history, context)}],
-                        system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply, only=providers)
+        messages = [{"role": "user", "content": _user_message(question, standalone, history, context)}]
+        request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=providers)
+        if on_stage and not llm.lookup(messages, parse=parse_reply, **request):
+            on_stage("compose")
+        return llm.chat(messages, parse=parse_reply, **request)
     try:
         return ask(hits, FULL_CONTEXT_LLMS)
     except AllProvidersFailed:
@@ -529,7 +534,8 @@ REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not
             "leak_guard", "personal_generic")
 
 
-def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], finish) -> "Answer | None":
+def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], finish,
+          on_stage=None) -> "Answer | None":
     """אותה שאלה לשני מודלי Gemini שונים במקביל, כל אחד במפתח אחר. התשובה הראשונה שעוברת את כל הבדיקות
     מוצגת, והשנייה נזנחת (לא מחכים לה; הבקשה שכבר יצאה עדיין נספרת במכסה). אם הראשונה נפסלה - מחכים
     לשנייה. None: אין שני מודלים זמינים, או ששניהם נכשלו - ממשיכים בשרשרת הרגילה, בזה אחר זה."""
@@ -540,12 +546,13 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
     pair = llm.race_pair()
     if len(pair) < 2:
         return None
+    if on_stage:
+        on_stage("compose")
     results: queue.Queue = queue.Queue()
 
     def worker(names: list[str]):
         try:
-            reply = llm.chat(messages, parse=parse_reply, names=names, cache=False, **request)
-            results.put((reply, finish(reply)))
+            results.put((llm.chat(messages, parse=parse_reply, names=names, cache=False, **request), None))
         except Exception as exc:  # תקלה בצד אחד לא מפילה את השני
             results.put((None, exc))
 
@@ -556,12 +563,15 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
     for _ in pair:
         left = time_left()
         try:
-            reply, outcome = results.get(timeout=None if left is None else max(left, 0.1))
+            reply, error = results.get(timeout=None if left is None else max(left, 0.1))
         except queue.Empty:
             raise OutOfTime("llm", [f"parallel ({racers}): out of time"]) from None
         if reply is None:
-            errors.append(outcome)
+            errors.append(error)
             continue
+        if on_stage:
+            on_stage("verify")
+        outcome = finish(reply)  # אותן בדיקות בדיוק, על כל תשובה בנפרד
         outcome.race = f"במקביל: {racers}"
         if not outcome.reason.startswith(REJECTED):
             llm.remember(messages, result=reply, **request)  # רק המנצח נשמר במטמון
@@ -577,16 +587,17 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
 
 
 def respond(question: str, result: SearchResult, history: list[dict] = (), threshold: float | None = None,
-            standalone: str | None = None, parallel: bool = False) -> Answer:
+            standalone: str | None = None, parallel: bool = False, on_stage=None) -> Answer:
     """ההחלטה והתשובה, מתוך תוצאות חיפוש קיימות. threshold=0 = תמיד לשאול את המודל (לכיול).
-    parallel: אותה שאלה לשני מודלים במקביל (רק בצ'אט; הבדיקות - מודל אחד, בזה אחר זה)."""
+    parallel: אותה שאלה לשני מודלים במקביל (רק בצ'אט; הבדיקות - מודל אחד, בזה אחר זה).
+    on_stage: חיווי שלבים בצ'אט - נקרא בתחילת כל שלב. בלי (בבדיקות) - שום דבר לא משתנה."""
     threshold = config.RERANK_THRESHOLD if threshold is None else threshold
     standalone = standalone or question
     hits = result.hits[:CONTEXT_CHUNKS]
     calibrated = result.reranker.startswith(config.THRESHOLD_RERANKER + ":")
     timings = dict(result.timings)
     base = dict(top_score=hits[0].score if hits and calibrated else None, reranker=result.reranker,
-                question=standalone, hits=hits, timings=timings)
+                question=standalone, hits=hits, timings=timings, pages=result.pages)
 
     def not_on_site(reason: str, referral: str = GENERIC_REFERRAL, **extra) -> Answer:
         return Answer(f"{NOT_ON_SITE} {referral}\n\n{format_sources([CONTACT_URL])}", "not_on_site", reason,
@@ -599,6 +610,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     # יש (נבדק: "מה היתרה בקרן הפנסיה שלי?" קיבלה 0.805 ונענתה "לא מופיע באתר").
     personal = is_personal_question(standalone)
     if calibrated and hits[0].score < threshold and not personal:  # שכבה 1
+        if on_stage:
+            on_stage("below_threshold")
         start = time.perf_counter()
         off_topic = is_off_topic(standalone)
         timings["topic"] = time.perf_counter() - start
@@ -662,10 +675,10 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
     start = time.perf_counter()
     try:  # שכבה 2
-        if parallel and (raced := _race(question, standalone, history, hits, finish)):
+        if parallel and (raced := _race(question, standalone, history, hits, finish, on_stage)):
             timings["llm"] = time.perf_counter() - start
             return raced
-        reply = _ask_model(question, standalone, history, hits)
+        reply = _ask_model(question, standalone, history, hits, on_stage)
     except AllProvidersFailed as exc:
         timings["llm"] = time.perf_counter() - start
         if personal:  # שאלה אישית לא צריכה מודל: הטקסט האישי הקבוע + הפניה, ולא "תקלה זמנית"
@@ -677,13 +690,18 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         return Answer(f"{ERROR_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "llm_unavailable",
                       [CONTACT_URL], **base)
     timings["llm"] = time.perf_counter() - start
+    if on_stage and not reply.cached:
+        on_stage("verify")
     return finish(reply)
 
 
-def answer(question: str, history: list[dict] = ()) -> Answer:
+def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
     """history: [{"role": "user" | "assistant", "content": "..."}] - השיחה עד עכשיו, לשאלות המשך.
     השיחה נכנסת לתמונה רק כשהשאלה תלויה בה (needs_context): אז מנסחים שאלה עצמאית לחיפוש, והמודל
-    רואה גם את השיחה. שאלה עצמאית נענית כמו שאלה ראשונה - בלי קריאה נוספת ובלי השיחה."""
+    רואה גם את השיחה. שאלה עצמאית נענית כמו שאלה ראשונה - בלי קריאה נוספת ובלי השיחה.
+    on_stage(stage, **info): חיווי שלבים בצ'אט - search, rerank (pages=N), compose, verify, או
+    below_threshold. ברכה ושאלת הבהרה - בלי שלבים; תשובה מהמטמון - בלי compose ו-verify (החיפוש רץ קודם:
+    המפתח של המטמון כולל את הקטעים שנמצאו). בלי on_stage שום דבר לא משתנה."""
     start = time.perf_counter()
     if greeting := greeting_answer(question):
         greeting.timings["total"] = time.perf_counter() - start
@@ -700,10 +718,12 @@ def answer(question: str, history: list[dict] = ()) -> Answer:
         clarify.timings["total"] = time.perf_counter() - start
         return clarify
     with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
+        if on_stage:
+            on_stage("search")
         standalone = standalone_question(question, context)
         condense = time.perf_counter() - start
-        result = respond(question, search(standalone, k=CONTEXT_CHUNKS), context, standalone=standalone,
-                         parallel=config.PARALLEL_LLM)
+        result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
+                         standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage)
     if context:
         result.timings["condense"] = condense
     result.timings["total"] = time.perf_counter() - start
