@@ -224,7 +224,7 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
                 return text, parse(text)
             except ValueError as exc:
                 raise EmptyResult(f"unusable response: {exc}") from exc
-        return Provider(p.name, call, p.enabled)
+        return Provider(p.name, call, p.enabled, p.group, p.key)  # עם הקבוצות: עומס נח במודל, מפתח לא תקין - במפתח
 
     # הלקוחה מחכה לתשובה: מודל שלא עונה תוך QUERY_TIMEOUT או חסום - עוברים מיד לבא (config).
     (text, data), provider = run_chain("llm", [checked(p) for p in providers], messages, system, temperature,

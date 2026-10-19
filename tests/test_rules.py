@@ -11,6 +11,8 @@ from phoenix import answer as A
 from phoenix import fallback, llm
 from phoenix.search import Hit, SearchResult
 
+REAL_CHAT = llm.chat  # לפני ש-conftest חוסם אותו - לבדיקות של llm.chat עצמו עם ספקים מדומים
+
 LRM = "\u200e"
 
 # ---------------------------------------------------------------- split_greeting
@@ -412,3 +414,26 @@ def test_timeout_counts_as_overload(monkeypatch):
                  fallback.Provider("t:m2#1", lambda *a: called.append("fast") or "ok", group="t:m2", key="t#1")]
     assert fallback.run_chain("test", providers, retries=1, deadline=0.2)[1] == "t:m2#1"
     assert called == ["slow", "fast"] and 290 < fallback.resting()["t:m1"] <= 300
+
+
+def test_llm_chat_keeps_model_and_key_groups(monkeypatch):
+    """דרך llm.chat (לא רק run_chain): עומס במודל 1 - המודל מדולג בכל המפתחות."""
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    called = []
+
+    def make(name, error=None):
+        def call(messages, system, temperature, json_mode=False, timeout=None):
+            called.append(name)
+            if error:
+                raise error
+            return '{"ok": true}'
+        return call
+
+    fake = [fallback.Provider("gemini:m1#1", make("m1#1", FakeApiError(503, "overloaded")), group="gemini:m1",
+                              key="gemini#1"),
+            fallback.Provider("gemini:m1#2", make("m1#2"), group="gemini:m1", key="gemini#2"),
+            fallback.Provider("gemini:m2#1", make("m2#1"), group="gemini:m2", key="gemini#1")]
+    monkeypatch.setattr(llm, "PROVIDERS", fake)
+    assert REAL_CHAT([{"role": "user", "content": "x"}]).provider == "gemini:m2#1"
+    assert called == ["m1#1", "m2#1"]  # m1 במפתח 2 לא נוסה: עומס הוא של המודל
