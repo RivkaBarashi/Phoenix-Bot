@@ -360,9 +360,9 @@ def main():
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)
                 reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
-            status.empty()
             st.session_state.messages.append(reply)
-            render_body(reply, stream=True, last=True)
+            with status.container():  # התשובה במקום החיווי: מבנה כמו בהיסטוריה, בלי רכיב כפול בשאלה הבאה
+                render_body(reply, stream=True, last=True)
 
 
 if __name__ == "__main__":
