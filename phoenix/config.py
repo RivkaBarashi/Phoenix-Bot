@@ -67,10 +67,12 @@ EMBED_CHAIN = [
 EMBEDDER = os.getenv("EMBEDDER", "gemini").strip().lower()
 CHROMA_DIR = ROOT / "data" / "chroma"
 
-# Rerank: Cohere, ואם הוא לא זמין - מדרג מקומי (מודל ONNX ב-data/models, רץ על המעבד, בלי רשת ובלי מכסה).
+# Rerank: Cohere, ואם הוא לא זמין - Voyage (מהיר, בתוך 20 השניות גם בענן), ובמחשב שהמדרג המקומי מותקן בו - הוא
+# אחרון (מודל ONNX ב-data/models, על המעבד: ~10 שניות לשאלה, ולכן לא בענן).
 LOCAL_RERANKER = os.getenv("LOCAL_RERANKER", "bge-reranker-v2-m3")
 RERANK_CHAIN = [
     ("cohere", "rerank-v4.0-pro"),
+    ("voyage", "rerank-3"),
     ("local", LOCAL_RERANKER),
 ]
 # שכבת הגנה ראשונה: ציון Rerank מינימלי כדי בכלל לנסות לענות. מתחת לזה - "לא מופיע באתר".

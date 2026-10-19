@@ -710,7 +710,8 @@ def ranked(reranker: str, score: float) -> SearchResult:
 def test_cohere_is_a_reranker_only_not_a_language_model():
     from phoenix import config
     assert all(p != "cohere" for p, _ in config.LLM_CHAIN) and "cohere" not in A.COMPACT_LLMS
-    assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "local"]
+    # Voyage לפני המדרג המקומי: מהיר, ונכנס ב-20 השניות גם בענן (המקומי ~10 שניות על המעבד)
+    assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "voyage", "local"]
 
 
 @pytest.mark.parametrize("reranker", ["cohere:rerank-v4.0-pro", "local:bge-reranker-v2-m3"])
@@ -1007,3 +1008,33 @@ def test_understanding_runs_only_on_the_strong_models(monkeypatch):
     monkeypatch.setattr(understand.llm, "chat", chat)
     assert understand.try_understand("שאלה") is None
     assert asked and all(any(f"gemini:{m}#" in name for m in config.UNDERSTAND_LLMS) for name in asked)
+
+
+# ---------------------------------------------------------------- Voyage בתוך המגבלה בלי כרטיס
+def test_voyage_documents_fit_the_minute_limit():
+    from phoenix import rerank
+    long_doc = "כותרת העמוד\nכותרת הקטע\n" + " ".join(f"משפט מספר {i} על נושא אחר לגמרי." for i in range(300))
+    docs = [long_doc] * 20
+    query = "מה מכסה ביטוח דירה במקרה של נזקי מים מהשכן?"
+    sent = rerank.voyage_documents(query, docs)
+    assert rerank.estimate_tokens(query, sent) <= 0.96 * rerank.VOYAGE_TPM
+    short = ["קטע קצר"] * 3
+    assert rerank.voyage_documents(query, short) == short  # מה שנכנס - נשלח מלא
+
+
+def test_relevant_window_keeps_the_part_that_answers():
+    from phoenix import rerank
+    filler = " ".join(f"פסקה כללית {i} על הפניקס." for i in range(80))
+    text = f"ביטוח דירה\nנזקי מים\n{filler} נזקי מים מהשכן מכוסים בביטוח הדירה בהרחבת צנרת. {filler}"
+    window = rerank.relevant_window("האם נזקי מים מהשכן מכוסים?", text, 600)
+    assert len(window) <= 600 and window.startswith("ביטוח דירה\nנזקי מים") and "מהשכן מכוסים" in window
+
+
+def test_voyage_busy_moves_on_without_waiting(monkeypatch):
+    """המגבלה לדקה תפוסה: Voyage לא נשלח (לא מבזבזים בקשה שתיכשל), נח בדיוק עד שמתפנה מקום, והשרשרת ממשיכה."""
+    from phoenix import rerank
+    monkeypatch.setattr(rerank, "_voyage_sent", __import__("collections").deque([[time.time(), 9900]]))
+    call = rerank._voyage("rerank-3")
+    with fallback.time_budget(15), pytest.raises(rerank.VoyageBusy) as busy:
+        call("שאלה", ["קטע " * 300], 1)
+    assert fallback.classify(busy.value) == fallback.RATE_LIMIT and 50 < fallback.retry_after(busy.value) <= 60
