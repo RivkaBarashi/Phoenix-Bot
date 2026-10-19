@@ -11,8 +11,16 @@ google-genai
 chromadb
 rank-bm25
 
+# --- מדרג מקומי (גיבוי ל-Cohere): מודל ONNX על המעבד ---
+onnxruntime
+tokenizers
+numpy
+
 # --- ממשק צ'אט ---
 streamlit
+
+# --- בדיקות ---
+pytest
 
 # --- כללי ---
 truststore  # משתמש בתעודות של Windows (נחוץ בגלל סינון Netspark)

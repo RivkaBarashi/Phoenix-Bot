@@ -292,7 +292,7 @@ def main():
     parser.add_argument("--llm", help="מודל Gemini אחד קבוע לבוט, בכל המפתחות ובלי גיבוי (למשל gemini-3.6-flash). "
                                       "השופט נשאר Groq/OpenRouter. כולל --fresh")
     args = parser.parse_args()
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # התקדמות גלויה גם כשהפלט לקובץ
     config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
     if args.fresh:
         llm.CACHE_MODE = "write"

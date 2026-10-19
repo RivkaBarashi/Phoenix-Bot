@@ -1,2 +1,76 @@
-# Phoenix-Bot
-Hebrew RAG chatbot for The Phoenix website: answers only from the site, always with a source, never makes things up.
+# הבוט של אתר הפניקס
+
+צ'אט שעונה ללקוחות **רק לפי האתר fnx.co.il**, עם קישור לעמוד המקור בכל תשובה, ואומר "המידע לא מופיע באתר"
+כשאין מידע – במקום לנחש. לשאלות על המידע האישי (כיסוי, יתרה, מצב תביעה) הוא מסביר מה האתר אומר באופן כללי
+ומפנה לאזור האישי או לשירות הלקוחות.
+
+## איך זה עובד
+
+1. **הבנת השאלה** (`phoenix/understand.py`) – מודל שפה מחזיר JSON: השאלה כשאלה עצמאית (עם ההקשר מהשיחה, תיקון
+   שגיאות כתיב ותרגום לעברית), הכוונה (מידע / אישית / ייעוץ / מצב תביעה / ברכה / לא קשור / ניסיון לשנות את
+   ההוראות), האם לשאול "על איזה ביטוח מדובר?", סוג הביטוח והמונח המרכזי. אם הקריאה נכשלת – כללים בקוד.
+2. **חיפוש משולב** (`phoenix/search.py`) – וקטורים (Gemini embeddings, Chroma) + מילות מפתח (BM25 עם טיפול
+   בתחיליות בעברית), מאוחדים ב-RRF.
+3. **דירוג** (`phoenix/rerank.py`) – Cohere Rerank, ובגיבוי מדרג מקומי (bge-reranker-v2-m3, ONNX, על המעבד).
+   לכל מדרג סף משלו: מתחת לסף – "לא מופיע באתר", בלי לשאול את מודל התשובה.
+4. **תשובה** (`phoenix/answer.py`) – מודל שפה עונה רק מחמשת הקטעים ומעמוד "צור קשר", ומחזיר JSON עם ציטוט מדויק
+   ומספר הקטע.
+5. **אימות בקוד** – הציטוט מופיע בקטע שצוין, כל מספר בתשובה מופיע באתר, המונח המרכזי קיים באתר, ואין דליפה של
+   ההוראות. תשובה שנפסלה מקבלת ניסיון תיקון אחד עם הסיבה המדויקת; נפסלה שוב – "מצאתי באתר מידע קרוב, אבל לא
+   הצלחתי לאמת תשובה מדויקת", עם קישור לעמוד.
+
+עמידות: מאגר מפתחות Gemini (מכסה של מפתח נגמרה – אותו מודל ממשיך במפתח הבא), שרשרת מודלים (Gemini Flash →
+Flash-Lite → Gemma → Groq → OpenRouter), ועד 20 שניות לשאלה בצ'אט. ממצאים מהדרך: [docs/findings.md](docs/findings.md).
+
+## התקנה (Windows, Python 3.12 ומעלה)
+
+```bat
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
+.venv\Scripts\python -m phoenix.rerank download
+```
+
+ב-`.env`: **חובה** `GEMINI_API_KEY` (חינמי, https://aistudio.google.com/apikey). מומלץ `COHERE_API_KEY` (דירוג),
+ובגיבוי `GROQ_API_KEY` ו-`OPENROUTER_API_KEY`. אפשר להוסיף מפתחות Gemini מחשבונות נוספים: `GEMINI_API_KEY_2` עד
+`_20`. הפקודה האחרונה מורידה את המדרג המקומי (~590MB) ל-`data/models` – פעם אחת.
+
+## האינדקס
+
+העמודים שנאספו (`data/pages`) והקטעים (`data/chunks.jsonl`) כבר ב-Git. אחרי שכפול צריך לבנות רק את הווקטורים:
+
+```bat
+.venv\Scripts\python -m phoenix.index
+```
+
+רענון התוכן מהאתר, מההתחלה:
+
+```bat
+.venv\Scripts\python -m phoenix.sitemap
+.venv\Scripts\python -m phoenix.crawl --refresh
+.venv\Scripts\python -m phoenix.chunk
+.venv\Scripts\python -m phoenix.index
+```
+
+## הפעלה
+
+לחיצה כפולה על `run_chat.bat`, או `.venv\Scripts\streamlit run app.py` – הצ'אט נפתח ב-http://localhost:8501.
+מצב מפתחת (החלטה, ציון, מודל ומפתח, זמנים מתחת לכל תשובה): http://localhost:8501/?dev=1.
+
+## בדיקות
+
+| פקודה | מה בודקת |
+|---|---|
+| `.venv\Scripts\python -m pytest` | בדיקות יחידה וממשק, בלי שום קריאת API |
+| `.venv\Scripts\python smoke_test.py` | 5 שאלות אמיתיות מקצה לקצה |
+| `.venv\Scripts\python eval_answers.py` | כל `data/questions.csv`, עם שופט (מלאה / חלקית / שגויה) וטבלת כיול הסף |
+| `.venv\Scripts\python eval_retrieval.py` | איכות החיפוש: העמוד הנכון בין התוצאות הראשונות |
+| `.venv\Scripts\python report.py` | סיכום יומן הצ'אט (`logs/conversations.jsonl`): החלטות, זמנים, משוב |
+
+## מגבלות
+
+- **רק העמודים שנאספו** (~350 עמודי מידע ושירות מתוך מפת האתר): "לא מופיע באתר" פירושו "לא באחד מהעמודים האלה".
+- **התוכן נכון לתאריך האיסוף** – רענון לפי הפקודות למעלה.
+- **מכסות חינמיות**: למודלי Gemini Flash 20 בקשות ביום לכל מודל ולכל מפתח; בעומס אצל Google (503/504) הבוט
+  עובר לגיבויים, איטיים או חלשים יותר.
+- **בלי גישה למידע אישי**: הבוט לא רואה פוליסות, יתרות או תביעות – הוא מפנה לאזור האישי ולשירות הלקוחות.
