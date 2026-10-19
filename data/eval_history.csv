@@ -23,3 +23,5 @@
 2026-10-19 14:46,1c17ba7,smoke_test,,live,,,,5,,,,,,,,,,,,,,,,4/5,,,,,,
 2026-10-19 14:52,1c17ba7,smoke_test,,live,,,,5,,,,,,,,,,,,,,,,5/5,,,,,,
 2026-10-19 16:01,3a3a416+dirty,smoke_test,,live,,,,5,,,,,,,,,,,,,,,,4/5,,,,,,
+2026-10-19 16:20,f8643a3+dirty,eval_answers,questions.csv,all,gemini,8e5566c9,0.82,64,21/23,12,9,0,21,11/11,10/10,6/10,3/3,3/3,6/6,8/8,,,,,9.3,21.5,132,26,gemini-3.6-flash (מפתח 1): 8; gemini-3.6-flash (מפתח 2): 8; gemini: gemini-3.8-flash (מהמטמון): 8; gemini-3.6-flash (מפתח 4): 6; gemini-3.6-flash (מפתח 5): 6; gemini-3.7-flash (מפתח 1): 5; gemini: gemini-3.7-flash (מהמטמון): 5; gemini-3.6-flash (מפתח 3): 4; gemini-3.5-flash (מפתח 3) (מהמטמון): 1; gemini-3.6-flash (מפתח 1) (מהמטמון): 1; gemini-3.7-flash (מפתח 1) (מהמטמון): 1,
+2026-10-19 18:52,685f3e0,smoke_test,,live,,,,5,,,,,,,,,,,,,,,,5/5,,,,,,
