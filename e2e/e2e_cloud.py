@@ -78,6 +78,7 @@ def ask(frame, question: str, timeout: float = 120) -> dict:
     return {"question": question, "kind": meta.get("kind"), "reason": meta.get("reason"), "llm": meta.get("llm"),
             "reranker": meta.get("reranker"), "top_score": meta.get("top_score"),
             "early_search": meta.get("early_search"), "cached": meta.get("cached"),
+            "sources": " ".join(meta.get("sources") or []),
             "bot_s": round((meta.get("timings") or {}).get("total", 0.0), 2), "wall_s": round(wall, 2),
             "timings": json.dumps(meta.get("timings") or {}, ensure_ascii=False), "answer": " ".join(text.split())}
 

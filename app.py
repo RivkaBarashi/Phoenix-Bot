@@ -271,7 +271,8 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
                 st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
                                                   for k, v in meta["timings"].items()))
             # שורה אחת לקריאה במכונה - הבדיקה בדפדפן (e2e_cloud.py) קוראת ממנה החלטה, מודל וזמנים
-            st.caption("META " + json.dumps({k: meta.get(k) for k in DEV_META}, ensure_ascii=False))
+            sources = [url for _, url in message.get("sources") or []]
+            st.caption("META " + json.dumps({k: meta.get(k) for k in DEV_META} | {"sources": sources}, ensure_ascii=False))
 
 
 DEV_META = ("kind", "reason", "llm", "reranker", "top_score", "timings", "early_search", "cached", "race")
