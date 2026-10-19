@@ -638,3 +638,47 @@ def test_no_stages_for_greeting_or_clarification(monkeypatch, question):
 
 def test_cached_answer_skips_the_model_stages(monkeypatch):
     assert stages_for(monkeypatch, REGULAR, cached=True) == ["search", "rerank:2"]
+
+
+# ---------------------------------------------------------------- שלב 1: מקורות, יומן, הודעה ארוכה, פנסיה
+
+def test_personal_answer_lists_the_contact_page_once(monkeypatch):
+    """תשובה אישית שציטטה את עמוד צור קשר ("C") - והקוד מוסיף אותו בסוף: מופיע פעם אחת."""
+    contact = SearchResult([Hit("c", A.CONTACT_URL, "צור קשר", "", f"צור קשר\n\n{SENTENCE}", score=0.95)],
+                           "gemini:x", "cohere:rerank-v4.0-pro")
+    monkeypatch.setattr(A, "contact_text", lambda: SENTENCE)
+    fake_model(monkeypatch, {"kind": "personal", "answer": SENTENCE, "referral": "", "evidence": [SENTENCE],
+                             "sources": ["C"]})
+    a = A.respond("האם הביטוח שלי כולל רכב חלופי?", contact)
+    assert a.kind == "personal" and a.sources == [A.CONTACT_URL] and a.text.count(A.CONTACT_URL) == 1
+
+
+def test_log_hides_long_numbers_only_in_the_customers_text(monkeypatch):
+    from phoenix import conversation_log
+    records = []
+    monkeypatch.setattr(conversation_log, "_append", records.append)
+    question = "ת\"ז 123456789, פוליסה 12-345-678, טלפון 054-1234567. אני בן 70, יש לי 3 ילדים"
+    a = A.Answer("מוקד שירות לקוחות: 054-9893455", "answer", "verified", [], 0.9, "cohere:x",
+                 question="שאלה עצמאית עם 123456789")
+    conversation_log.log_answer("s", question, a)
+    conversation_log.log_error("s", "הטלפון שלי 0541234567", "Boom")
+    answer_row, error_row = records
+    assert answer_row["question"] == "ת\"ז [מספר הוסתר], פוליסה [מספר הוסתר], טלפון [מספר הוסתר]. אני בן 70, יש לי 3 ילדים"
+    assert answer_row["standalone"] == "שאלה עצמאית עם [מספר הוסתר]"
+    assert answer_row["answer"] == "מוקד שירות לקוחות: 054-9893455"   # התשובה של הבוט - כמו שהיא
+    assert error_row["question"] == "הטלפון שלי [מספר הוסתר]"
+
+
+def test_too_long_message_asks_to_shorten_without_cutting(monkeypatch):
+    monkeypatch.setattr(A, "search", lambda *a, **k: pytest.fail("הודעה ארוכה מדי לא מחפשים"))
+    long = "איך מגישים תביעה בביטוח רכב? " * 40  # ~1,200 תווים
+    a = A.answer(long)
+    assert a.kind == "too_long" and f"{len(long):,}" in a.text and a.question == long
+    greeting = "שלום" + " " * (A.MAX_QUESTION_CHARS - 4)  # בדיוק 1,000 תווים - עדיין לא ארוכה מדי
+    assert A.answer(greeting).kind == "greeting"
+
+
+def test_pension_and_savings_button():
+    assert "פנסיה וחיסכון" in A.INSURANCE_TYPES
+    assert A.with_insurance_type("איך מגישים תביעה?", "פנסיה וחיסכון") == "איך מגישים תביעה בביטוח פנסיה וחיסכון?"
+    assert A.insurance_type("מה היתרה בקרן הפנסיה שלי?") == "פנסיה וחיסכון"
