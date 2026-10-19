@@ -994,3 +994,16 @@ def test_answers_come_only_from_strong_models(monkeypatch):
     a = A.respond("איך מגישים תביעה?", RACE_HIT)
     assert (a.kind, a.reason) == ("error", "llm_unavailable") and "054-9893455" in a.text
     assert asked == [["gemini"]]  # רק Gemini - שום ניסיון אצל Groq/OpenRouter
+
+
+def test_understanding_runs_only_on_the_strong_models(monkeypatch):
+    """הבנת השאלה לא עוברת ל-Groq/OpenRouter: כל Gemini Flash לא זמין - כללי הקוד."""
+    from phoenix import config, understand
+    asked = []
+
+    def chat(messages, names=None, **kwargs):
+        asked.extend(names)
+        raise fallback.AllProvidersFailed("llm", ["down"])
+    monkeypatch.setattr(understand.llm, "chat", chat)
+    assert understand.try_understand("שאלה") is None
+    assert asked and all(any(f"gemini:{m}#" in name for m in config.UNDERSTAND_LLMS) for name in asked)
