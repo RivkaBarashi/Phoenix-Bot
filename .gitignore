@@ -2,7 +2,7 @@
 __pycache__/
 *.pyc
 .env
-data/chroma/
+# האינדקס (data/chroma) כן ב-Git, בלי LFS: הקובץ הגדול 49MB - מתחת למגבלה של GitHub (100MB)
 .streamlit/secrets.toml
 data/cache/
 ~$*

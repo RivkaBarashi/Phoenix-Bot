@@ -15,12 +15,16 @@
   - קטעים שכבר לא קיימים ב-chunks.jsonl (אחרי חיתוך מחדש) נמחקים מהאינדקס.
 """
 import argparse
+import atexit
 import json
 import re
+import shutil
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 import chromadb
 import httpx
@@ -37,9 +41,20 @@ MAX_QUOTA_WAIT = 3700  # מכסה שמתאפסת בתוך שעה - מחכים ל
 METADATA_FIELDS = ("url", "title", "heading", "fetched_at", "chunk_index", "words")
 
 
+# האינדקס שב-Git (data/chroma) לא נפתח ישירות לקריאה: Chroma כותב ל-chroma.sqlite3 בכל פתיחה (נבדק 20/10) - כל
+# הרצה מקומית הייתה "משנה" קובץ שב-Git, ובענן עם קבצים לקריאה בלבד הפתיחה נכשלת. לכן בקריאה (הצ'אט, הבדיקות)
+# נפתח עותק בתיקייה זמנית, פעם אחת לתהליך (65MB, פחות משנייה); רק הבנייה (python -m phoenix.index) כותבת לתיקייה.
+WRITE = False
+
+
 @lru_cache
 def db() -> chromadb.ClientAPI:
-    return chromadb.PersistentClient(path=str(config.CHROMA_DIR))
+    path = config.CHROMA_DIR
+    if not WRITE and path.exists():
+        path = Path(tempfile.mkdtemp(prefix="phoenix-chroma-")) / "chroma"
+        shutil.copytree(config.CHROMA_DIR, path)
+        atexit.register(shutil.rmtree, path.parent, ignore_errors=True)
+    return chromadb.PersistentClient(path=str(path))
 
 
 def collection_name(provider: str) -> str:
@@ -166,6 +181,8 @@ def main():
     parser.add_argument("--only", choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.PROVIDERS)))
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    global WRITE
+    WRITE = True  # הבנייה - בתיקייה עצמה, לא בעותק
 
     chunks = [json.loads(line) for line in open(CHUNKS_FILE, encoding="utf-8")]
     ids = {c["id"] for c in chunks}
