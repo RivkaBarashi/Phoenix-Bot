@@ -1,0 +1,2 @@
+# רק לבדיקה בדפדפן (e2e/e2e_cloud.py, GitHub Actions) - לא חלק מהבוט ולא נכנס לענן
+playwright==1.55.0

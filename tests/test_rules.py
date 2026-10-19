@@ -1233,3 +1233,13 @@ def test_log_lines_go_to_the_shared_cloud_log_with_the_site(monkeypatch, tmp_pat
     sent.clear()
     conversation_log._append({"type": "answer", "id": "2"}, path=tmp_path / "test.jsonl")  # יומן בדיקות - לא לענן
     assert sent == []
+
+
+def test_browser_smoke_asks_the_same_questions_as_smoke_test():
+    """e2e/e2e_cloud.py לא מייבא את הבוט (ב-GitHub Actions מותקן רק Playwright) - השאלות מועתקות, וזהות."""
+    import importlib.util
+    import smoke_test
+    spec = importlib.util.spec_from_file_location("e2e_cloud", A.config.ROOT / "e2e" / "e2e_cloud.py")
+    e2e = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(e2e)
+    assert e2e.SMOKE == smoke_test.CASES and e2e.LIMIT_SECONDS == A.config.QUESTION_TIMEOUT

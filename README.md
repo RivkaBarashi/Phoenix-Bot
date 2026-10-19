@@ -11,7 +11,8 @@
    ההוראות), האם לשאול "על איזה ביטוח מדובר?", סוג הביטוח והמונח המרכזי. אם הקריאה נכשלת – כללים בקוד.
 2. **חיפוש משולב** (`phoenix/search.py`) – וקטורים (Gemini embeddings, Chroma) + מילות מפתח (BM25 עם טיפול
    בתחיליות בעברית), מאוחדים ב-RRF.
-3. **דירוג** (`phoenix/rerank.py`) – Cohere Rerank, ובגיבוי מדרג מקומי (bge-reranker-v2-m3, ONNX, על המעבד).
+3. **דירוג** (`phoenix/rerank.py`) – Cohere Rerank, ובגיבוי Voyage (בלי כרטיס: 3 בקשות ו-10K טוקנים לדקה – כל
+   קטע מקוצר לחלק הרלוונטי לשאלה), ובמחשב שהוא מותקן בו – מדרג מקומי (bge-reranker-v2-m3, ONNX, על המעבד).
    לכל מדרג סף משלו: מתחת לסף – "לא מופיע באתר", בלי לשאול את מודל התשובה.
 4. **תשובה** (`phoenix/answer.py`) – מודל שפה עונה רק מחמשת הקטעים ומעמוד "צור קשר", ומחזיר JSON עם ציטוט מדויק
    ומספר הקטע.
@@ -19,8 +20,14 @@
    ההוראות. תשובה שנפסלה מקבלת ניסיון תיקון אחד עם הסיבה המדויקת; נפסלה שוב – "מצאתי באתר מידע קרוב, אבל לא
    הצלחתי לאמת תשובה מדויקת", עם קישור לעמוד.
 
-עמידות: מאגר מפתחות Gemini (מכסה של מפתח נגמרה – אותו מודל ממשיך במפתח הבא), שרשרת מודלים (Gemini Flash →
-Flash-Lite → Gemma → Groq → OpenRouter), ועד 20 שניות לשאלה בצ'אט. ממצאים מהדרך: [docs/findings.md](docs/findings.md).
+עמידות: מאגר מפתחות Gemini (מכסה של מפתח נגמרה – אותו מודל ממשיך במפתח הבא), ותשובות רק ממודלי Gemini Flash
+(3.6 / 3.7 / 3.8 – כשאף אחד לא זמין: הודעת תקלה עם הפניה, לא מודל חלש). ממצאים מהדרך: [docs/findings.md](docs/findings.md).
+
+**20 שניות לשאלה בצ'אט – מגבלה קשיחה:**
+- כל שאלה נשלחת במקביל ל-3.6 ול-3.8 (במפתחות שונים); התשובה הראשונה שעוברת את כל הבדיקות מוצגת.
+- החיפוש על השאלה כמו שנכתבה מתחיל במקביל להבנת השאלה; ניסוח עצמאי שונה מהותית – חיפוש שני.
+- שלב ההבנה ברמת החשיבה הנמוכה שהמודל מקבל (3.6 – MINIMAL, 3.7/3.8 – LOW).
+- ניסיון תיקון רק כשנשארו לפחות 6 שניות.
 
 ## התקנה (Windows, Python 3.12 ומעלה)
 
@@ -57,20 +64,68 @@ copy .env.example .env
 לחיצה כפולה על `run_chat.bat`, או `.venv\Scripts\streamlit run app.py` – הצ'אט נפתח ב-http://localhost:8501.
 מצב מפתחת (החלטה, ציון, מודל ומפתח, זמנים מתחת לכל תשובה): http://localhost:8501/?dev=1.
 
-## ענן (Docker)
+## ענן
 
-אימג' אחד שרץ בכל ענן שמריץ קונטיינרים (Hugging Face Spaces, AWS App Runner / ECS, Google Cloud Run, Render):
+שני קישורים ציבוריים חינמיים, מאותו קוד ומאותו ענף (`release`):
+
+| | **Streamlit Community Cloud** (ראשי) | **Render** (גיבוי) |
+|---|---|---|
+| בנייה | מ-`requirements.txt` | מה-`Dockerfile` |
+| משאבים | עד 2.7GB זיכרון | 512MB, 0.1 מעבד |
+| שינה | אחרי 12 שעות בלי ביקור – GitHub Actions פותח את הדף כל 6 שעות | אחרי 15 דקות – cron-job.org פונה ל-`/_stcore/health` כל 10 דקות |
+
+- **המפתחות** – רק ב-Secrets של כל שירות (Streamlit: `NAME = "value"`; Render: Environment), באותם שמות כמו
+  ב-`.env.example`. הם לא ב-Git ולא באימג'. (היסטוריית ה-Git נבדקה 20/10: אין מפתח באף קומיט.)
+- **האינדקס** (`data/chroma`, ~65MB) ב-Git כמו שהוא, בלי LFS – לא בונים אותו מחדש בענן. בקריאה הוא נפתח כעותק
+  זמני (Chroma כותב לקובץ בכל פתיחה), כך שהקבצים שב-Git לא משתנים.
+- **בלי המדרג המקומי בענן**: על המעבד שם ~10 שניות לשאלה ו-1.5GB זיכרון. הגיבוי ל-Cohere הוא Voyage.
+  בשרת חזק: `docker build --build-arg WITH_LOCAL_RERANKER=1`.
+- **אחסון משותף – Upstash Redis** (`phoenix/store.py`): היומן והמשוב של שני האתרים, שמירת השיחה ברענון (`?c=`
+  בכתובת, 24 שעות), מטמון של תשובות מאומתות (המפתח כולל את גרסת האינדקס והקוד; במצב מפתחת לא קוראים ממנו), ומונה
+  קריאות חודשי ל-Cohere ול-Voyage. Upstash לא זמין – הבוט עונה כרגיל, רק בלי לשמור.
+- **בדיקת תקינות**: `/_stcore/health` – של Streamlit, לא מריץ את הבוט ולא קורא למודלים. הפורט לפי `PORT`.
+- **מאחורי סינון HTTPS** (כמו Netspark) – תעודת השורש של הסינון ב-`certs/` (ראו `certs/README.md`).
 
 ```bat
 docker build -t phoenix-bot .
 docker run --env-file .env -p 8501:8501 phoenix-bot
 ```
 
-- **המפתחות** – רק כמשתני סביבה (ה-Secrets של הענן), באותם שמות כמו ב-`.env.example`. הם לא נכנסים לאימג'.
-- **האינדקס** (`data/chroma`, ~65MB) נכנס לאימג' כמו שהוא – לא בונים אותו מחדש. בענן שבונה מ-Git (Hugging Face,
-  Streamlit Cloud) צריך להעלות אותו עם Git LFS.
-- **הפורט** נקבע לפי `PORT` (ברירת מחדל 8501). בדיקת תקינות: `/_stcore/health`.
-- **מאחורי סינון HTTPS** (כמו Netspark) – תעודת השורש של הסינון ב-`certs/` (ראו `certs/README.md`).
+### שינוי שעולה לקישור הציבורי – רק אחרי smoke
+
+שני האתרים בונים מהענף `release`, והפיתוח בענף `feature/chat-ui`. שינוי עובר ל-`release` רק אחרי בדיקות היחידה
+ו-smoke (מקומית, או בדפדפן מול האתר):
+
+```bat
+.venv\Scripts\python -m pytest
+.venv\Scripts\python smoke_test.py
+git push origin feature/chat-ui:release
+```
+
+חזרה לגרסה הקודמת: `git push --force-with-lease origin <הקומיט הקודם>:release` (או Rollback ב-Render).
+
+### GitHub Actions
+
+| workflow | מתי | מה |
+|---|---|---|
+| `tests` | כל push | בדיקות היחידה + בניית האימג' ובדיקת תקינות שלו |
+| `cloud` | כל 6 שעות / ידנית | פותח את האתר בלי שאלה (כדי שלא יירדם); ידנית – smoke בדפדפן: 5/5 ו-p90 עד 20 שניות |
+| `site-changes` | כל יום ראשון / ידנית | אילו עמודים באתר הפניקס השתנו מאז האיסוף – דוח ו-Issue. לא בונה את האינדקס מחדש |
+
+הקישורים ל-`cloud`: Settings → Secrets and variables → Actions → Variables: `STREAMLIT_URL`, `RENDER_URL`.
+אף workflow לא צריך מפתח.
+
+### בדיקה בדפדפן ומדידת זמנים בענן
+
+```bat
+.venv\Scripts\pip install -r e2e\requirements.txt
+.venv\Scripts\python e2e\e2e_cloud.py --url https://<האתר> --smoke --browser msedge
+.venv\Scripts\python e2e\e2e_cloud.py --url https://<האתר> --questions data\questions.csv --out answers.csv --browser msedge
+.venv\Scripts\python report.py --cloud --since "2026-10-20 18:00"
+```
+
+כל שאלה בשיחה חדשה עם `?dev=1` (בלי מטמון). `--legacy` – בלי שיפורי הזמנים, למדידת "לפני". `report.py --cloud` –
+ממוצע, p90 ומקסימום לכל שלב מהיומן המשותף (`--site`, `--legacy only|without` לסינון).
 
 ## בדיקות
 
@@ -80,12 +135,14 @@ docker run --env-file .env -p 8501:8501 phoenix-bot
 | `.venv\Scripts\python smoke_test.py` | 5 שאלות אמיתיות מקצה לקצה |
 | `.venv\Scripts\python eval_answers.py` | כל `data/questions.csv`, עם שופט (מלאה / חלקית / שגויה) וטבלת כיול הסף |
 | `.venv\Scripts\python eval_retrieval.py` | איכות החיפוש: העמוד הנכון בין התוצאות הראשונות |
-| `.venv\Scripts\python report.py` | סיכום יומן הצ'אט (`logs/conversations.jsonl`): החלטות, זמנים, משוב |
+| `.venv\Scripts\python report.py` | סיכום יומן הצ'אט (`logs/conversations.jsonl`; `--cloud` – היומן בענן): החלטות, זמנים לכל שלב, משוב |
+| `.venv\Scripts\python -m phoenix.site_changes` | אילו עמודים באתר השתנו מאז האיסוף (בלי לבנות את האינדקס מחדש) |
 
 ## מגבלות
 
 - **רק העמודים שנאספו** (~350 עמודי מידע ושירות מתוך מפת האתר): "לא מופיע באתר" פירושו "לא באחד מהעמודים האלה".
-- **התוכן נכון לתאריך האיסוף** – רענון לפי הפקודות למעלה.
-- **מכסות חינמיות**: למודלי Gemini Flash 20 בקשות ביום לכל מודל ולכל מפתח; בעומס אצל Google (503/504) הבוט
-  עובר לגיבויים, איטיים או חלשים יותר.
+- **התוכן נכון לתאריך האיסוף** – בדיקת שינויים שבועית (`site-changes`), ורענון לפי הפקודות למעלה – בהחלטה ידנית.
+- **מכסות חינמיות**: למודלי Gemini Flash 20 בקשות ביום לכל מודל ולכל מפתח (מתאפס ב-10:00 בשעון ישראל), וכל שאלה
+  בצ'אט היא קריאת הבנה + שתי קריאות תשובה (במקביל). Cohere Trial – 1,000 קריאות בחודש; Voyage בלי כרטיס – 3 בקשות
+  לדקה.
 - **בלי גישה למידע אישי**: הבוט לא רואה פוליסות, יתרות או תביעות – הוא מפנה לאזור האישי ולשירות הלקוחות.

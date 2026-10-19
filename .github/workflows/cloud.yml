@@ -1,0 +1,56 @@
+# בדיקה בדפדפן מול הקישורים הציבוריים (e2e/e2e_cloud.py). בלי מפתחות: הבוט בענן משתמש במפתחות שלו.
+#  - כל 6 שעות: פותח את האתר ב-Streamlit Cloud בלי לשאול כלום (בלי קריאה למודלים), כדי שלא יירדם (12 שעות בלי
+#    ביקור). Render נשמר ער על ידי cron-job.org (/_stcore/health כל 10 דקות).
+#  - ידנית (Actions -> cloud -> Run workflow): smoke - 5 שאלות אמיתיות, עובר רק ב-5/5 ו-p90 עד 20 שניות.
+# הקישורים: Settings -> Secrets and variables -> Actions -> Variables: STREAMLIT_URL, RENDER_URL.
+name: cloud
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "smoke = 5 שאלות אמיתיות; wake = רק לפתוח את הדף"
+        type: choice
+        options: [smoke, wake]
+        default: smoke
+      site:
+        description: "איזה אתר"
+        type: choice
+        options: [both, streamlit, render]
+        default: both
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        site: [streamlit, render]
+    steps:
+      - name: which site
+        id: site
+        run: |
+          if [ "${{ matrix.site }}" = "streamlit" ]; then url="${{ vars.STREAMLIT_URL }}"; else url="${{ vars.RENDER_URL }}"; fi
+          mode="${{ inputs.mode || 'wake' }}"
+          wanted="${{ inputs.site || 'streamlit' }}"
+          if [ -z "$url" ]; then echo "no URL variable for ${{ matrix.site }} yet - skipping"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$wanted" != "both" ] && [ "$wanted" != "${{ matrix.site }}" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"; echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.site.outputs.skip != '1'
+      - uses: actions/setup-python@v5
+        if: steps.site.outputs.skip != '1'
+        with:
+          python-version: "3.12"
+      - if: steps.site.outputs.skip != '1'
+        run: pip install -r e2e/requirements.txt && python -m playwright install --with-deps chromium
+      - if: steps.site.outputs.skip != '1'
+        run: python e2e/e2e_cloud.py --url "${{ steps.site.outputs.url }}" --${{ steps.site.outputs.mode }} --out result.csv
+      - if: steps.site.outputs.skip != '1' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.site }}
+          path: result.csv
+          if-no-files-found: ignore

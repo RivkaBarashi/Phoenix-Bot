@@ -1,0 +1,33 @@
+# בכל push: בדיקות היחידה (בלי שום קריאת API ובלי מפתחות), ובניית האימג' של Docker עם בדיקת תקינות.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t phoenix-bot .
+      - name: the image starts and passes the health check (no keys - only that the server is up)
+        run: |
+          docker run -d --name bot -p 8501:8501 phoenix-bot
+          for i in $(seq 1 45); do
+            if curl -fs http://localhost:8501/_stcore/health; then echo; echo "healthy after ${i}x2s"; exit 0; fi
+            sleep 2
+          done
+          docker logs bot
+          exit 1

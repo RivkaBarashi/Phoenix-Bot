@@ -144,15 +144,15 @@ def model_answers() -> int:
 def print_timings_and_calls(records: list[dict]):
     """זמן ממוצע ו-p90 לכל שלב, ומספר הקריאות למודל לכל סוג שאלה."""
     searched = [r for r in records if r["decision"] not in ("greeting", "error")]
-    print("\n=== זמנים לכל שלב (שניות, בלי ברכות): ממוצע ו-p90 (90% מהשאלות מתחתיו) ===")
-    print(f"   {'שלב':<24}{'שאלות':>6}{'ממוצע':>8}{'p90':>8}")
+    print("\n=== זמנים לכל שלב (שניות, בלי ברכות): ממוצע, p90 (90% מהשאלות מתחתיו) ומקסימום ===")
+    print(f"   {'שלב':<24}{'שאלות':>6}{'ממוצע':>8}{'p90':>8}{'מקס':>8}")
     rows = [(label, *row[1:]) for key, label in STAGES
             for row in stats.stage_table([r["timings"] for r in searched], [key])]
-    rows.append(("סה\"כ - כמו בצ'אט", len(searched), stats.mean([r["chat_s"] for r in searched]),
-                 stats.p90([r["chat_s"] for r in searched])))
-    for label, count, avg, high in rows:
+    chat = [r["chat_s"] for r in searched]
+    rows.append(("סה\"כ - כמו בצ'אט", len(searched), stats.mean(chat), stats.p90(chat), max(chat, default=0.0)))
+    for label, count, avg, high, top in rows:
         if count:
-            print(f"   {label:<24}{count:>6}{avg:>8.1f}{high:>8.1f}")
+            print(f"   {label:<24}{count:>6}{avg:>8.1f}{high:>8.1f}{top:>8.1f}")
     print("   (סה\"כ כמו בצ'אט = חיפוש + מודל התשובה מעל הסף, או חיפוש + בדיקת נושא מתחתיו; בלי השופט)")
     slow = sum(1 for r in searched if r["chat_s"] > config.QUESTION_TIMEOUT)
     print(f"   מעל {config.QUESTION_TIMEOUT:.0f} שניות (בצ'אט הן היו מקבלות את הודעת הזמן): {slow} מתוך {len(searched)}")

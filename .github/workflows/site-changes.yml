@@ -1,0 +1,33 @@
+# בדיקת שינויים שבועית באתר (phoenix/site_changes.py): אילו עמודים השתנו מאז האיסוף. לא בונה את האינדקס מחדש,
+# לא משנה קבצים ולא עושה commit - רק דוח בסיכום הריצה, ו-Issue כשיש שינויים. בלי מפתחות.
+name: site-changes
+
+on:
+  schedule:
+    - cron: "23 5 * * 0"   # יום ראשון, 08:23 בשעון ישראל
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m phoenix.site_changes --out report.md
+      - run: cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: open an issue when pages changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(cat report.md.count)" != "0" ]; then
+            gh issue create --title "שינויים באתר הפניקס - $(date +%F)" --body-file report.md
+          fi

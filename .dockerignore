@@ -7,7 +7,9 @@
 .pytest_cache/
 logs/
 data/cache/
-data/models/gte-multilingual-reranker-base/
+data/models/
+.github/
+e2e/
 data/*.xlsx
 data/~$*
 data/eval_answers_*
