@@ -1,0 +1,14 @@
+# מה לא נכנס לאימג'. האינדקס (data/chroma) כן נכנס - הוא חלק מהבוט.
+.venv/
+.env
+.git/
+.claude/
+**/__pycache__/
+.pytest_cache/
+logs/
+data/cache/
+data/models/gte-multilingual-reranker-base/
+data/*.xlsx
+data/~$*
+data/eval_answers_*
+tests/

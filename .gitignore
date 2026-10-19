@@ -12,3 +12,6 @@ logs/
 
 # מדרגים מקומיים (ONNX) - מורדים ל-data/models, לא נכנסים ל-Git
 data/models/
+
+# תעודות שורש לרשת עם סינון (Netspark) - לבנייה מקומית בלבד
+certs/*.crt
