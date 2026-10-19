@@ -682,3 +682,67 @@ def test_pension_and_savings_button():
     assert "פנסיה וחיסכון" in A.INSURANCE_TYPES
     assert A.with_insurance_type("איך מגישים תביעה?", "פנסיה וחיסכון") == "איך מגישים תביעה בביטוח פנסיה וחיסכון?"
     assert A.insurance_type("מה היתרה בקרן הפנסיה שלי?") == "פנסיה וחיסכון"
+
+
+# ---------------------------------------------------------------- שלב 2: הסף לא נכבה בשקט
+
+def ranked(reranker: str, score: float) -> SearchResult:
+    return SearchResult([Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE}", score=score)],
+                        "gemini:x", reranker)
+
+
+def test_cohere_is_a_reranker_only_not_a_language_model():
+    from phoenix import config
+    assert all(p != "cohere" for p, _ in config.LLM_CHAIN) and "cohere" not in A.COMPACT_LLMS
+    assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "local"]
+
+
+@pytest.mark.parametrize("reranker", ["cohere:rerank-v4.0-pro", "local:bge-reranker-v2-m3"])
+def test_each_reranker_has_its_own_threshold(monkeypatch, reranker):
+    """מתחת לסף של המדרג שדירג - "לא מופיע באתר" בלי לשאול את מודל התשובה; מעליו - המודל עונה."""
+    from phoenix import config
+    threshold = config.RERANK_THRESHOLDS[reranker.split(":")[0]]
+    monkeypatch.setattr(A, "is_off_topic", lambda q: False)
+    fake_model(monkeypatch, VALID)
+    below = A.respond("איך מגישים תביעה?", ranked(reranker, threshold - 0.01))
+    above = A.respond("איך מגישים תביעה?", ranked(reranker, threshold + 0.01))
+    assert (below.kind, below.reason, below.warning) == ("not_on_site", "below_threshold", "")
+    assert (above.kind, above.warning) == ("answer", "") and above.top_score == pytest.approx(threshold + 0.01)
+
+
+def test_no_reranker_at_all_is_cautious_mode_with_a_warning(monkeypatch):
+    """אף מדרג לא זמין: אין סף (ציון RRF הוא לא ציון רלוונטיות) - המודל מחליט, הקוד מאמת, ויש אזהרה."""
+    fake_model(monkeypatch, VALID)
+    a = A.respond("איך מגישים תביעה?", ranked("none", 0.03))
+    assert a.kind == "answer" and a.top_score is None and a.warning == A.CAUTIOUS_WARNING
+    from phoenix import conversation_log
+    records = []
+    monkeypatch.setattr(conversation_log, "_append", records.append)
+    conversation_log.log_answer("s", "איך מגישים תביעה?", a)
+    assert records[0]["warning"] == A.CAUTIOUS_WARNING
+
+
+def test_rerank_falls_back_to_the_local_reranker(monkeypatch):
+    from phoenix import fallback, rerank
+    monkeypatch.setattr(fallback, "_resting_until", {})
+
+    def cohere_down(*args, **kwargs):
+        raise FakeApiError(429, "trial key limit exceeded")
+    local = lambda query, docs, top_n, timeout=None: [(1, 0.9), (0, 0.2)][:top_n]  # noqa: E731
+    monkeypatch.setattr(rerank, "PROVIDERS", [fallback.Provider("cohere:rerank-v4.0-pro", cohere_down),
+                                              fallback.Provider("local:bge-reranker-v2-m3", local)])
+    assert rerank.rerank("שאלה", ["א", "ב"], top_n=2) == ([(1, 0.9), (0, 0.2)], "local:bge-reranker-v2-m3")
+    monkeypatch.setattr(rerank, "PROVIDERS", [fallback.Provider("cohere:rerank-v4.0-pro", cohere_down)])
+    assert rerank.rerank("שאלה", ["א", "ב"], top_n=2)[1] == "none"  # אף מדרג - מצב זהיר
+
+
+@pytest.mark.skipif(not __import__("phoenix.rerank", fromlist=["x"]).local_installed(
+    __import__("phoenix.config", fromlist=["x"]).LOCAL_RERANKER), reason="המדרג המקומי לא הורד ל-data/models")
+def test_local_reranker_ranks_the_answer_first():
+    """המדרג המקומי האמיתי (על המעבד, בלי API): הקטע שעונה על השאלה מקבל ציון גבוה מקטע לא קשור."""
+    from phoenix import config, rerank
+    call = rerank._local(config.LOCAL_RERANKER)
+    docs = ["לביטול ביטוח הרכב מעלים באתר טופס העברת בעלות או אישור משטרה, ונציג חוזר לתאם את הביטול.",
+            "ביטוח נסיעות לחו\"ל מכסה הוצאות רפואיות בחו\"ל, כבודה ועיכוב טיסה."]
+    order = call("איך מבטלים ביטוח רכב?", docs, 2)
+    assert order[0][0] == 0 and 0 <= order[1][1] < order[0][1] <= 1

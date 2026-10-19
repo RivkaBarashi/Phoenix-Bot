@@ -9,3 +9,6 @@ data/cache/
 
 # יומן השיחות של הצ'אט (שאלות של משתמשים)
 logs/
+
+# מדרגים מקומיים (ONNX) - מורדים ל-data/models, לא נכנסים ל-Git
+data/models/

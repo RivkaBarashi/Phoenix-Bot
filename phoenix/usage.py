@@ -6,7 +6,8 @@
 from . import config, embeddings, llm, rerank
 from .fallback import CALLS, FAILED, resting
 
-SERVICES = {"gemini": "Gemini", "cohere": "Cohere", "groq": "Groq", "openrouter": "OpenRouter", "voyage": "Voyage"}
+SERVICES = {"gemini": "Gemini", "cohere": "Cohere", "groq": "Groq", "openrouter": "OpenRouter", "voyage": "Voyage",
+            "local": "מדרג מקומי"}
 LLM_NAMES = set(llm.ALL_NAMES)  # כולל כל צירופי מפתח+מודל של Gemini
 EMBED_NAMES = {p.name for p in embeddings.PROVIDERS}
 RERANK_NAMES = {f"{p}:{m}" for p, m in config.RERANK_CHAIN}

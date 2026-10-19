@@ -52,7 +52,7 @@ LLM_CHAIN = [
     # OpenRouter: 50 בקשות ביום לכל המודלים החינמיים יחד
     ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
     ("openrouter", "google/gemma-4-31b-it:free"),
-    ("cohere", "command-a-plus-05-2026"),  # אחרון: חולק את מכסת ה-Trial עם ה-Rerank
+    # בלי Cohere כמודל שפה: הוא חולק את מכסת ה-Trial (1,000 בחודש) עם ה-Rerank, ואם היא נגמרת - הסף נכבה
 ]
 
 # אמבדינגים: לכל ספק אינדקס משלו (וקטורים של מודלים שונים לא ניתנים להשוואה).
@@ -64,14 +64,21 @@ EMBED_CHAIN = [
 EMBEDDER = os.getenv("EMBEDDER", "gemini").strip().lower()
 CHROMA_DIR = ROOT / "data" / "chroma"
 
+# Rerank: Cohere, ואם הוא לא זמין - מדרג מקומי (מודל ONNX ב-data/models, רץ על המעבד, בלי רשת ובלי מכסה).
+LOCAL_RERANKER = os.getenv("LOCAL_RERANKER", "bge-reranker-v2-m3")
 RERANK_CHAIN = [
     ("cohere", "rerank-v4.0-pro"),
-    ("voyage", "rerank-3"),
+    ("local", LOCAL_RERANKER),
 ]
 # שכבת הגנה ראשונה: ציון Rerank מינימלי כדי בכלל לנסות לענות. מתחת לזה - "לא מופיע באתר".
-# הסף נקבע מול הציונים של Cohere, ולכן תקף רק כש-Cohere דירג. בלי Cohere ההחלטה היא של המודל.
-RERANK_THRESHOLD = float(os.getenv("RERANK_THRESHOLD", "0.82"))
-THRESHOLD_RERANKER = "cohere"
+# לכל מדרג סקאלה משלו, ולכן סף משלו - כל אחד כויל על data/questions.csv. כשאף מדרג לא זמין - מצב זהיר:
+# בלי סף, המודל מחליט והקוד מאמת, ואזהרה ביומן ובפרטים הטכניים.
+RERANK_THRESHOLDS = {
+    "cohere": float(os.getenv("RERANK_THRESHOLD", "0.82")),
+    # כויל 19/10 (20 מועמדים, 384 טוקנים): ב-0.2 נשארו 21/23 שאלות עם תשובה, ו-20/20 בלי תשובה סורבו
+    "local": float(os.getenv("RERANK_THRESHOLD_LOCAL", "0.2")),
+}
+RERANK_THRESHOLD = RERANK_THRESHOLDS["cohere"]  # הסף של המסלול הראשי (הבדיקות מכיילות מולו)
 
 # איסוף עמודים: קודם ישירות (חינם, בלי מכסה), ורק אם נכשל - שירותים חיצוניים.
 # jina לא צריך מפתח.

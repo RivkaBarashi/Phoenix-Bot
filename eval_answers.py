@@ -23,7 +23,8 @@ import sys
 import time
 from pathlib import Path
 
-from eval_retrieval import QUESTIONS, RERANKER, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
+import eval_retrieval
+from eval_retrieval import QUESTIONS, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
 from phoenix import answer as answer_layer
 from phoenix import config, embeddings, eval_history, llm, stats, usage
 from phoenix.answer import respond
@@ -32,6 +33,8 @@ from phoenix.search import RRF_K, SearchResult
 
 PAUSE = 6.5  # בין שאלות: Rerank של Cohere (10 בדקה) ומודל השפה החינמי
 THRESHOLDS = [0.70, 0.75, 0.80, 0.82, 0.85, 0.88, 0.90, 0.92]
+# לכל מדרג סקאלה משלו - טבלת הכיול על טווח שמתאים לו (--reranker local)
+THRESHOLD_GRIDS = {"cohere": list(THRESHOLDS), "local": [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]}
 JUDGE_PROVIDERS = ["groq", "openrouter"]
 
 JUDGE_PROMPT = """אתה בודק תשובות של בוט שירות לקוחות של חברת ביטוח. משווים את תשובת הבוט לתשובה הצפויה.
@@ -282,20 +285,24 @@ def main():
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
     parser.add_argument("--category", help="רק הסוגים האלה: " + ", ".join(TYPES))
     parser.add_argument("--fresh", action="store_true", help="לשאול את המודלים מחדש, בלי המטמון")
+    parser.add_argument("--reranker", default="cohere", choices=list(config.RERANK_THRESHOLDS),
+                        help="המדרג שנבדק, עם הסף שלו (local - לכיול המדרג המקומי)")
     parser.add_argument("--llm", help="מודל Gemini אחד קבוע לבוט, בכל המפתחות ובלי גיבוי (למשל gemini-3.6-flash). "
                                       "השופט נשאר Groq/OpenRouter. כולל --fresh")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
-    # בבדיקה בלי Cohere כמודל שפה: הוא חולק את מכסת ה-Trial (1,000 בחודש) עם ה-Rerank
-    answer_layer.COMPACT_LLMS = [p for p in answer_layer.COMPACT_LLMS if p != "cohere"]
     if args.fresh:
         llm.CACHE_MODE = "write"
     pinned = pin_llm(args.llm) if args.llm else []
+    eval_retrieval.RERANKER = args.reranker  # run_search מדרג רק בו
+    config.RERANK_THRESHOLD = config.RERANK_THRESHOLDS[args.reranker]  # "הסף הנוכחי" בכל הדוח
+    THRESHOLDS[:] = THRESHOLD_GRIDS[args.reranker]
+
 
     selected = select_rows(args.questions, args.only, args.category)
     version = hashlib.sha1(answer_layer.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
-    print(f"אינדקס: {args.index} | Rerank: {RERANKER} | סף נוכחי: {config.RERANK_THRESHOLD} | "
+    print(f"אינדקס: {args.index} | Rerank: {args.reranker} | סף נוכחי: {config.RERANK_THRESHOLD} | "
           f"{len(selected)} שאלות מ-{Path(args.questions).name} | גרסת הוראות {version} | "
           f"מטמון: {'בלי (--fresh)' if args.fresh else 'בלי (--llm)' if pinned else 'כן'}")
     if pinned:

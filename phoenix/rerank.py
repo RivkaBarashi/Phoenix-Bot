@@ -1,7 +1,8 @@
 """Rerank עם גיבוי: מסדר מחדש את הקטעים שנמצאו לפי כמה הם עונים על השאלה.
 
-הסדר: Cohere -> Voyage -> בלי Rerank (הסדר המקורי). הבוט עובד גם בלי, רק פחות מדויק.
-שימו לב: הציונים של Cohere ושל Voyage בסקאלות שונות - סף "יש תשובה" תקף רק ל-Cohere.
+הסדר (config.RERANK_CHAIN): Cohere -> מדרג מקומי -> בלי Rerank (הסדר המקורי, "מצב זהיר").
+המדרג המקומי הוא מודל ONNX שמורד פעם אחת ל-data/models/<שם> (לא ב-Git) ורץ על המעבד: בלי רשת, בלי מכסה
+ובלי מפתח - כך הסף לא נכבה כש-Cohere לא זמין. לכל מדרג סקאלה משלו, ולכן סף משלו (config.RERANK_THRESHOLDS).
 
 מטמון: הציון של כל זוג (שאלה, קטע) נשמר ב-data/cache/rerank.json. Rerank מדרג כל קטע
 מול השאלה בנפרד, ולכן בהרצה חוזרת שולחים ל-API רק קטעים שעוד לא דורגו - בדיקות
@@ -11,8 +12,11 @@ import collections
 import hashlib
 import json
 import logging
+import math
+import threading
 
 import httpx
+import numpy as np
 
 from . import config
 from .fallback import AllProvidersFailed, Provider, run_chain
@@ -22,6 +26,13 @@ log = logging.getLogger("phoenix")
 CACHE_FILE = config.ROOT / "data" / "cache" / "rerank.json"
 # Voyage בלי כרטיס אשראי: ~10K טוקנים לדקה. כגיבוי שולחים רק את המועמדים הראשונים, מקוצרים.
 VOYAGE_MAX_DOCS, VOYAGE_DOC_CHARS = 12, 1200
+LOCAL_DIR = config.ROOT / "data" / "models"
+LOCAL_FILE = "model_quantized.onnx"   # int8 - פי 4 קטן ומהיר מהמקורי, כמעט בלי הבדל בדירוג
+# על המעבד: 34 מועמדים x 512 טוקנים = 14 שניות. העמוד הנכון כמעט תמיד בין 20 הראשונים בסדר ה-RRF (נבדק: מקום
+# 1-6, ופעם אחת 11 ו-19), ולכן מדרגים רק אותם, עד 384 טוקנים לזוג - כ-6.5 שניות, בתוך 20 השניות לשאלה.
+LOCAL_MAX_DOCS, LOCAL_MAX_TOKENS, LOCAL_BATCH = 20, 384, 8
+_local_models: dict[str, tuple] = {}
+_local_lock = threading.Lock()
 
 API_REQUESTS: collections.Counter = collections.Counter()  # קריאות HTTP אמיתיות לכל ספק
 CACHE_HITS: collections.Counter = collections.Counter()    # ציונים שהגיעו מהמטמון
@@ -85,10 +96,50 @@ def _voyage(model):
     return call
 
 
-_FACTORIES = {"cohere": (_cohere, None), "voyage": (_voyage, VOYAGE_MAX_DOCS)}
+def local_installed(model: str) -> bool:
+    return (LOCAL_DIR / model / LOCAL_FILE).exists() and (LOCAL_DIR / model / "tokenizer.json").exists()
+
+
+def _load_local(model: str) -> tuple:
+    """המודל נטען פעם אחת (כמה שניות), בפעם הראשונה שצריך אותו - לא בהפעלת הצ'אט."""
+    with _local_lock:
+        if model not in _local_models:
+            import onnxruntime as ort
+            from tokenizers import Tokenizer
+            folder = LOCAL_DIR / model
+            tok = Tokenizer.from_file(str(folder / "tokenizer.json"))
+            tok.enable_truncation(LOCAL_MAX_TOKENS)  # זוג (שאלה, קטע): הקטע נחתך, השאלה נשמרת
+            tok.enable_padding(pad_id=tok.token_to_id("<pad>"), pad_token="<pad>")
+            session = ort.InferenceSession(str(folder / LOCAL_FILE), providers=["CPUExecutionProvider"])
+            _local_models[model] = (tok, session, {i.name for i in session.get_inputs()})
+        return _local_models[model]
+
+
+def _local(model):
+    def call(query, documents, top_n, timeout=None):
+        tok, session, inputs = _load_local(model)
+        scores = []
+        for start in range(0, len(documents), LOCAL_BATCH):
+            enc = tok.encode_batch([(query, d) for d in documents[start:start + LOCAL_BATCH]])
+            feeds = {"input_ids": np.array([e.ids for e in enc], dtype=np.int64),
+                     "attention_mask": np.array([e.attention_mask for e in enc], dtype=np.int64)}
+            if "token_type_ids" in inputs:
+                feeds["token_type_ids"] = np.array([e.type_ids for e in enc], dtype=np.int64)
+            logits = session.run(None, feeds)[0][:, 0]
+            scores += [1 / (1 + math.exp(-float(x))) for x in logits]  # ציון 0-1, כמו אצל Cohere
+        return sorted(enumerate(scores), key=lambda pair: -pair[1])[:top_n]
+    return call
+
+
+_FACTORIES = {"cohere": (_cohere, None), "voyage": (_voyage, VOYAGE_MAX_DOCS), "local": (_local, LOCAL_MAX_DOCS)}
+
+
+def _enabled(provider: str, model: str) -> bool:
+    return local_installed(model) if provider == "local" else bool(config.API_KEYS[provider])
+
 
 PROVIDERS = [
-    Provider(f"{p}:{m}", _cached(f"{p}:{m}", _FACTORIES[p][0](m), _FACTORIES[p][1]), enabled=bool(config.API_KEYS[p]))
+    Provider(f"{p}:{m}", _cached(f"{p}:{m}", _FACTORIES[p][0](m), _FACTORIES[p][1]), enabled=_enabled(p, m))
     for p, m in config.RERANK_CHAIN
 ]
 
@@ -110,3 +161,36 @@ def rerank(query: str, documents: list[str], top_n: int = 5,
     except AllProvidersFailed as exc:
         log.warning("rerank unavailable, keeping original order: %s", exc)
         return [(i, 0.0) for i in range(top_n)], "none"
+
+
+# מאיפה מורידים כל מדרג מקומי (גרסת ONNX, עם קובץ int8 מוכן)
+LOCAL_REPOS = {"bge-reranker-v2-m3": "onnx-community/bge-reranker-v2-m3-ONNX",
+               "gte-multilingual-reranker-base": "onnx-community/gte-multilingual-reranker-base"}
+
+
+def download_local(model: str = config.LOCAL_RERANKER):
+    """הורדה חד-פעמית של המדרג המקומי ל-data/models/<שם> (~590MB). הרצה: python -m phoenix.rerank download"""
+    folder = LOCAL_DIR / model
+    folder.mkdir(parents=True, exist_ok=True)
+    for remote in [f"onnx/{LOCAL_FILE}", "tokenizer.json", "config.json"]:
+        dest = folder / remote.split("/")[-1]
+        if dest.exists() and dest.stat().st_size:
+            print(f"{dest.name}: כבר קיים")
+            continue
+        part = dest.with_suffix(dest.suffix + ".part")
+        with httpx.stream("GET", f"https://huggingface.co/{LOCAL_REPOS[model]}/resolve/main/{remote}",
+                          follow_redirects=True, timeout=600) as r:
+            r.raise_for_status()
+            with open(part, "wb") as f:
+                for chunk in r.iter_bytes(1 << 20):
+                    f.write(chunk)
+        part.replace(dest)
+        print(f"{dest.name}: {dest.stat().st_size / 1e6:.0f}MB")
+
+
+if __name__ == "__main__":
+    import sys
+    if sys.argv[1:] == ["download"]:
+        download_local()
+    else:
+        print("python -m phoenix.rerank download  - הורדת המדרג המקומי ל-data/models")

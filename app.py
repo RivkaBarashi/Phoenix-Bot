@@ -157,7 +157,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     text = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources מוסיף "המקור:" / "המקורות:" בסוף
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
-            "timings": a.timings, "question": question, "race": a.race, "pages": a.pages,
+            "timings": a.timings, "question": question, "race": a.race, "pages": a.pages, "warning": a.warning,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
@@ -238,6 +238,8 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
         with st.expander("פרטים טכניים"):
             st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
                        f"מודל: {llm.describe(meta['llm'])}")
+            if meta.get("warning"):  # מצב זהיר: אף מדרג לא היה זמין
+                st.caption(f"⚠️ {meta['warning']}")
             if meta.get("race"):  # בקשות במקביל ומעבר לגיבוי - רק כאן וביומן, לא ללקוחה
                 st.caption(f"{meta['race']} · ענה: {llm.describe(meta['llm'])}")
             if meta.get("standalone"):

@@ -47,7 +47,7 @@ def log_answer(session: str, question: str, a, **extra) -> str:
              "standalone": hide_numbers(a.question) if a.question != question else "",
              "kind": a.kind, "reason": a.reason, "top_score": a.top_score, "reranker": a.reranker,
              "sources": a.sources, "llm": a.llm, "timings": {k: round(v, 2) for k, v in a.timings.items()},
-             "answer": a.text, **extra})
+             "answer": a.text, "warning": getattr(a, "warning", ""), **extra})
     return entry_id
 
 

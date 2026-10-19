@@ -2,9 +2,9 @@
 
 הרצה לבדיקה:  .venv\\Scripts\\python -m phoenix.answer "איך מגישים תביעה על נזקי מים?"
 
-שכבה 1 - סף: אם Cohere דירג את הקטעים והציון הכי גבוה נמוך מ-RERANK_THRESHOLD (.env),
-   עונים "לא מופיע באתר" בלי לשאול את המודל. הסף נקבע מול הציונים של Cohere, לכן כש-Cohere
-   לא זמין הוא לא תקף - המודל מקבל את 5 הקטעים הראשונים וההחלטה כולה שלו.
+שכבה 1 - סף: אם הציון הכי גבוה של המדרג נמוך מהסף שלו (config.RERANK_THRESHOLDS - Cohere, או המדרג
+   המקומי כש-Cohere לא זמין, כל אחד עם סף שכויל לו), עונים "לא מופיע באתר" בלי לשאול את המודל. אם אף
+   מדרג לא זמין - מצב זהיר: אין סף, המודל מחליט והקוד מאמת, ואזהרה ביומן ובפרטים הטכניים.
 שכבה 2 - המודל: חייב למצוא בקטעים משפט שעונה על השאלה עצמה, ולהחזיר אותו כציטוט. אם לא
    מצא - "לא מופיע באתר". והקוד בודק אותו: הציטוט חייב להופיע בקטע שהמודל ציין, כל מספר
    בתשובה (טלפון, סכום, ימים) חייב להופיע בקטעים, וכל מילה מהשאלה חייבת להופיע איפשהו באתר
@@ -34,7 +34,7 @@ CONTEXT_CHUNKS = 5
 # Gemini מקבל 5 קטעים מלאים (~11K טוקנים). שאר המודלים הם גיבוי עם מגבלת גודל בקשה
 # (Groq בחינם: ~8K טוקנים, החזיר 413) - הם מקבלים 3 קטעים מקוצרים: השורות שהכי קשורות לשאלה.
 FULL_CONTEXT_LLMS = ["gemini"]
-COMPACT_LLMS = ["groq", "openrouter", "cohere"]
+COMPACT_LLMS = ["groq", "openrouter"]
 COMPACT_CHUNKS, COMPACT_CHARS = 3, 1500
 CONTACT_URL = "https://www.fnx.co.il/customer-service/contact-us/"
 KINDS = {"answer", "not_on_site", "personal", "off_topic"}
@@ -64,6 +64,8 @@ THANKS_REPLY = "בשמחה! אם יש עוד שאלה, אני כאן."
 MAX_QUESTION_CHARS = 1000
 TOO_LONG_TEXT = ("ההודעה ארוכה מדי ({chars:,} תווים). אפשר לקצר אותה לשאלה אחת, עד 1,000 תווים? "
                  "כך אוכל לחפש באתר תשובה מדויקת.")
+
+CAUTIOUS_WARNING = "מצב זהיר: אף מדרג לא היה זמין, ולכן אין סף - המודל החליט לבד (והקוד אימת את התשובה)."
 
 # --- שאלת הבהרה: שאלה על ביטוח בלי סוג הביטוח ("איך מגישים תביעה?") - בלי חיפוש ובלי מודל ---
 # כל תחום מנהל את התביעות, הביטולים והמחירים שלו, ובשאלה כללית החיפוש מוצא עמוד של תחום מקרי (נבדק:
@@ -204,6 +206,7 @@ class Answer:
     raw: dict | None = None   # התשובה הגולמית של המודל
     timings: dict[str, float] = field(default_factory=dict)  # שניות לכל שלב (vector, bm25, rerank, llm, total)
     pages: int = 0             # כמה עמודים שונים נבדקו בחיפוש (לשורה בסוף התשובה בצ'אט)
+    warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
 
 
@@ -606,13 +609,17 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     """ההחלטה והתשובה, מתוך תוצאות חיפוש קיימות. threshold=0 = תמיד לשאול את המודל (לכיול).
     parallel: אותה שאלה לשני מודלים במקביל (רק בצ'אט; הבדיקות - מודל אחד, בזה אחר זה).
     on_stage: חיווי שלבים בצ'אט - נקרא בתחילת כל שלב. בלי (בבדיקות) - שום דבר לא משתנה."""
-    threshold = config.RERANK_THRESHOLD if threshold is None else threshold
+    ranker = result.reranker.split(":")[0]  # cohere / local / none
+    calibrated = ranker in config.RERANK_THRESHOLDS
+    threshold = config.RERANK_THRESHOLDS.get(ranker, 0.0) if threshold is None else threshold
     standalone = standalone or question
     hits = result.hits[:CONTEXT_CHUNKS]
-    calibrated = result.reranker.startswith(config.THRESHOLD_RERANKER + ":")
     timings = dict(result.timings)
+    warning = "" if calibrated else CAUTIOUS_WARNING
+    if warning:
+        log.warning("cautious mode (%s): %s", result.reranker, question[:60])
     base = dict(top_score=hits[0].score if hits and calibrated else None, reranker=result.reranker,
-                question=standalone, hits=hits, timings=timings, pages=result.pages)
+                question=standalone, hits=hits, timings=timings, pages=result.pages, warning=warning)
 
     def not_on_site(reason: str, referral: str = GENERIC_REFERRAL, **extra) -> Answer:
         return Answer(f"{NOT_ON_SITE} {referral}\n\n{format_sources([CONTACT_URL])}", "not_on_site", reason,
