@@ -70,15 +70,19 @@ INSURANCE_TYPES = {  # כפתור -> (צורה רגילה, צורה מיודעת
     "חיים": ("חיים", "החיים"), 'נסיעות לחו"ל': ('נסיעות לחו"ל', 'הנסיעות לחו"ל'),
 }
 INSURANCE_WORD = re.compile(r"(?<![\w])[והבלמשכ]{0,3}(?:ביטוח|תביע|פוליס|כיסוי)\w*")
-# תחום ביטוח בשאלה: שם התחום, או מילה שמסגירה אותו (צנרת -> דירה, ניתוח -> בריאות, מזוודה -> נסיעות)
-DOMAIN_WORD = re.compile(
-    r"רכב|מקיף|צד\s*ג|צד\s+שלישי|חובה|נהג|טוטאל|מוסך|שמאי|אופנוע|משאית|גרר|תאונ"
-    r"|דיר[הת]|תכול|מבנה|משכנת|צנרת|צינור|נזיל|דליפ|הצפ|נזקי\s+מים|דוד|רטיבות|שיפוץ"
-    r"|בריאות|ניתוח|רופא|תרופ|פיזיותרפ|אשפוז|מחל[הו]|שיניים|הריון"
-    r"|חיים|אובדן\s+כושר|נכות|פטיר|סיעוד"
-    r"|נסיע|חו\"ל|טיס[הו]|מזווד"
-    r"|פנסי|גמל|השתלמות|חיסכון|חסכון|קרן"
-    r"|חיות\s+מחמד|חיית\s+מחמד|כלב|חתול|וטרינר|עסק|חבויות")
+# תחום ביטוח בשאלה: שם התחום, או מילה שמסגירה אותו (צנרת -> דירה, ניתוח -> בריאות, מזוודה -> נסיעות).
+# לפי הסוג - כדי להשלים אותו בשאלת המשך ("יש לי ביטוח מקיף..." ואז "איך מגישים תביעה?" -> רכב).
+DOMAIN_TYPES = {
+    "רכב": r"רכב|מקיף|צד\s*ג|צד\s+שלישי|חובה|נהג|טוטאל|מוסך|שמאי|אופנוע|משאית|גרר|תאונ",
+    "דירה": r"דיר[הת]|תכול|מבנה|משכנת|צנרת|צינור|נזיל|דליפ|הצפ|נזקי\s+מים|דוד|רטיבות|שיפוץ",
+    "בריאות": r"בריאות|ניתוח|רופא|תרופ|פיזיותרפ|אשפוז|מחל[הו]|שיניים|הריון",
+    "חיים": r"חיים|אובדן\s+כושר|נכות|פטיר|סיעוד",
+    'נסיעות לחו"ל': r"נסיע|חו\"ל|טיס[הו]|מזווד",
+    "פנסיה": r"פנסי|גמל|השתלמות|חיסכון|חסכון|קרן",
+    "חיות מחמד": r"חיות\s+מחמד|חיית\s+מחמד|כלב|חתול|וטרינר",
+    "עסק": r"עסק|חבויות",
+}
+DOMAIN_WORD = re.compile("|".join(f"(?P<t{i}>{pattern})" for i, pattern in enumerate(DOMAIN_TYPES.values())))
 # "ביטוח לחתונה", "ביטוח סייבר" - המילה שאחרי "ביטוח" היא הסוג. אחרי המילים האלה - עדיין אין סוג.
 GENERIC_AFTER_INSURANCE = {"שלי", "שלך", "שלכם", "שלנו", "שלו", "שלה", "שלהם", "אצלכם", "אצלי", "הזה", "הזו",
                            "הזאת", "זה", "זו", "את", "על", "של", "עם", "אצל", "אם", "או", "אחר", "אחרת", "נוסף",
@@ -217,13 +221,19 @@ def split_greeting(text: str) -> tuple[str, bool, bool]:
     return rest.strip(), greeted, thanked
 
 
+def insurance_type(text: str) -> str | None:
+    """סוג הביטוח שהטקסט מזכיר: לפי מילת התחום הראשונה ("המקיף שלי" -> רכב, "נזילה" -> דירה), או המילה
+    שאחרי "ביטוח" ("ביטוח לחתונה" -> לחתונה). None - בלי סוג."""
+    if m := DOMAIN_WORD.search(text):
+        return list(DOMAIN_TYPES)[int(m.lastgroup[1:])]
+    words = WORD.findall(text)
+    return next((words[i + 1] for i, w in enumerate(words) if re.fullmatch(r"[והבלמש]{0,3}ביטוח", w)
+                 and i + 1 < len(words) and words[i + 1] not in GENERIC_AFTER_INSURANCE), None)
+
+
 def has_insurance_type(text: str) -> bool:
     """יש בטקסט תחום ביטוח ("רכב", "צנרת", "מחלות קשות"), או סוג אחרי "ביטוח" ("ביטוח לחתונה")."""
-    if DOMAIN_WORD.search(text):
-        return True
-    words = WORD.findall(text)
-    return any(re.fullmatch(r"[והבלמש]{0,3}ביטוח", w) and i + 1 < len(words)
-               and words[i + 1] not in GENERIC_AFTER_INSURANCE for i, w in enumerate(words))
+    return insurance_type(text) is not None
 
 
 def needs_insurance_type(question: str) -> bool:
@@ -712,8 +722,10 @@ def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
     context = list(history) if history and needs_context(question) else []
     # שאלה על ביטוח בלי סוג ("איך מגישים תביעה?") - שאלת הבהרה, בלי חיפוש. אם הסוג כבר נאמר קודם בשיחה
     # ("יש לי ביטוח רכב..."), שאלת ההמשך משלימה אותו בניסוח מחדש ואין צורך לשאול.
-    if needs_insurance_type(question) and not any(has_insurance_type(m["content"]) for m in context
-                                                  if m["role"] == "user"):
+    missing_type = needs_insurance_type(question)
+    known_type = next((kind for m in reversed(context) if m["role"] == "user"
+                       and (kind := insurance_type(m["content"]))), None) if missing_type else None
+    if missing_type and not known_type:
         clarify = clarification(question)
         clarify.timings["total"] = time.perf_counter() - start
         return clarify
@@ -721,6 +733,10 @@ def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
         if on_stage:
             on_stage("search")
         standalone = standalone_question(question, context)
+        if known_type and not has_insurance_type(standalone):
+            # הניסוח מחדש השמיט את הסוג (נבדק: "איך מגישים תביעה בהפניקס?" אחרי שאלה על רכב) - הקוד משלים
+            # אותו מההודעה האחרונה של הלקוחה שהזכירה סוג
+            standalone = with_insurance_type(standalone, known_type)
         condense = time.perf_counter() - start
         result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
                          standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage)

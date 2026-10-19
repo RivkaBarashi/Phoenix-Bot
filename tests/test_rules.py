@@ -484,6 +484,38 @@ UNVERIFIED = {"kind": "answer", "answer": "ממלאים טופס.", "referral": 
               "sources": [1]}
 
 
+CAR_HISTORY = [{"role": "user", "content": "מה המספר של מוקד תביעות רכב?"},
+               {"role": "assistant", "content": "מוקד תביעות רכב ורכוש: *5070."}]
+
+
+@pytest.mark.parametrize("rewrite, searched", [
+    ("איך מגישים תביעה בהפניקס?", "איך מגישים תביעה בביטוח רכב בהפניקס?"),  # המודל השמיט את הסוג - הקוד משלים
+    ("איך מגישים תביעה בביטוח רכב?", "איך מגישים תביעה בביטוח רכב?"),       # הסוג כבר שם - בלי שינוי
+])
+def test_follow_up_keeps_the_insurance_type_from_the_conversation(monkeypatch, rewrite, searched):
+    """"איך מגישים תביעה?" אחרי שאלה על רכב: בלי שאלת הבהרה, והשאלה שמחפשים מכילה "רכב" - גם כשהניסוח מחדש
+    השמיט אותו (נבדק בצ'אט: "איך מגישים תביעה בהפניקס?", והתשובה יצאה כללית)."""
+    monkeypatch.setattr(A.config, "PARALLEL_LLM", False)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+
+    def chat(messages, system="", **kwargs):
+        if system == A.CONDENSE_PROMPT:
+            return llm.ChatResult(rewrite, "fake:model", None)
+        return llm.ChatResult(json.dumps(VALID), "fake:model", VALID)
+    monkeypatch.setattr(llm, "chat", chat)
+    queries = []
+    monkeypatch.setattr(A, "search", lambda query, **kwargs: queries.append(query) or RACE_HIT)
+    a = A.answer("איך מגישים תביעה?", CAR_HISTORY)
+    assert a.kind != "clarify" and queries == [searched] and a.question == searched
+
+
+@pytest.mark.parametrize("text, kind", [("יש לי ביטוח מקיף", "רכב"), ("יש נזילה מהתקרה", "דירה"),
+                                        ("ניתוח בחו\"ל", "בריאות"), ("יש לכם ביטוח לחתונה?", "לחתונה"),
+                                        ("איך מגישים תביעה?", None)])
+def test_insurance_type(text, kind):
+    assert A.insurance_type(text) == kind
+
+
 def test_two_passages_from_one_page_are_one_source(monkeypatch):
     """המודל ציטט שני קטעים מאותו עמוד: העמוד מופיע פעם אחת (היה: "כל הדרכים ליצור איתנו קשר" פעמיים)."""
     page = SearchResult([Hit("x", A.CONTACT_URL, "צור קשר", "", f"צור קשר\n\n{SENTENCE}", score=0.95),
