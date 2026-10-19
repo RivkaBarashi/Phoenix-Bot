@@ -2,7 +2,10 @@
 
 כדי לשנות את סדר הגיבוי - משנים את הסדר ברשימות למטה.
 """
+import contextlib
+import contextvars
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -18,6 +21,27 @@ from google.genai import types  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
+
+
+def _streamlit_secrets_to_env():
+    """Streamlit Cloud: הסודות (Secrets) בשורש מגיעים גם כמשתני סביבה. ליתר ביטחון - מה שחסר בסביבה נלקח
+    מ-st.secrets (רק כשרצים בתוך Streamlit, ובלי לדרוס משתנה קיים). בלי קובץ סודות - שום דבר לא קורה."""
+    if "streamlit" not in sys.modules:
+        return
+    try:
+        import streamlit as st
+        for name, value in st.secrets.items():
+            if isinstance(value, (str, int, float, bool)) and name not in os.environ:
+                os.environ[name] = str(value)
+    except Exception:  # noqa: BLE001 - אין סודות (מקומית) - משתני הסביבה ו-.env
+        pass
+
+
+_streamlit_secrets_to_env()
+
+# מאיזה אתר נכתבה כל שורה ביומן המשותף: SITE, או לפי הסביבה (Render מגדיר RENDER; Streamlit Cloud מריץ מ-/mount/src)
+SITE = os.getenv("SITE") or ("render" if os.getenv("RENDER") else
+                             "streamlit-cloud" if Path("/mount/src").exists() else "local")
 
 API_KEYS = {
     "gemini": os.getenv("GEMINI_API_KEY", ""),
@@ -114,6 +138,18 @@ SAME_SEARCH_JACCARD = 0.7
 # תמיד בה (3.8 בהבנה: 2.6 שניות במקום 14-23 בעומס הלילה). בתשובה - רק עם ANSWER_LOW_THINKING, אחרי בדיקת איכות.
 LOW_THINKING = {"gemini-3.6-flash": "MINIMAL", "gemini-3.7-flash": "LOW", "gemini-3.8-flash": "LOW"}
 ANSWER_LOW_THINKING = os.getenv("ANSWER_LOW_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
+# מדידת "לפני ואחרי" על אותו שרת (סעיף 6ה): ?dev=1&legacy=1 עונה בלי שיפורי הזמנים - בלי מרוץ, בלי חיפוש מוקדם,
+# חשיבה רגילה בהבנה, תיקון כבר מ-5 שניות, ובלי מטמון. לשאלה אחת בלבד (contextvar) - לא משנה לאף אחד אחר.
+LEGACY: contextvars.ContextVar[bool] = contextvars.ContextVar("legacy", default=False)
+
+
+@contextlib.contextmanager
+def legacy_mode(on: bool):
+    token = LEGACY.set(bool(on))
+    try:
+        yield
+    finally:
+        LEGACY.reset(token)
 
 
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):

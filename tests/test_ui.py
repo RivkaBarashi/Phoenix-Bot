@@ -4,6 +4,7 @@
 """
 from pathlib import Path
 
+import json
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -22,7 +23,7 @@ def app(monkeypatch):
     monkeypatch.setattr(bot, "try_understand", lambda *args, **kwargs: None)
 
     def start(fake, dev: bool = False) -> AppTest:
-        monkeypatch.setattr(bot, "answer", lambda question, history=(), on_stage=None: fake(question))
+        monkeypatch.setattr(bot, "answer", lambda question, history=(), on_stage=None, cache=True: fake(question))
         at = AppTest.from_file(APP, default_timeout=120)
         if dev:
             at.query_params["dev"] = "1"
@@ -70,3 +71,23 @@ def test_clarification_has_a_pension_and_savings_button(app):
 
 
 real_answer = bot.answer  # לפני שהבדיקות מחליפות אותו: הודעה ארוכה ושאלת הבהרה לא קוראות ל-API
+
+
+def test_conversation_comes_back_after_refresh_and_numbers_are_hidden(app, monkeypatch):
+    """רענון: המזהה בכתובת (?c=...) מחזיר את השיחה מ-Upstash. בשמירה - מספר ארוך שהלקוחה כתבה מוסתר."""
+    from phoenix import store
+    earlier = [{"role": "user", "content": "שאלה קודמת"},
+               {"role": "assistant", "content": "תשובה קודמת", "sources": [["צור קשר", bot.CONTACT_URL]], "meta": {}}]
+    written = []
+    monkeypatch.setattr(store, "read", lambda *cmd: json.dumps(earlier, ensure_ascii=False)
+                        if cmd == ("GET", "conv:abcdef123456") else None)
+    monkeypatch.setattr(store, "write", lambda *commands, **kw: written.extend(commands))
+    monkeypatch.setattr(bot, "answer", lambda question, history=(), on_stage=None, cache=True: regular(question))
+    at = AppTest.from_file(APP, default_timeout=120)
+    at.query_params["c"] = "abcdef123456"
+    at.run()
+    assert [m["content"] for m in at.session_state["messages"]] == ["שאלה קודמת", "תשובה קודמת"]
+    assert at.session_state["messages"][1]["sources"] == [("צור קשר", bot.CONTACT_URL)]
+    at.chat_input[0].set_value("ת\"ז 123456789, איך מגישים תביעה בביטוח רכב?").run()
+    saved = json.loads(next(c for c in written if c[0] == "SET" and c[1] == "conv:abcdef123456")[2])
+    assert len(saved) == 4 and "123456789" not in saved[2]["content"] and "[מספר הוסתר]" in saved[2]["content"]

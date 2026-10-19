@@ -21,7 +21,7 @@ import time
 import httpx
 import numpy as np
 
-from . import bm25, config
+from . import bm25, config, store
 from .fallback import AllProvidersFailed, Provider, run_chain, time_left
 
 log = logging.getLogger("phoenix")
@@ -83,6 +83,8 @@ def _cached(name: str, call, max_docs: int | None = None, prepare=None):
         CACHE_HITS[name] += len(docs) - len(missing)
         if missing:
             API_REQUESTS[name] += 1
+            if name.startswith(("cohere:", "voyage:")):  # מכסה חודשית - מונה משותף לכל האתרים (Upstash)
+                store.count_call(name.split(":")[0])
             scores = call(query, [docs[i] for i in missing], len(missing), timeout)
             with _cache_lock:
                 for j, score in scores:

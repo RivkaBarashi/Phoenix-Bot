@@ -12,8 +12,11 @@
 שאלות המשך: השיחה עד עכשיו (בלי הודעת הפתיחה ובלי הודעות שגיאה) נשלחת לבוט עם כל שאלה. הבוט
 משתמש בה רק כשהשאלה תלויה בשיחה ("ותוך כמה זמן?") - ראו answer.needs_context.
 
-יומן ומשוב: כל שאלה נרשמת ב-logs/conversations.jsonl (report.py מסכם), ומתחת לכל תשובה 👍/👎 שנשמר
-ביומן. בתשובה אישית, "לא מופיע באתר" או תקלה - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
+יומן ומשוב: כל שאלה נרשמת ב-logs/conversations.jsonl, ובענן גם ב-Upstash - משותף לשני האתרים (report.py
+מסכם; --cloud - היומן שבענן). מתחת לכל תשובה 👍/👎 שנשמר ביומן.
+
+שמירת השיחה ברענון: לכל שיחה מזהה בכתובת (?c=...), והשיחה נשמרת ב-Upstash ל-24 שעות (מספרים ארוכים שהלקוחה
+כתבה - מוסתרים, כמו ביומן). רענון הדף - השיחה חוזרת. בלי Upstash - הבוט עובד כרגיל, רק בלי לשמור. בתשובה אישית, "לא מופיע באתר" או תקלה - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
 "פרטים טכניים" מתחת לכל תשובה (החלטה, ציון, מודל, זמנים) - רק במצב מפתחת: ?dev=1 בכתובת.
 
 שאלת הבהרה: שאלה על ביטוח בלי סוג ("איך מגישים תביעה?") מקבלת "על איזה ביטוח מדובר?" עם כפתורים.
@@ -24,6 +27,7 @@
 בלי שלבים; תשובה מהמטמון - בלי ניסוח ואימות. מעבר למודל גיבוי לא מוצג ללקוחה, רק ב"פרטים טכניים" וביומן.
 """
 import html
+import json
 import logging
 import os
 import re
@@ -35,7 +39,7 @@ from urllib.parse import quote
 import streamlit as st
 
 from phoenix import answer as bot
-from phoenix import bm25, config, conversation_log, embeddings, index, llm
+from phoenix import bm25, config, conversation_log, embeddings, index, llm, store
 
 log = logging.getLogger("phoenix.app")
 
@@ -161,7 +165,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
             "timings": a.timings, "question": question, "race": a.race, "pages": a.pages, "warning": a.warning,
-            "early_search": a.early_search,
+            "early_search": a.early_search, "cached": a.cached,
             "understanding": a.understanding, "more_questions": a.more_questions,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
@@ -261,9 +265,45 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
                 st.caption(EARLY_SEARCH[meta["early_search"]])
             if meta.get("standalone"):
                 st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
+            if meta.get("cached"):
+                st.caption("התשובה מהמטמון של התשובות המאומתות")
             if meta.get("timings"):
                 st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
                                                   for k, v in meta["timings"].items()))
+            # שורה אחת לקריאה במכונה - הבדיקה בדפדפן (e2e_cloud.py) קוראת ממנה החלטה, מודל וזמנים
+            st.caption("META " + json.dumps({k: meta.get(k) for k in DEV_META}, ensure_ascii=False))
+
+
+DEV_META = ("kind", "reason", "llm", "reranker", "top_score", "timings", "early_search", "cached", "race")
+CONVERSATION_TTL = 24 * 3600
+CONVERSATION_ID = re.compile(r"[0-9a-f]{12}")
+
+
+def conversation_id() -> str:
+    """מזהה השיחה בכתובת (?c=...): רענון הדף שומר את הכתובת, ולפיה השיחה חוזרת מ-Upstash."""
+    cid = st.query_params.get("c", "")
+    if not CONVERSATION_ID.fullmatch(cid):
+        cid = uuid.uuid4().hex[:12]
+        st.query_params["c"] = cid
+    return cid
+
+
+def restore_conversation(cid: str) -> list[dict]:
+    raw = store.read("GET", f"conv:{cid}")
+    try:
+        messages = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    for m in messages:  # JSON מחזיר רשימות במקום זוגות - המקורות חוזרים לזוגות (שם, כתובת)
+        m["sources"] = [tuple(source) for source in m.get("sources") or []]
+    return messages
+
+
+def save_conversation(cid: str, messages: list[dict]):
+    """ברקע. בהודעות של הלקוחה מספרים ארוכים (ת"ז, פוליסה, טלפון) מוסתרים - כמו ביומן."""
+    saved = [m | {"content": conversation_log.hide_numbers(m["content"])} if m["role"] == "user" else m
+             for m in messages]
+    store.write(["SET", f"conv:{cid}", json.dumps(saved, ensure_ascii=False, default=str), "EX", CONVERSATION_TTL])
 
 
 def dev_mode() -> bool:
@@ -332,13 +372,17 @@ def ask_other_type(original: str):
 def new_chat():
     st.session_state.messages = []
     st.session_state.pop("awaiting_type", None)
+    st.session_state.session_id = uuid.uuid4().hex[:12]  # שיחה חדשה - מזהה חדש בכתובת
+    st.query_params["c"] = st.session_state.session_id
 
 
 def main():
     st.set_page_config(page_title="הבוט של אתר הפניקס", page_icon="💬", layout="centered")
     st.markdown(RTL_CSS, unsafe_allow_html=True)
+    if "session_id" not in st.session_state:  # כניסה ראשונה או רענון: המזהה מהכתובת, והשיחה - מ-Upstash
+        st.session_state.session_id = conversation_id()  # מזהה אנונימי של השיחה - ליומן ולשמירה
+        st.session_state.messages = restore_conversation(st.session_state.session_id)
     st.session_state.setdefault("messages", [])
-    st.session_state.setdefault("session_id", uuid.uuid4().hex[:8])  # מזהה אנונימי של השיחה, ליומן
 
     title_col, button_col = st.columns([4, 1], vertical_alignment="bottom")
     title_col.title("שאלו את הבוט של הפניקס")
@@ -380,17 +424,22 @@ def main():
             session = st.session_state.session_id
             try:
                 history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
-                result = bot.answer(question, history, on_stage=partial(show_stage, status))
+                # מצב מפתחת: בלי מטמון (מודדים את הבוט); ?legacy=1 - בלי שיפורי הזמנים, למדידת "לפני"
+                with config.legacy_mode(dev_mode() and st.query_params.get("legacy") == "1"):
+                    result = bot.answer(question, history, on_stage=partial(show_stage, status), cache=not dev_mode())
                 reply = message_from_answer(result, question)
                 reply["handoff"] = handoff_for(reply, st.session_state.messages)
-                reply["id"] = conversation_log.log_answer(session, question, result, handoff=bool(reply["handoff"]),
-                                                          race=result.race, early_search=result.early_search)
+                reply["id"] = conversation_log.log_answer(
+                    session, question, result, handoff=bool(reply["handoff"]), race=result.race,
+                    early_search=result.early_search, cached=result.cached,
+                    legacy=dev_mode() and st.query_params.get("legacy") == "1")
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__, question)
                 reply["handoff"] = handoff_for(reply, st.session_state.messages)
                 reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
             st.session_state.messages.append(reply)
+            save_conversation(session, st.session_state.messages)
             with status.container():  # התשובה במקום החיווי: מבנה כמו בהיסטוריה, בלי רכיב כפול בשאלה הבאה
                 render_body(reply, stream=True, last=True)
 

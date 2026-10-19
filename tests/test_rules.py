@@ -1143,3 +1143,93 @@ def test_voyage_busy_moves_on_without_waiting(monkeypatch):
     with fallback.time_budget(15), pytest.raises(rerank.VoyageBusy) as busy:
         call("שאלה", ["קטע " * 300], 1)
     assert fallback.classify(busy.value) == fallback.RATE_LIMIT and 50 < fallback.retry_after(busy.value) <= 60
+
+
+# ---------------------------------------------------------------- ענן: Upstash, מטמון תשובות מאומתות, אינדקס
+def test_store_without_upstash_does_nothing(monkeypatch):
+    from phoenix import store
+    assert not store.enabled() and store.read("GET", "x") is None and store.calls_this_month() is None
+    store.write(["SET", "x", "1"])  # לא זורק
+
+
+def test_store_failure_pauses_instead_of_slowing_every_question(monkeypatch):
+    from phoenix import store
+    monkeypatch.setattr(store, "URL", "https://upstash.example")
+    monkeypatch.setattr(store, "TOKEN", "t")
+    monkeypatch.setattr(store, "_paused_until", 0.0)
+    assert store.read("GET", "x") is None   # httpx חסום בבדיקות = Upstash לא זמין
+    assert not store.enabled()              # דקה בלי לנסות - בלי עיכוב בשאלות הבאות
+
+
+def test_cache_key_has_the_index_and_code_versions():
+    from phoenix import answer_cache
+    key = answer_cache.key("מה זה השתתפות עצמית?")
+    assert key == answer_cache.key("  מה זה   השתתפות עצמית ") and key.startswith("ans:")
+    assert answer_cache.index_version() in key and answer_cache.code_version() in key
+
+
+def cache_world(monkeypatch, verdict: dict):
+    """הבנה שמחזירה שאלה עצמאית, חיפוש וזוג מודלים מזויפים, ומטמון בזיכרון."""
+    from phoenix import answer_cache
+    from phoenix.understand import Understanding
+    saved, reads = {}, []
+    monkeypatch.setattr(answer_cache, "get", lambda q: reads.append(q) or saved.get(q))
+    monkeypatch.setattr(answer_cache, "put", lambda q, record: saved.__setitem__(q, record))
+    monkeypatch.setattr(A, "try_understand", lambda q, h: Understanding(q, "info", True, False, "רכב", None, "he", [q],
+                                                                     "model", "gemini:x"))
+    monkeypatch.setattr(A, "search", lambda query, k=5, **kwargs: RACE_HIT)
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, verdict), "gemini:b#2": (0.0, verdict), "chain": (0.0, verdict)})
+    return saved, reads
+
+
+def test_verified_answer_is_cached_and_served_from_the_cache(monkeypatch):
+    saved, reads = cache_world(monkeypatch, VALID)
+    first = A.answer(REGULAR)
+    assert first.kind == "answer" and not first.cached and REGULAR in saved
+    second = A.answer(REGULAR)
+    assert second.cached and second.text == first.text and second.sources == first.sources
+
+
+def test_only_verified_answers_are_cached(monkeypatch):
+    saved, _ = cache_world(monkeypatch, VALID | {"evidence": ["ציטוט שלא מופיע בקטע"]})  # נפסלת
+    assert A.answer(REGULAR).kind != "answer" and saved == {}
+
+
+def test_dev_mode_and_follow_ups_do_not_read_the_cache(monkeypatch):
+    saved, reads = cache_world(monkeypatch, VALID)
+    saved[REGULAR] = {"text": "ישן", "kind": "answer", "reason": "verified", "sources": [], "top_score": 0.9,
+                      "reranker": "cohere:x", "llm": "x", "question": REGULAR}
+    assert not A.answer(REGULAR, cache=False).cached and reads == []        # מצב מפתחת
+    with __import__("phoenix.config", fromlist=["x"]).legacy_mode(True):
+        assert not A.answer(REGULAR).cached and reads == []                 # מדידת "לפני"
+
+
+def test_legacy_mode_turns_the_timing_changes_off(monkeypatch):
+    from phoenix import config, understand
+    seen = {}
+    monkeypatch.setattr(understand.llm, "chat", lambda messages, **kw: seen.update(kw) or (_ for _ in ()).throw(
+        fallback.AllProvidersFailed("llm", ["down"])))
+    with config.legacy_mode(True):
+        understand.try_understand("שאלה")
+        assert A.start_early_search(REGULAR, []) is not None  # הפונקציה עצמה לא יודעת; answer() לא קורא לה
+    assert seen["low_thinking"] is False and not config.LEGACY.get()
+
+
+def test_the_index_in_git_is_opened_as_a_copy():
+    """Chroma כותב ל-chroma.sqlite3 בכל פתיחה - בקריאה נפתח עותק, כך שהקבצים שב-Git לא משתנים."""
+    from phoenix import config, index
+    assert not index.WRITE
+    path = index.db()._system.settings.persist_directory
+    assert __import__("pathlib").Path(path).resolve() != config.CHROMA_DIR.resolve()
+
+
+def test_log_lines_go_to_the_shared_cloud_log_with_the_site(monkeypatch, tmp_path):
+    from phoenix import config, conversation_log, store
+    sent, real = [], tmp_path / "conversations.jsonl"
+    monkeypatch.setattr(store, "write", lambda *commands, **kw: sent.extend(commands))
+    monkeypatch.setattr(conversation_log, "LOG_FILE", real)  # לא לכתוב ליומן האמיתי
+    conversation_log._append({"type": "answer", "id": "1"}, path=real)
+    assert sent and sent[0][:2] == ["RPUSH", "log"] and json.loads(sent[0][2])["site"] == config.SITE
+    sent.clear()
+    conversation_log._append({"type": "answer", "id": "2"}, path=tmp_path / "test.jsonl")  # יומן בדיקות - לא לענן
+    assert sent == []

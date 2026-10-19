@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
-from . import bm25, config, llm
+from . import answer_cache, bm25, config, llm
 from .chunk import CHUNKS_FILE, SENTENCE_END
 from .fallback import AllProvidersFailed, OutOfTime, time_budget, time_left
 from .search import Hit, SearchResult, search
@@ -236,6 +236,7 @@ class Answer:
     warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
     early_search: str = ""    # החיפוש המוקדם (במקביל להבנה): reused / redone, או "" כשלא היה - ליומן ולמצב מפתחת
+    cached: bool = False      # התשובה מהמטמון של התשובות המאומתות (answer_cache) - למצב מפתחת וליומן
     repaired: str = ""         # התשובה עברה רק אחרי ניסיון תיקון - הסיבה לפסילה הראשונה (ליומן ולבדיקות)
     understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
     more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
@@ -758,7 +759,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         if not outcome.reason.startswith(REPAIRABLE):
             return outcome
         left = time_left()
-        if outcome.raw is None or (left is not None and left < MIN_REPAIR_SECONDS):
+        min_repair = 5 if config.LEGACY.get() else MIN_REPAIR_SECONDS  # מדידת "לפני": כמו לפני סעיף 6ד
+        if outcome.raw is None or (left is not None and left < min_repair):
             return unverified(outcome)
         if on_stage:
             on_stage("compose")
@@ -852,11 +854,25 @@ def searched(query: str, early: EarlySearch | None, on_stage=None) -> tuple[Sear
     return search(query, k=CONTEXT_CHUNKS, on_stage=on_stage), "redone"
 
 
-def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
+def _cache_record(a: Answer) -> dict:
+    return {"text": a.text, "kind": a.kind, "reason": a.reason, "sources": a.sources, "top_score": a.top_score,
+            "reranker": a.reranker, "llm": a.llm, "question": a.question, "pages": a.pages,
+            "titles": {h.url: h.title for h in a.hits}}
+
+
+def _from_cache(record: dict, understanding: dict) -> Answer:
+    hits = [Hit("", url, title, "", "") for url, title in record.get("titles", {}).items()]  # שמות העמודים לקישורים
+    return Answer(record["text"], record["kind"], record["reason"], record["sources"], record["top_score"],
+                  record["reranker"], record["llm"], record["question"], hits, pages=record.get("pages", 0),
+                  understanding=understanding, cached=True)
+
+
+def answer(question: str, history: list[dict] = (), on_stage=None, cache: bool = True) -> Answer:
     """history: [{"role": "user" | "assistant", "content": "..."}] - השיחה עד עכשיו.
     "המודל מבין, הקוד מאמת": קריאה אחת בהתחלה (understand.py) מחליטה אם זו שאלת המשך או נושא חדש, אם היא
     אישית, אם צריך לשאול על איזה ביטוח, ואם היא קשורה בכלל - וגם מנסחת אותה כשאלה עצמאית לחיפוש. החיפוש, הסף,
     מודל התשובה והבדיקות אחריו לא משתנים. אם הקריאה נכשלת - כללי הקוד (_answer_by_rules), כמו קודם.
+    cache: לקרוא ממטמון התשובות המאומתות (answer_cache). במצב מפתחת - False: מודדים את הבוט, לא את המטמון.
     on_stage(stage, **info): חיווי שלבים בצ'אט - understand, search, rerank (pages=N), compose, verify, או
     below_threshold. ברכה והודעה ארוכה מדי - בלי שלבים; תשובה מהמטמון - בלי compose ו-verify (החיפוש רץ קודם:
     המפתח של המטמון כולל את הקטעים שנמצאו). בלי on_stage שום דבר לא משתנה."""
@@ -871,11 +887,12 @@ def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
     with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
         if on_stage:
             on_stage("understand")
-        early = start_early_search(question, history)  # החיפוש מתחיל כבר עכשיו, במקביל להבנה
+        legacy = config.LEGACY.get()  # מדידת "לפני": בלי חיפוש מוקדם, בלי מרוץ ובלי מטמון
+        early = None if legacy else start_early_search(question, history)  # החיפוש מתחיל כבר עכשיו, במקביל להבנה
         understood = try_understand(question, history)
         understand_s = time.perf_counter() - start
         if understood:
-            result = _answer_understood(question, history, understood, on_stage, early)
+            result = _answer_understood(question, history, understood, on_stage, early, cache and not legacy)
         else:
             result = _answer_by_rules(question, history, on_stage, early)
     result.timings["understand"] = understand_s
@@ -892,7 +909,7 @@ def understanding_record(u: Understanding) -> dict:
 
 
 def _answer_understood(question: str, history: list[dict], u: Understanding, on_stage=None,
-                       early: EarlySearch | None = None) -> Answer:
+                       early: EarlySearch | None = None, cache: bool = False) -> Answer:
     record = understanding_record(u)
     if u.intent in ("greeting", "thanks"):  # ברכה עם עוד מילים ("היי, מה קורה איתכם?")
         return Answer(THANKS_REPLY if u.intent == "thanks" else GREETING_REPLY, "greeting", f"understand_{u.intent}",
@@ -907,14 +924,20 @@ def _answer_understood(question: str, history: list[dict], u: Understanding, on_
     # נושא חדש - מודל התשובה לא רואה את השיחה הקודמת; המשך - רואה אותה (רק כדי להבין, כלל 8)
     context = [] if u.topic_changed else history
     standalone = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
+    # מטמון: רק שאלה שלא תלויה בשיחה, עם שאלה אחת בהודעה. קריאה - לא במצב מפתחת; שמירה - רק תשובה מאומתת.
+    cacheable = not context and len(u.sub_questions) <= 1 and not config.LEGACY.get()
+    if cacheable and cache and (hit := answer_cache.get(standalone)):
+        return _from_cache(hit, record)
     if on_stage:
         on_stage("search")
     found, how = searched(standalone, early, on_stage)
-    result = respond(question, found, context, standalone=standalone, parallel=config.PARALLEL_LLM,
-                     on_stage=on_stage, understanding=u)
+    result = respond(question, found, context, standalone=standalone,
+                     parallel=config.PARALLEL_LLM and not config.LEGACY.get(), on_stage=on_stage, understanding=u)
     result.early_search = how
     result.understanding = record
     result.more_questions = u.sub_questions[1:]
+    if cacheable and (result.kind, result.reason) == ("answer", "verified"):
+        answer_cache.put(standalone, _cache_record(result))
     return result
 
 
@@ -941,8 +964,8 @@ def _answer_by_rules(question: str, history: list[dict], on_stage=None, early: E
         standalone = with_insurance_type(standalone, known_type)
     condense = time.perf_counter() - start
     found, how = searched(standalone, early, on_stage)
-    result = respond(question, found, context, standalone=standalone, parallel=config.PARALLEL_LLM,
-                     on_stage=on_stage)
+    result = respond(question, found, context, standalone=standalone,
+                     parallel=config.PARALLEL_LLM and not config.LEGACY.get(), on_stage=on_stage)
     result.early_search = how
     if context:
         result.timings["condense"] = condense

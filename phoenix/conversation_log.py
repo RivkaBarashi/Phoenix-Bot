@@ -1,4 +1,5 @@
-"""יומן השיחות של הצ'אט: logs/conversations.jsonl (לא נכנס ל-Git).
+"""יומן השיחות של הצ'אט: logs/conversations.jsonl (לא נכנס ל-Git), ובענן - גם ב-Upstash (store.py, הרשימה log),
+משותף לשני האתרים: הדיסק בענן נמחק בכל הפעלה מחדש. כל שורה עם site - מאיזה אתר (config.SITE).
 
 כל שאלה = שורה אחת (type "answer"): השאלה, השאלה העצמאית (בשאלת המשך), ההחלטה וסיבתה, ציון ה-Rerank,
 המקורות, המודל, הזמנים והתשובה שהוצגה. משוב (👍/👎) נכתב כשורה נפרדת (type "feedback") עם אותו id -
@@ -15,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import config
+from . import config, store
 
 # CONVERSATION_LOG: קובץ אחר (לבדיקות - כדי לא לערבב שאלות בדיקה עם שיחות אמיתיות)
 LOG_FILE = Path(os.getenv("CONVERSATION_LOG") or config.ROOT / "logs" / "conversations.jsonl")
@@ -30,6 +31,9 @@ def hide_numbers(text: str) -> str:
 
 
 def _append(record: dict, path: Path = LOG_FILE):
+    record = record | {"site": config.SITE}
+    if path == LOG_FILE:  # יומן הבדיקות (קובץ אחר) לא נשלח לענן
+        store.write(["RPUSH", "log", json.dumps(record, ensure_ascii=False)])
     try:
         with _lock:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,12 +68,16 @@ def log_feedback(entry_id: str, feedback: str | None):
     _append({"type": "feedback", "id": entry_id, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "feedback": feedback})
 
 
-def read_log(path: Path = LOG_FILE) -> list[dict]:
-    """שורות התשובה, כל אחת עם המשוב האחרון שלה (או None)."""
+def read_log(path: Path = LOG_FILE, cloud: bool = False) -> list[dict]:
+    """שורות התשובה, כל אחת עם המשוב האחרון שלה (או None). cloud=True - היומן המשותף ב-Upstash (שני האתרים)."""
     answers, feedback = {}, {}
-    if not path.exists():
+    if cloud:
+        lines = store.read("LRANGE", "log", 0, -1) or []
+    elif path.exists():
+        lines = open(path, encoding="utf-8")
+    else:
         return []
-    for line in open(path, encoding="utf-8"):
+    for line in lines:
         try:
             record = json.loads(line)
         except ValueError:

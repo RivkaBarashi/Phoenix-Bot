@@ -39,7 +39,7 @@ def main():
     for label, question, expected in CASES:
         start = time.perf_counter()
         try:
-            a = answer(question)
+            a = answer(question, cache=False)  # הבוט עצמו, לא מטמון התשובות (Upstash)
             got, detail, text = a.kind, f"{a.reason} | {llm.describe(a.llm)}", a.text
         except Exception as exc:  # בדיקת עשן מדווחת על תקלה, היא לא קורסת בגללה
             got, detail, text = "exception", f"{type(exc).__name__}: {exc}", ""

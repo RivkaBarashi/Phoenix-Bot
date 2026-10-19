@@ -137,7 +137,8 @@ def understand(question: str, history: list[dict] = ()) -> Understanding:
     והקוד עובר לכללים (שנבדקו על כל קובץ השאלות), ולא למודל גיבוי חלש: איכות לפני מהירות."""
     names = [p.name for name in config.UNDERSTAND_LLMS for p in llm.PROVIDERS if p.group == f"gemini:{name}"]
     reply = llm.chat([{"role": "user", "content": _message(question, list(history))}], system=UNDERSTAND_PROMPT,
-                     temperature=0, json_mode=True, parse=parse_understanding, names=names, low_thinking=True)
+                     temperature=0, json_mode=True, parse=parse_understanding, names=names,
+                     low_thinking=not config.LEGACY.get())  # מדידת "לפני" - חשיבה רגילה, כמו לפני סעיף 6ג
     return Understanding(**reply.data, source="model", llm=reply.provider)
 
 
