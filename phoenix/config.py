@@ -44,9 +44,8 @@ LLM_CHAIN = [
     ("gemini", "gemini-3.6-flash"),
     ("gemini", "gemini-3.7-flash"),
     ("gemini", "gemini-3.8-flash"),
-    ("gemini", "gemini-3.5-flash-lite"),
-    ("gemini", "gemini-3.1-flash-lite"),
-    ("gemini", "gemma-4-26b-a4b-it"),
+    # בלי Flash-Lite ו-Gemma: איכות לפני מהירות (19/10, בעומס: Flash-Lite ענה בטלפון של מוקד אחר ונתן "המלצה").
+    # כשכל מודלי ה-Flash לא זמינים - הודעת התקלה עם ההפניה, ולא תשובה ממודל חלש.
     # Groq: 1,000 בקשות ביום, אבל עד 8K טוקנים לדקה - מקבל הקשר מקוצר (answer.py)
     ("groq", "openai/gpt-oss-120b"),
     # OpenRouter: 50 בקשות ביום לכל המודלים החינמיים יחד

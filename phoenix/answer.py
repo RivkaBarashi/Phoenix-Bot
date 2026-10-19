@@ -35,7 +35,9 @@ CONTEXT_CHUNKS = 5
 # Gemini מקבל 5 קטעים מלאים (~11K טוקנים). שאר המודלים הם גיבוי עם מגבלת גודל בקשה
 # (Groq בחינם: ~8K טוקנים, החזיר 413) - הם מקבלים 3 קטעים מקוצרים: השורות שהכי קשורות לשאלה.
 FULL_CONTEXT_LLMS = ["gemini"]
-COMPACT_LLMS = ["groq", "openrouter"]
+# תשובה ללקוחה - רק ממודל חזק (Gemini Flash). Groq/OpenRouter עונים מ-3 קטעים מקוצרים (מגבלת הטוקנים שלהם), ובבדיקה
+# רק עליהם עברו 3/5 - לכן הם לא כותבים תשובות. הם נשארו בשרשרת לשופט בבדיקות ולשלב ההבנה (סיווג, לא טקסט ללקוחה).
+COMPACT_LLMS: list[str] = []
 COMPACT_CHUNKS, COMPACT_CHARS = 3, 1500
 CONTACT_URL = "https://www.fnx.co.il/customer-service/contact-us/"
 KINDS = {"answer", "not_on_site", "personal", "off_topic"}
@@ -339,7 +341,8 @@ def no_yes_no_opening(answer_text: str, texts: list[str]) -> tuple[str, str]:
     if not YES_NO_START.match(answer_text):
         return answer_text, ""
     try:
-        rephrased = llm.chat([{"role": "user", "content": answer_text}], system=REPHRASE_PROMPT, temperature=0).text.strip()
+        rephrased = llm.chat([{"role": "user", "content": answer_text}], system=REPHRASE_PROMPT, temperature=0,
+                             only=FULL_CONTEXT_LLMS).text.strip()  # טקסט ללקוחה - רק ממודל חזק
         if rephrased and not YES_NO_START.match(rephrased) and not unsupported_numbers(rephrased, texts):
             return rephrased, "rephrased"
     except AllProvidersFailed:
@@ -551,6 +554,8 @@ def _ask_model(question: str, standalone: str, history: list[dict], hits: list[H
     try:
         return ask(hits, FULL_CONTEXT_LLMS)
     except AllProvidersFailed:
+        if not COMPACT_LLMS:  # בלי גיבויים - הודעת התקלה הקיימת (respond)
+            raise
         compact = [replace(h, text=focus(h.text, standalone, COMPACT_CHARS)) for h in hits[:COMPACT_CHUNKS]]
         return ask(compact, COMPACT_LLMS)
 

@@ -977,3 +977,20 @@ def test_personal_wording_fits_any_personal_question():
         assert "פוליס" not in text and "באזור האישי" in text
         assert all(word in text for word in ("כיסוי", "יתרה", "מצב תביעה"))
     assert " ".join(A.PERSONAL_OPENING.split()) in " ".join(A.SYSTEM_PROMPT.split())  # כלל 3 בהוראות - אותה פתיחה
+
+
+# ---------------------------------------------------------------- איכות לפני מהירות: תשובות רק ממודל חזק
+def test_answers_come_only_from_strong_models(monkeypatch):
+    """בלי Flash-Lite ו-Gemma בשרשרת; כש-Gemini Flash לא זמין - הודעת התקלה עם ההפניה, לא מודל גיבוי."""
+    from phoenix import config
+    assert not any("lite" in m or "gemma" in m for p, m in config.LLM_CHAIN if p == "gemini")
+    asked = []
+
+    def chat(messages, only=None, **kwargs):
+        asked.append(only)
+        raise fallback.AllProvidersFailed("llm", ["gemini overloaded"])
+    monkeypatch.setattr(llm, "chat", chat)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    a = A.respond("איך מגישים תביעה?", RACE_HIT)
+    assert (a.kind, a.reason) == ("error", "llm_unavailable") and "054-9893455" in a.text
+    assert asked == [["gemini"]]  # רק Gemini - שום ניסיון אצל Groq/OpenRouter
