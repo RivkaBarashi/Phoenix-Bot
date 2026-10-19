@@ -30,6 +30,7 @@ from phoenix import config, embeddings, eval_history, llm, stats, usage
 from phoenix.answer import respond
 from phoenix.fallback import CALLS, FAILED, AllProvidersFailed
 from phoenix.search import RRF_K, SearchResult
+from phoenix.understand import UNDERSTAND_PROMPT
 
 PAUSE = 6.5  # בין שאלות: Rerank של Cohere (10 בדקה) ומודל השפה החינמי
 THRESHOLDS = [0.70, 0.75, 0.80, 0.82, 0.85, 0.88, 0.90, 0.92]
@@ -78,23 +79,32 @@ def judge(question: str, expected: str, got: str, personal: bool = False) -> tup
         return "n/a", "השופט לא זמין"
 
 
-def pin_llm(model: str) -> list[str]:
-    """--llm: כל הקריאות של הבוט (תשובה, בדיקת נושא) רק למודל Gemini הזה - בכל המפתחות שלו לפי הסדר (מאגר
-    המפתחות), ובלי גיבוי למודל אחר: נגמרה המכסה בכל המפתחות - 3 כישלונות ברצף והריצה נעצרת. השופט לא מושפע
-    (מזוהה לפי ההוראות שלו - הגיבוי של הבוט מבקש את אותם ספקים). בלי מטמון: יש בו תשובות של מודלים אחרים."""
-    pinned = [p.name for p in llm.PROVIDERS if p.group == f"gemini:{model}" and p.enabled]
-    if not pinned:
-        sys.exit(f"--llm {model}: אין מודל Gemini כזה בשרשרת (config.LLM_CHAIN), או שאין לו מפתח")
+def pin_models(understand: str | None, answer: str | None) -> dict[str, list[str]]:
+    """כל שלב על מודל Gemini קבוע משלו, כמו בצ'אט: --llm-understand להבנת השאלה, --llm-answer לתשובה (וגם לניסיון
+    התיקון ולניסוח מחדש). בכל המפתחות של המודל לפי הסדר, ובלי גיבוי למודל אחר: נגמרה המכסה בכל המפתחות - 3 כישלונות
+    ברצף והריצה נעצרת. השופט לא מושפע (מזוהה לפי ההוראות שלו). תשובות - בלי מטמון (יש בו תשובות של מודלים אחרים);
+    הבנת השאלה - מותר מהמטמון: אותו סיווג, וכך השוואה בין מודלי תשובה לא שורפת פעמיים את מכסת ההבנה."""
+    def keys_of(model: str) -> list[str]:
+        found = [p.name for p in llm.PROVIDERS if p.group == f"gemini:{model}" and p.enabled]
+        if not found:
+            sys.exit(f"{model}: אין מודל Gemini כזה בשרשרת (config.LLM_CHAIN), או שאין לו מפתח")
+        return found
+
+    pins = {"understand": keys_of(understand) if understand else [], "answer": keys_of(answer) if answer else []}
     chat = llm.chat
 
-    def pinned_chat(messages, *args, names=None, **kwargs):
-        if kwargs.get("system") in (JUDGE_PROMPT, PERSONAL_JUDGE_PROMPT):
-            return chat(messages, *args, names=names, **kwargs)
-        return chat(messages, *args, names=pinned, **kwargs)
+    def pinned_chat(messages, *args, names=None, cache=True, **kwargs):
+        system = kwargs.get("system")
+        if system in (JUDGE_PROMPT, PERSONAL_JUDGE_PROMPT):
+            return chat(messages, *args, names=names, cache=cache, **kwargs)
+        if system == UNDERSTAND_PROMPT:
+            return chat(messages, *args, names=pins["understand"] or names, cache=cache, **kwargs)
+        if pins["answer"]:
+            return chat(messages, *args, names=pins["answer"], cache=False, **kwargs)
+        return chat(messages, *args, names=names, cache=cache, **kwargs)
 
     llm.chat = pinned_chat
-    llm.CACHE_MODE = "write"
-    return pinned
+    return pins
 
 
 # סימנים לכך שההוראות או מבנה התשובה דלפו החוצה
@@ -289,14 +299,16 @@ def main():
     parser.add_argument("--fresh", action="store_true", help="לשאול את המודלים מחדש, בלי המטמון")
     parser.add_argument("--reranker", default="cohere", choices=list(config.RERANK_THRESHOLDS),
                         help="המדרג שנבדק, עם הסף שלו (local - לכיול המדרג המקומי)")
-    parser.add_argument("--llm", help="מודל Gemini אחד קבוע לבוט, בכל המפתחות ובלי גיבוי (למשל gemini-3.6-flash). "
-                                      "השופט נשאר Groq/OpenRouter. כולל --fresh")
+    parser.add_argument("--llm", help="מודל Gemini אחד קבוע לכל השלבים (למשל gemini-3.6-flash) - קיצור לשני הבאים")
+    parser.add_argument("--llm-understand", help="מודל קבוע להבנת השאלה, בכל המפתחות ובלי גיבוי (למשל gemini-3.8-flash)")
+    parser.add_argument("--llm-answer", help="מודל קבוע לתשובה (ולתיקון), בכל המפתחות, בלי גיבוי ובלי מטמון")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # התקדמות גלויה גם כשהפלט לקובץ
     config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
     if args.fresh:
         llm.CACHE_MODE = "write"
-    pinned = pin_llm(args.llm) if args.llm else []
+    understand_model, answer_model = args.llm_understand or args.llm, args.llm_answer or args.llm
+    pins = pin_models(understand_model, answer_model) if understand_model or answer_model else {}
     eval_retrieval.RERANKER = args.reranker  # run_search מדרג רק בו
     config.RERANK_THRESHOLD = config.RERANK_THRESHOLDS[args.reranker]  # "הסף הנוכחי" בכל הדוח
     THRESHOLDS[:] = THRESHOLD_GRIDS[args.reranker]
@@ -305,9 +317,11 @@ def main():
     version = hashlib.sha1(answer_layer.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
     print(f"אינדקס: {args.index} | Rerank: {args.reranker} | סף נוכחי: {config.RERANK_THRESHOLD} | "
           f"{len(selected)} שאלות מ-{Path(args.questions).name} | גרסת הוראות {version} | "
-          f"מטמון: {'בלי (--fresh)' if args.fresh else 'בלי (--llm)' if pinned else 'כן'}")
-    if pinned:
-        print(f"מודל קבוע: {args.llm}, מפתחות {', '.join(name.split('#')[1] for name in pinned)} - בלי גיבוי למודל אחר")
+          f"מטמון: {'בלי (--fresh)' if args.fresh else 'בלי, לתשובות (מודל קבוע)' if pins.get('answer') else 'כן'}")
+    for stage, model in (("הבנת השאלה", understand_model), ("תשובה", answer_model)):
+        if model:
+            keys = ", ".join(name.split("#")[1] for name in pins["understand" if stage == "הבנת השאלה" else "answer"])
+            print(f"מודל קבוע ל{stage}: {model}, מפתחות {keys} - בלי גיבוי למודל אחר")
 
     records = []
     streak, stopped = FailureStreak(), False
