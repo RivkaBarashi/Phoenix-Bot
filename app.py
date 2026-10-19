@@ -50,7 +50,9 @@ WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה 
            "אין לי גישה למידע האישי שלכם (כיסוי, יתרה או תביעות). אפשר לשאול למשל:")
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
 STAGE_NAMES = {"understand": "הבנת השאלה", "condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
-               "llm": "מודל", "total": "סה\"כ"}
+               "search_wait": "המתנה לחיפוש המוקדם", "llm": "מודל", "repair": "תיקון", "total": "סה\"כ"}
+EARLY_SEARCH = {"reused": "החיפוש המוקדם (במקביל להבנה) שימש לתשובה",
+                "redone": "הניסוח העצמאי שונה מהותית - חיפוש שני עליו"}
 # החיווי בשלבים: שורה ראשית ללקוחה, ומתחתיה המונח המקצועי באפור. pages = כמה עמודים שונים נמצאו בחיפוש.
 STAGE_LINES = {
     "understand": ("💭 קורא את השאלה...", "הבנת השאלה: מודל שפה"),
@@ -159,6 +161,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
             "timings": a.timings, "question": question, "race": a.race, "pages": a.pages, "warning": a.warning,
+            "early_search": a.early_search,
             "understanding": a.understanding, "more_questions": a.more_questions,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
@@ -254,6 +257,8 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
                 st.caption(f"⚠️ {meta['warning']}")
             if meta.get("race"):  # בקשות במקביל ומעבר לגיבוי - רק כאן וביומן, לא ללקוחה
                 st.caption(f"{meta['race']} · ענה: {llm.describe(meta['llm'])}")
+            if meta.get("early_search"):
+                st.caption(EARLY_SEARCH[meta["early_search"]])
             if meta.get("standalone"):
                 st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
             if meta.get("timings"):
@@ -379,7 +384,7 @@ def main():
                 reply = message_from_answer(result, question)
                 reply["handoff"] = handoff_for(reply, st.session_state.messages)
                 reply["id"] = conversation_log.log_answer(session, question, result, handoff=bool(reply["handoff"]),
-                                                          race=result.race)
+                                                          race=result.race, early_search=result.early_search)
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__, question)

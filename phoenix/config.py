@@ -101,9 +101,19 @@ QUERY_MAX_WAIT = 0.0
 # זמן כולל לשאלה אחת בצ'אט - כל השלבים יחד (השלמת שאלת המשך, חיפוש, Rerank, מודל). כל ניסיון אצל ספק מקבל
 # רק את מה שנשאר; כשנשארות פחות מ-3 שניות - הודעה ידידותית, בלי ניסיון נוסף. (הבדיקות לא מוגבלות.)
 QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
-# בצ'אט: true - כל שאלה נשלחת במקביל לשני מודלי Gemini שונים (במפתחות שונים), והתשובה הראשונה שעוברת את כל
-# הבדיקות מוצגת. כבוי כברירת מחדל: במדידה זה לא קיצר זמנים, ושורף כפול מכסה. הבדיקות (eval) תמיד מודל אחד.
-PARALLEL_LLM = os.getenv("PARALLEL_LLM", "false").strip().lower() in ("1", "true", "yes", "on")
+# 20 השניות הן מגבלה קשיחה. בצ'אט כל שאלה נשלחת במקביל לשני מודלי Flash חזקים (RACE_LLMS, כל אחד במפתח אחר),
+# והתשובה הראשונה שעוברת את כל הבדיקות מוצגת - מודל עמוס או איטי לא מעכב את התשובה. שורף כפול מכסה בשלב
+# התשובה. מודל מהזוג לא זמין - הבא בתור מ-LLM_CHAIN. הבדיקות (eval) תמיד מודל אחד.
+PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true", "yes", "on")
+RACE_LLMS = [m.strip() for m in os.getenv("RACE_LLMS", "gemini-3.6-flash,gemini-3.8-flash").split(",") if m.strip()]
+# בצ'אט: החיפוש על השאלה כמו שנכתבה מתחיל במקביל להבנת השאלה. ניסוח עצמאי שונה מהותית (פחות מ-70% מילים
+# משותפות, סוג ביטוח אחר, שאלה מפוצלת, תרגום) - מחפשים שוב עליו. שאלת המשך שתלויה בשיחה - בלי חיפוש מוקדם.
+PARALLEL_SEARCH = os.getenv("PARALLEL_SEARCH", "true").strip().lower() in ("1", "true", "yes", "on")
+SAME_SEARCH_JACCARD = 0.7
+# חשיבה: הרמה הנמוכה ביותר שכל מודל מקבל (נבדק 20/10: 3.6 - MINIMAL; 3.7 ו-3.8 דוחים MINIMAL - LOW). שלב ההבנה
+# תמיד בה (3.8 בהבנה: 2.6 שניות במקום 14-23 בעומס הלילה). בתשובה - רק עם ANSWER_LOW_THINKING, אחרי בדיקת איכות.
+LOW_THINKING = {"gemini-3.6-flash": "MINIMAL", "gemini-3.7-flash": "LOW", "gemini-3.8-flash": "LOW"}
+ANSWER_LOW_THINKING = os.getenv("ANSWER_LOW_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):

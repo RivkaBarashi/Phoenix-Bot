@@ -14,6 +14,7 @@
 לפני הכול: ברכה ("שלום", "היי", "תודה") מקבלת תשובה קבועה בקוד, בלי חיפוש ובלי מקור.
 ושאלה שלא קשורה לביטוח בכלל ("בא לי להתחתן") מקבלת off_topic - בלי מקור ובלי טלפון.
 """
+import concurrent.futures
 import contextvars
 import json
 import logging
@@ -76,7 +77,7 @@ REPAIRABLE = ("no_source", "unverified_evidence", "unsupported_numbers", "empty_
 UNVERIFIED_TEXT = "מצאתי באתר מידע קרוב, אבל לא הצלחתי לאמת תשובה מדויקת. המידע נמצא בעמוד שבקישור למטה."
 REPAIR_PROMPT = ("התשובה שלך נפסלה בבדיקה אוטומטית מול האתר: {problem} תקן את זה והחזר את ה-JSON כולו מחדש, לפי "
                  "אותם כללים. אם אי אפשר לענות מהקטעים - kind = \"not_on_site\".")
-MIN_REPAIR_SECONDS = 5  # בצ'אט: פחות מזה מהזמן לשאלה - בלי ניסיון תיקון
+MIN_REPAIR_SECONDS = 6  # בצ'אט: פחות מזה מהזמן לשאלה - בלי ניסיון תיקון
 
 
 def repair_note(reason: str) -> str:
@@ -234,6 +235,7 @@ class Answer:
     pages: int = 0             # כמה עמודים שונים נבדקו בחיפוש (לשורה בסוף התשובה בצ'אט)
     warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
+    early_search: str = ""    # החיפוש המוקדם (במקביל להבנה): reused / redone, או "" כשלא היה - ליומן ולמצב מפתחת
     repaired: str = ""         # התשובה עברה רק אחרי ניסיון תיקון - הסיבה לפסילה הראשונה (ליומן ולבדיקות)
     understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
     more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
@@ -547,7 +549,8 @@ def _ask_model(question: str, standalone: str, history: list[dict], hits: list[H
     """קודם Gemini עם 5 קטעים מלאים; אם אף מודל של Gemini לא זמין - הגיבויים, עם 3 קטעים מקוצרים."""
     def ask(context: list[Hit], providers: list[str]) -> llm.ChatResult:
         messages = [{"role": "user", "content": _user_message(question, standalone, history, context)}]
-        request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=providers)
+        request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=providers,
+                       low_thinking=config.ANSWER_LOW_THINKING)
         if on_stage and not llm.lookup(messages, parse=parse_reply, **request):
             on_stage("compose")
         return llm.chat(messages, parse=parse_reply, **request)
@@ -590,10 +593,11 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
     מוצגת, והשנייה נזנחת (לא מחכים לה; הבקשה שכבר יצאה עדיין נספרת במכסה). אם הראשונה נפסלה - מחכים
     לשנייה. None: אין שני מודלים זמינים, או ששניהם נכשלו - ממשיכים בשרשרת הרגילה, בזה אחר זה."""
     messages = [{"role": "user", "content": _user_message(question, standalone, history, hits)}]
-    request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=FULL_CONTEXT_LLMS)
+    request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=FULL_CONTEXT_LLMS,
+                   low_thinking=config.ANSWER_LOW_THINKING)
     if cached := llm.lookup(messages, parse=parse_reply, **request):  # כבר נענתה - בלי שום בקשה
         return finish(cached)
-    pair = llm.race_pair()
+    pair = llm.race_pair(config.RACE_LLMS)
     if len(pair) < 2:
         return None
     if on_stage:
@@ -764,7 +768,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                     {"role": "user", "content": REPAIR_PROMPT.format(problem=repair_note(outcome.reason))}]
         try:
             fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
-                             only=FULL_CONTEXT_LLMS)
+                             only=FULL_CONTEXT_LLMS, low_thinking=config.ANSWER_LOW_THINKING)
         except AllProvidersFailed:
             return unverified(outcome)
         finally:
@@ -798,6 +802,56 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     return settle(finish(reply))
 
 
+_EARLY = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="early-search")
+
+
+@dataclass
+class EarlySearch:
+    query: str
+    future: concurrent.futures.Future
+
+
+def start_early_search(question: str, history: list[dict]) -> EarlySearch | None:
+    """החיפוש על השאלה כמו שנכתבה (בלי ברכה בהתחלה) מתחיל במקביל להבנת השאלה - בלי חיווי שלבים (הוא רץ
+    ב-thread). שאלת המשך שתלויה בשיחה - בלי: הניסוח העצמאי שלה תמיד שונה, והחיפוש היה מתבזבז. וגם לא כשחסר
+    סוג הביטוח ("איך מגישים תביעה?"): שם התשובה היא שאלת הבהרה, בלי חיפוש."""
+    if not config.PARALLEL_SEARCH or (history and needs_context(question)):
+        return None
+    rest, greeted, _ = split_greeting(question)
+    query = rest if greeted and rest else question
+    if needs_insurance_type(query):
+        return None
+    return EarlySearch(query, _EARLY.submit(contextvars.copy_context().run, search, query, CONTEXT_CHUNKS))
+
+
+def same_search(asked: str, standalone: str) -> bool:
+    """החיפוש על השאלה כמו שנכתבה טוב גם לניסוח העצמאי: אותו סוג ביטוח, ולפחות 70% מהמילים משותפות (מילים כמו
+    ב-BM25, עם תחיליות). תרגום, שאלה מפוצלת או מילים שנוספו מהשיחה - שונה מהותית, מחפשים שוב."""
+    a, b = set(bm25.tokenize(asked)), set(bm25.tokenize(standalone))
+    if not a or not b or insurance_type(asked) != insurance_type(standalone):
+        return False
+    return len(a & b) / len(a | b) >= config.SAME_SEARCH_JACCARD
+
+
+def searched(query: str, early: EarlySearch | None, on_stage=None) -> tuple[SearchResult, str]:
+    """החיפוש לשאלה: המוקדם, אם הוא על אותה שאלה בעיקרה (ואם הוא עוד רץ - מחכים לו), ואחרת חיפוש חדש.
+    מחזיר גם מה קרה: reused / redone, או "" כשלא היה חיפוש מוקדם."""
+    if early is None:
+        return search(query, k=CONTEXT_CHUNKS, on_stage=on_stage), ""
+    if same_search(early.query, query):
+        start, left = time.perf_counter(), time_left()
+        try:
+            result = early.future.result(timeout=None if left is None else max(left, 0.1))
+        except Exception as exc:  # noqa: BLE001 - תקלה או חריגת זמן בחיפוש המוקדם: חיפוש רגיל
+            log.warning("early search failed (%s), searching again", str(exc)[:120])
+        else:
+            result.timings["search_wait"] = time.perf_counter() - start  # כמה חיכינו לו אחרי ההבנה
+            if on_stage:
+                on_stage("rerank", pages=result.pages)
+            return result, "reused"
+    return search(query, k=CONTEXT_CHUNKS, on_stage=on_stage), "redone"
+
+
 def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
     """history: [{"role": "user" | "assistant", "content": "..."}] - השיחה עד עכשיו.
     "המודל מבין, הקוד מאמת": קריאה אחת בהתחלה (understand.py) מחליטה אם זו שאלת המשך או נושא חדש, אם היא
@@ -817,12 +871,13 @@ def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
     with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
         if on_stage:
             on_stage("understand")
+        early = start_early_search(question, history)  # החיפוש מתחיל כבר עכשיו, במקביל להבנה
         understood = try_understand(question, history)
         understand_s = time.perf_counter() - start
         if understood:
-            result = _answer_understood(question, history, understood, on_stage)
+            result = _answer_understood(question, history, understood, on_stage, early)
         else:
-            result = _answer_by_rules(question, history, on_stage)
+            result = _answer_by_rules(question, history, on_stage, early)
     result.timings["understand"] = understand_s
     result.timings["total"] = time.perf_counter() - start
     log.info("timings %s | %s", " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items()), question[:60])
@@ -836,7 +891,8 @@ def understanding_record(u: Understanding) -> dict:
             "sub_questions": len(u.sub_questions), "llm": u.llm}
 
 
-def _answer_understood(question: str, history: list[dict], u: Understanding, on_stage=None) -> Answer:
+def _answer_understood(question: str, history: list[dict], u: Understanding, on_stage=None,
+                       early: EarlySearch | None = None) -> Answer:
     record = understanding_record(u)
     if u.intent in ("greeting", "thanks"):  # ברכה עם עוד מילים ("היי, מה קורה איתכם?")
         return Answer(THANKS_REPLY if u.intent == "thanks" else GREETING_REPLY, "greeting", f"understand_{u.intent}",
@@ -853,14 +909,16 @@ def _answer_understood(question: str, history: list[dict], u: Understanding, on_
     standalone = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
     if on_stage:
         on_stage("search")
-    result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
-                     standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage, understanding=u)
+    found, how = searched(standalone, early, on_stage)
+    result = respond(question, found, context, standalone=standalone, parallel=config.PARALLEL_LLM,
+                     on_stage=on_stage, understanding=u)
+    result.early_search = how
     result.understanding = record
     result.more_questions = u.sub_questions[1:]
     return result
 
 
-def _answer_by_rules(question: str, history: list[dict], on_stage=None) -> Answer:
+def _answer_by_rules(question: str, history: list[dict], on_stage=None, early: EarlySearch | None = None) -> Answer:
     """הגיבוי כשהבנת השאלה לא זמינה: הכללים בקוד, כמו לפני שלב ההבנה."""
     start = time.perf_counter()
     rest, greeted, _ = split_greeting(question)
@@ -882,8 +940,10 @@ def _answer_by_rules(question: str, history: list[dict], on_stage=None) -> Answe
         # אותו מההודעה האחרונה של הלקוחה שהזכירה סוג
         standalone = with_insurance_type(standalone, known_type)
     condense = time.perf_counter() - start
-    result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
-                     standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage)
+    found, how = searched(standalone, early, on_stage)
+    result = respond(question, found, context, standalone=standalone, parallel=config.PARALLEL_LLM,
+                     on_stage=on_stage)
+    result.early_search = how
     if context:
         result.timings["condense"] = condense
     return result

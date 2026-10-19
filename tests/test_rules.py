@@ -307,11 +307,10 @@ def test_with_insurance_type(question, kind, full):
 
 @pytest.mark.usefixtures("rules_only")
 def test_clarification_without_search_or_model(monkeypatch):
-    def no_search(*args, **kwargs):
-        raise AssertionError("שאלת הבהרה לא אמורה לחפש")
-    monkeypatch.setattr(A, "search", no_search)
+    calls = []  # רשימה ולא חריגה: חריגה בחיפוש המוקדם (thread) לא הייתה מגיעה לבדיקה
+    monkeypatch.setattr(A, "search", lambda *args, **kwargs: calls.append(args))
     a = A.answer("איך מגישים תביעה?")
-    assert (a.kind, a.text) == ("clarify", A.CLARIFY_TEXT)
+    assert (a.kind, a.text) == ("clarify", A.CLARIFY_TEXT) and calls == []
 
 
 @pytest.mark.usefixtures("rules_only")
@@ -1008,6 +1007,112 @@ def test_understanding_runs_only_on_the_strong_models(monkeypatch):
     monkeypatch.setattr(understand.llm, "chat", chat)
     assert understand.try_understand("שאלה") is None
     assert asked and all(any(f"gemini:{m}#" in name for m in config.UNDERSTAND_LLMS) for name in asked)
+
+
+# ---------------------------------------------------------------- 20 שניות: מרוץ, חיפוש מוקדם, חשיבה נמוכה, תיקון
+def test_race_is_on_in_the_chat_with_3_6_and_3_8():
+    from phoenix import config
+    assert config.PARALLEL_LLM and config.RACE_LLMS == ["gemini-3.6-flash", "gemini-3.8-flash"]
+    assert A.MIN_REPAIR_SECONDS == 6
+
+
+def test_race_pair_prefers_the_configured_models_and_fills_in(monkeypatch):
+    """הזוג: 3.6 ו-3.8 (לא 3.6 ו-3.7 לפי סדר השרשרת), כל אחד מתחיל במפתח אחר. 3.8 נח - 3.7 נכנס במקומו."""
+    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
+    assert pair[0][0].startswith("gemini:gemini-3.6-flash#") and pair[1][0].startswith("gemini:gemini-3.8-flash#")
+    assert pair[0][0].split("#")[1] != pair[1][0].split("#")[1]
+    monkeypatch.setitem(fallback._resting_until, "gemini:gemini-3.8-flash", time.time() + 60)
+    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
+    assert pair[0][0].startswith("gemini:gemini-3.6-flash#") and pair[1][0].startswith("gemini:gemini-3.7-flash#")
+
+
+@pytest.mark.parametrize("asked, standalone, same", [
+    ("מה הטלפון של מוקד התביעות?", "מה הטלפון של מוקד התביעות של הפניקס?", True),       # כמעט אותן מילים
+    ("איך מגישים תביעה בביטוח דירא?", "איך מגישים תביעה בביטוח דירה?", False),  # תיקון כתיב בסוג - מחפשים שוב
+    ("מה זה השתתפות עצמית?", "מה זה השתתפות עצמית?", True),
+    ("How do I file a car insurance claim?", "איך מגישים תביעה בביטוח רכב?", False),     # תרגום
+    ("מה המספר של מוקד תביעות רכב, ואיך מבטלים ביטוח דירה?", "מה המספר של מוקד תביעות רכב?", False),  # פיצול
+    ("נזק מצנרת מכוסה?", "האם נזק מצנרת מכוסה בביטוח דירה?", False),                   # נוסף סוג ביטוח
+])
+def test_same_search(asked, standalone, same):
+    assert A.same_search(asked, standalone) is same
+
+
+@pytest.mark.usefixtures("rules_only")
+def test_early_search_runs_while_the_question_is_understood(monkeypatch):
+    """החיפוש מתחיל לפני שהבנת השאלה מסתיימת, ואם הניסוח העצמאי הוא אותה שאלה - משתמשים בו, בלי חיפוש שני."""
+    started, queries = threading.Event(), []
+
+    def search(query, k=5, **kwargs):
+        queries.append(query)
+        started.set()
+        return RACE_HIT
+
+    def understand(question, history):
+        assert started.wait(2), "החיפוש לא התחיל במקביל להבנה"
+        return None  # הבנה לא זמינה - כללי הקוד, והשאלה כמו שנכתבה
+    monkeypatch.setattr(A, "search", search)
+    monkeypatch.setattr(A, "try_understand", understand)
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, VALID), "gemini:b#2": (0.0, VALID)})
+    a = A.answer(REGULAR)
+    assert a.kind == "answer" and a.early_search == "reused" and queries == [REGULAR]
+    assert "search_wait" in a.timings
+
+
+def test_early_search_is_redone_when_the_rewrite_differs(monkeypatch):
+    from phoenix.understand import Understanding
+    queries = []
+    monkeypatch.setattr(A, "search", lambda query, k=5, **kwargs: queries.append(query) or RACE_HIT)
+    rewrite = "איך מגישים תביעה בביטוח רכב?"
+    monkeypatch.setattr(A, "try_understand", lambda q, h: Understanding(
+        rewrite, "info", False, False, "רכב", None, "en", [rewrite], "model", "gemini:x"))
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, VALID), "gemini:b#2": (0.0, VALID)})
+    a = A.answer("How do I file a car insurance claim?")
+    # שני החיפושים רצים במקביל - הסדר ברשימה לא קבוע
+    assert a.early_search == "redone" and sorted(queries) == sorted(["How do I file a car insurance claim?", rewrite])
+
+
+@pytest.mark.usefixtures("rules_only")
+def test_no_early_search_for_a_follow_up(monkeypatch):
+    from phoenix import config
+    monkeypatch.setattr(config, "PARALLEL_LLM", False)
+    assert A.start_early_search("ומה לגבי דירה?", CAR_HISTORY) is None
+    assert A.start_early_search("איך מגישים תביעה?", []) is None  # חסר סוג - שאלת הבהרה, בלי חיפוש
+
+
+def test_understanding_uses_the_lowest_thinking_level(monkeypatch):
+    from phoenix import understand
+    seen = {}
+
+    def chat(messages, **kwargs):
+        seen.update(kwargs)
+        raise fallback.AllProvidersFailed("llm", ["down"])
+    monkeypatch.setattr(understand.llm, "chat", chat)
+    understand.try_understand("שאלה")
+    assert seen["low_thinking"] is True
+
+
+@pytest.mark.parametrize("model, level", [("gemini-3.6-flash", "MINIMAL"), ("gemini-3.8-flash", "LOW"),
+                                          ("gemini-3.7-flash", "LOW")])
+def test_gemini_gets_the_thinking_level_the_model_accepts(monkeypatch, model, level):
+    """3.7 ו-3.8 דוחים MINIMAL (400 INVALID_ARGUMENT, נבדק 20/10) - כל מודל מקבל את הרמה הנמוכה שלו."""
+    from phoenix import config
+    sent = []
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            sent.append(config.thinking_config)
+            return type("R", (), {"text": "{}", "usage_metadata": None})()
+    monkeypatch.setattr(config, "gemini_client", lambda number=1: type("C", (), {"models": Models()})())
+    call = llm._gemini(model)
+    call([{"role": "user", "content": "x"}], "s", 0, json_mode=True, low_thinking=True)
+    call([{"role": "user", "content": "x"}], "s", 0, json_mode=True)
+    assert sent[0].thinking_level.value == level and sent[1] is None
+
+
+def test_low_thinking_has_its_own_cache_key():
+    args = ([{"role": "user", "content": "x"}], "s", 0, True, None)
+    assert llm.cache_key(*args) == llm.cache_key(*args, low_thinking=False) != llm.cache_key(*args, low_thinking=True)
 
 
 # ---------------------------------------------------------------- Voyage בתוך המגבלה בלי כרטיס

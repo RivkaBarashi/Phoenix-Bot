@@ -80,8 +80,11 @@ def _cache_put(key: str, entry: dict):
             log.warning("llm cache not saved: %s", exc)
 
 
-def cache_key(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None) -> str:
-    payload = json.dumps([system, messages, temperature, json_mode, sorted(only or [])], ensure_ascii=False)
+def cache_key(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
+              low_thinking: bool = False) -> str:
+    """חשיבה נמוכה - מפתח אחר (תשובה אחרת); בלי - אותו מפתח כמו תמיד, כך שהמטמון הקיים נשאר תקף."""
+    payload = json.dumps([system, messages, temperature, json_mode, sorted(only or [])] + (["low"] if low_thinking else []),
+                         ensure_ascii=False)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
@@ -104,7 +107,7 @@ def _gemini(model, number=1):
     # Gemma דרך אותו API לא תומך בהוראות מערכת ובמצב JSON - ההוראות נכנסות להודעה הראשונה
     is_gemma = model.startswith("gemma")
 
-    def call(messages, system, temperature, json_mode=False, timeout=None):
+    def call(messages, system, temperature, json_mode=False, timeout=None, low_thinking=False):
         if is_gemma and system:
             messages = [{"role": "user", "content": f"{system}\n\n{messages[0]['content']}"}, *messages[1:]]
         contents = [
@@ -119,6 +122,9 @@ def _gemini(model, number=1):
                 system_instruction=None if is_gemma else (system or None),
                 temperature=temperature,
                 response_mime_type="application/json" if json_mode and not is_gemma else None,
+                # הרמה הנמוכה שהמודל מקבל (config.LOW_THINKING); בלי - ברירת המחדל של המודל
+                thinking_config=types.ThinkingConfig(thinking_level=config.LOW_THINKING.get(model, "LOW"))
+                if low_thinking and not is_gemma else None,
                 http_options=types.HttpOptions(timeout=int((timeout or config.HTTP_TIMEOUT) * 1000)),
             ),
         )
@@ -206,29 +212,32 @@ def _from_cache(key: str, parse: Callable[[str], Any] | None) -> ChatResult | No
 
 
 def lookup(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
-           parse: Callable[[str], Any] | None = None) -> ChatResult | None:
+           parse: Callable[[str], Any] | None = None, low_thinking: bool = False) -> ChatResult | None:
     """תשובה מהמטמון בלבד (בלי קריאה), עם אותו מפתח כמו chat - לפני ששולחים לשני מודלים במקביל."""
-    return _from_cache(cache_key(messages, system, temperature, json_mode, only), parse) if CACHE_MODE == "on" else None
+    key = cache_key(messages, system, temperature, json_mode, only, low_thinking)
+    return _from_cache(key, parse) if CACHE_MODE == "on" else None
 
 
 def remember(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
-             result: ChatResult):
+             result: ChatResult, low_thinking: bool = False):
     """שומר במטמון את התשובה שנבחרה (בבקשות במקביל - רק של המנצח)."""
     if CACHE_MODE != "off":
-        _cache_put(cache_key(messages, system, temperature, json_mode, only),
+        _cache_put(cache_key(messages, system, temperature, json_mode, only, low_thinking),
                    {"text": result.text, "provider": result.provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
 
 
-def race_pair(service: str = "gemini") -> list[list[str]]:
+def race_pair(models: list[str] | None = None, service: str = "gemini") -> list[list[str]]:
     """שני מודלים שונים שאליהם נשלחת אותה שאלה במקביל: לכל אחד - כל המפתחות שלו לפי הסדר, ובמודל השני
-    מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". פחות משני מודלים זמינים - רשימה ריקה."""
+    מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". פחות משני מודלים זמינים - רשימה ריקה.
+    models: המודלים המועדפים, לפי הסדר (config.RACE_LLMS); מודל מהם לא זמין - הבא בתור מהשרשרת."""
     groups: dict[str, list[Provider]] = {}
     for p in PROVIDERS:
         if p.name.startswith(service + ":") and p.enabled and not is_resting(p):
             groups.setdefault(p.group or p.name, []).append(p)
     if len(groups) < 2:
         return []
-    first, second = list(groups.values())[:2]
+    preferred = [g for g in (f"{service}:{m}" for m in models or []) if g in groups]
+    first, second = [groups[g] for g in preferred + [g for g in groups if g not in preferred]][:2]
     if len(second) > 1 and second[0].key == first[0].key:
         second = second[1:] + second[:1]
     return [[p.name for p in first], [p.name for p in second]]
@@ -236,7 +245,7 @@ def race_pair(service: str = "gemini") -> list[list[str]]:
 
 def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_mode: bool = False,
          parse: Callable[[str], Any] | None = None, only: list[str] | None = None,
-         names: list[str] | None = None, cache: bool = True) -> ChatResult:
+         names: list[str] | None = None, cache: bool = True, low_thinking: bool = False) -> ChatResult:
     """messages: [{"role": "user" | "assistant", "content": "..."}]
 
     json_mode: לבקש JSON (ב-Gemini גם ברמת ה-API; אצל השאר לפי הפרומפט).
@@ -245,8 +254,9 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
     only: רק ספקים מהסוגים האלה, למשל ["groq", "openrouter"].
     names: רק הספקים האלה, בסדר הזה (בקשה אחת מתוך שתיים במקביל).
     cache: False - בלי לקרוא מהמטמון ובלי לכתוב אליו (בבקשות במקביל רק המנצח נשמר, ב-remember).
+    low_thinking: ב-Gemini - רמת החשיבה הנמוכה שהמודל מקבל (config.LOW_THINKING). לשאר הספקים אין משמעות.
     """
-    key = cache_key(messages, system, temperature, json_mode, only)
+    key = cache_key(messages, system, temperature, json_mode, only, low_thinking)
     if cache and CACHE_MODE == "on" and (hit := _from_cache(key, parse)):
         return hit
 
@@ -258,7 +268,8 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
 
     def checked(p: Provider) -> Provider:
         def call(messages, system, temperature):
-            text = p.call(messages, system, temperature, json_mode=json_mode, timeout=config.QUERY_TIMEOUT)
+            extra = {"low_thinking": True} if low_thinking and p.name.startswith("gemini:") else {}
+            text = p.call(messages, system, temperature, json_mode=json_mode, timeout=config.QUERY_TIMEOUT, **extra)
             if parse is None:
                 return text, None
             try:
