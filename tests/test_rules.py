@@ -484,6 +484,16 @@ UNVERIFIED = {"kind": "answer", "answer": "ממלאים טופס.", "referral": 
               "sources": [1]}
 
 
+def test_two_passages_from_one_page_are_one_source(monkeypatch):
+    """המודל ציטט שני קטעים מאותו עמוד: העמוד מופיע פעם אחת (היה: "כל הדרכים ליצור איתנו קשר" פעמיים)."""
+    page = SearchResult([Hit("x", A.CONTACT_URL, "צור קשר", "", f"צור קשר\n\n{SENTENCE}", score=0.95),
+                         Hit("y", A.CONTACT_URL, "צור קשר", "", "צור קשר\n\nשעות פעילות", score=0.9)],
+                        "gemini:x", "cohere:rerank-v4.0-pro")
+    fake_model(monkeypatch, VALID | {"sources": [1, 2]})
+    a = A.respond("איך מגישים תביעה?", page)
+    assert a.kind == "answer" and a.sources == [A.CONTACT_URL] and a.text.count(A.CONTACT_URL) == 1
+
+
 def fake_race(monkeypatch, plan: dict):
     """plan: הספק הראשון של כל צד (או "chain" לשרשרת הרגילה) -> (השהיה בשניות, תשובה או חריגה)."""
     monkeypatch.setattr(llm, "CACHE_MODE", "off")

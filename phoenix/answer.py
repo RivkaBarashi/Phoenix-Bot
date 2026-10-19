@@ -651,7 +651,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                 return not_on_site("empty_answer", **extra)
             if leaked(answer_text):  # שכבת הגנה אחרונה: ההוראות או ה-JSON דלפו לתשובה - לא מציגים
                 return not_on_site("leak_guard", **extra)
-            urls = [url for url, _ in cited]
+            urls = list(dict.fromkeys(url for url, _ in cited))  # שני קטעים מאותו עמוד - מקור אחד
             return Answer(f"{answer_text}\n\n{format_sources(urls)}", "answer", "verified", urls, **base, **extra)
 
         if kind == "personal":
