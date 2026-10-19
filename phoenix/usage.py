@@ -38,7 +38,7 @@ def report() -> str:
             line += f" | {tokens:,} טוקנים"
         lines.append(line)
     keys = {}
-    for n in names:  # Gemini לפי מפתח: "gemini:gemini-3.5-flash#2" -> מפתח 2
+    for n in names:  # Gemini לפי מפתח: "gemini:gemini-3.6-flash#2" -> מפתח 2
         if n.startswith("gemini:") and "#" in n and _calls(n):
             number = n.rsplit("#", 1)[1]
             calls, failed = keys.get(number, (0, 0))

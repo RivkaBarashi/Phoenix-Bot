@@ -44,7 +44,7 @@ _cache_lock = threading.Lock()
 @dataclass
 class ChatResult:
     text: str
-    provider: str         # הספק שענה בפועל, למשל "gemini:gemini-3.5-flash"
+    provider: str         # הספק שענה בפועל, למשל "gemini:gemini-3.6-flash"
     data: Any = None      # התוצאה של parse (אם ביקשו), למשל JSON מפוענח
     cached: bool = False  # התשובה הגיעה מהמטמון, בלי קריאה למודל
 
@@ -184,7 +184,7 @@ ALL_NAMES = [p.name for p in PROVIDERS]  # לפני כל סינון (ממשק ב
 
 
 def describe(name: str | None) -> str:
-    """שם ספק לתצוגה: "gemini:gemini-3.5-flash#2" -> "gemini-3.5-flash (מפתח 2)". רק מספר המפתח, לא הערך."""
+    """שם ספק לתצוגה: "gemini:gemini-3.6-flash#2" -> "gemini-3.6-flash (מפתח 2)". רק מספר המפתח, לא הערך."""
     if not name:
         return "-"
     base, cached = name.removesuffix(" (cache)"), name.endswith(" (cache)")

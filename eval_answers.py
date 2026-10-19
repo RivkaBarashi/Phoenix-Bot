@@ -279,7 +279,7 @@ def main():
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
     parser.add_argument("--category", help="רק הסוגים האלה: " + ", ".join(TYPES))
     parser.add_argument("--fresh", action="store_true", help="לשאול את המודלים מחדש, בלי המטמון")
-    parser.add_argument("--llm", help="מודל Gemini אחד קבוע לבוט, בכל המפתחות ובלי גיבוי (למשל gemini-3.5-flash). "
+    parser.add_argument("--llm", help="מודל Gemini אחד קבוע לבוט, בכל המפתחות ובלי גיבוי (למשל gemini-3.6-flash). "
                                       "השופט נשאר Groq/OpenRouter. כולל --fresh")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
