@@ -268,7 +268,7 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
 def outcome(record: dict, threshold: float) -> str:
     """מה הבוט היה עונה בסף הזה. ברכה - תמיד ברכה (לפני החיפוש). מתחת לסף - off_topic אם בדיקת
     הנושא אמרה שזה לא קשור לביטוח (נבדקת לשאלות שמתחת לסף הנוכחי), אחרת not_on_site."""
-    if record["decision"] in ("greeting", "clarify"):  # לפני החיפוש - לא תלוי בסף
+    if record["decision"] in ("greeting", "clarify") or record.get("pre_search"):  # לפני החיפוש - לא תלוי בסף
         return record["decision"]
     if record["reason"].startswith("search_failed"):  # החיפוש נכשל - אין מה להציג
         return "error"
@@ -299,7 +299,6 @@ def main():
     config.RERANK_THRESHOLD = config.RERANK_THRESHOLDS[args.reranker]  # "הסף הנוכחי" בכל הדוח
     THRESHOLDS[:] = THRESHOLD_GRIDS[args.reranker]
 
-
     selected = select_rows(args.questions, args.only, args.category)
     version = hashlib.sha1(answer_layer.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
     print(f"אינדקס: {args.index} | Rerank: {args.reranker} | סף נוכחי: {config.RERANK_THRESHOLD} | "
@@ -323,16 +322,39 @@ def main():
             records.append(rec)
             print(f"\n[{n}] ({row['type']}) {row['question']}\n    -> greeting (בלי חיפוש)\n    {greeting.text}")
             continue
-        question = answer_layer.split_greeting(row["question"])[0] or row["question"]
-        if answer_layer.needs_insurance_type(question):  # כמו בצ'אט: "על איזה ביטוח מדובר?", בלי חיפוש
+        # כמו בצ'אט: הבנת השאלה (קריאה אחת) מחליטה - ברכה, לא קשורה, ניסיון לשנות הוראות, שאלת הבהרה - ומנסחת
+        # את השאלה לחיפוש. נכשלה - כללי הקוד, כמו קודם.
+        before, start = model_calls(), time.perf_counter()
+        u = answer_layer.try_understand(row["question"])
+        understand_calls, understand_s = model_calls() - before, time.perf_counter() - start
+        pre = None  # החלטה לפני החיפוש: (החלטה, סיבה, הטקסט שמוצג)
+        if u:
+            question = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
+            if u.intent in ("greeting", "thanks"):
+                pre = ("greeting", f"understand_{u.intent}",
+                       answer_layer.THANKS_REPLY if u.intent == "thanks" else answer_layer.GREETING_REPLY)
+            elif u.intent in ("off_topic", "injection"):
+                pre = ("off_topic", f"understand_{u.intent}", answer_layer.OFF_TOPIC_TEXT)
+            elif u.needs_clarification and not u.insurance_type:
+                pre = ("clarify", "no_insurance_type", answer_layer.CLARIFY_TEXT)
+        else:
+            question = answer_layer.split_greeting(row["question"])[0] or row["question"]
+            if answer_layer.needs_insurance_type(question):
+                pre = ("clarify", "no_insurance_type", answer_layer.CLARIFY_TEXT)
+        if pre:
+            decision, reason, text = pre
             records.append({"n": n, "type": row["type"], "question": row["question"], "top": 0.0,
-                            "decision": "clarify", "reason": "no_insurance_type", "llm": "", "sources": "",
-                            "answer": answer_layer.CLARIFY_TEXT, "verdict": "", "judge_reason": "",
-                            "cited_correct": "", "timings": {}, "chat_s": 0.0, "chat_calls": 0,
-                            "calls": {"answer": 0, "topic": 0, "judge": 0, "cache": 0}, "chat_requests": 0})
+                            "decision": decision, "reason": reason, "pre_search": True,
+                            "intent": u.intent if u else "rules", "llm": "", "sources": "", "answer": text,
+                            "verdict": "", "judge_reason": "", "cited_correct": "",
+                            "timings": {"understand": understand_s}, "chat_s": understand_s,
+                            "chat_calls": understand_calls, "chat_requests": understand_calls,
+                            "calls": {"answer": 0, "topic": 0, "judge": 0, "cache": 0, "understand": understand_calls}})
+            if row["type"] == "injection":
+                records[-1]["verdict"] = "blocked"  # נעצר בהבנת השאלה - שום דבר לא הגיע למודל התשובה
             print()
             print(f"[{n}] ({row['type']}) {row['question']}")
-            print(f"    -> clarify (בלי חיפוש): {answer_layer.CLARIFY_TEXT}")
+            print(f"    -> {decision} ({reason}, בלי חיפוש): {text}")
             continue
         try:
             ranked, used, reranked_by = run_search(question, args.index, timings)
@@ -345,14 +367,15 @@ def main():
                 print(streak.report())
                 break
             continue
-        calls, cache_before = {"answer": 0, "topic": 0, "judge": 0}, cache_hits()
+        calls, cache_before = {"answer": 0, "topic": 0, "judge": 0, "understand": understand_calls}, cache_hits()
         before, answered = model_calls(), model_answers()
-        a = respond(question, SearchResult(ranked[:5], used, reranked_by, timings), threshold=0.0)
+        a = respond(row["question"] if u else question, SearchResult(ranked[:5], used, reranked_by, timings),
+                    threshold=0.0, standalone=question, understanding=u)
         calls["answer"], answer_requests = model_calls() - before, model_answers() - answered
         rec = {"n": n, "type": row["type"], "question": row["question"], "top": ranked[0].score if ranked else 0.0,
                "decision": a.kind, "reason": a.reason, "llm": a.llm or "", "sources": " ".join(a.sources),
                "answer": a.text, "verdict": "", "judge_reason": "", "cited_correct": "", "timings": a.timings,
-               "calls": calls}
+               "calls": calls, "intent": u.intent if u else "rules"}
         if row["type"] == "answerable":
             correct = [h for h in ranked if same_page(h.url, row["source_url"])]
             by_rrf = sorted(ranked, key=lambda h: -sum(1 / (RRF_K + r) for r in (h.vector_rank, h.bm25_rank) if r))
@@ -371,9 +394,12 @@ def main():
             before = model_calls()
             rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text, personal=True)
             calls["judge"] = model_calls() - before
-        rec["personal_rule"] = answer_layer.is_personal_question(question)
+        rec["personal_rule"] = u.personal if u else answer_layer.is_personal_question(question)
         below = rec["top"] < config.RERANK_THRESHOLD and not rec["personal_rule"]
-        if below:  # בצ'אט: מתחת לסף בודקים אם זה בכלל על ביטוח (במקום לשאול את מודל התשובה)
+        topic_requests = 0
+        if below and u:  # הבנת השאלה כבר קבעה שהיא קשורה - מתחת לסף: "לא מופיע באתר", בלי בדיקת נושא
+            rec["topic_off"] = False
+        elif below:  # גיבוי: בצ'אט מתחת לסף בודקים אם זה בכלל על ביטוח (במקום לשאול את מודל התשובה)
             before, answered, start = model_calls(), model_answers(), time.perf_counter()
             rec["topic_off"] = answer_layer.is_off_topic(question)
             rec["timings"]["topic"] = time.perf_counter() - start
@@ -381,9 +407,10 @@ def main():
         calls["cache"] = cache_hits() - cache_before
         # מה הצ'אט היה עושה: חיפוש, ואז מודל התשובה (מעל הסף) או רק בדיקת הנושא (מתחת לסף)
         search_s = sum(rec["timings"].get(k, 0.0) for k in ("vector", "bm25", "rerank"))
-        rec["chat_s"] = search_s + rec["timings"].get("topic" if below else "llm", 0.0)
-        rec["chat_calls"] = calls["topic"] if below else calls["answer"]
-        rec["chat_requests"] = topic_requests if below else answer_requests
+        rec["timings"]["understand"] = understand_s
+        rec["chat_s"] = understand_s + search_s + rec["timings"].get("topic" if below else "llm", 0.0)
+        rec["chat_calls"] = understand_calls + (calls["topic"] if below else calls["answer"])
+        rec["chat_requests"] = understand_calls + (topic_requests if below else answer_requests)
         if row["type"] == "injection":  # המודל עצמו (בלי סף) - האם הוא נכנע להוראה
             rec["verdict"] = "blocked" if injection_blocked(rec, 0.0) else "NOT_BLOCKED"
         records.append(rec)
@@ -456,7 +483,7 @@ def main():
     partial = args.only or args.category or stopped
     out = config.ROOT / "data" / (f"eval_answers_{args.index}" + (f"_{question_set}" if question_set else "")
                                   + ("_partial" if partial else "") + ".csv")
-    fields = ["n", "type", "question", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",
+    fields = ["n", "type", "question", "intent", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",
               "chat_s", "chat_calls", "sources", "answer"]
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")

@@ -16,8 +16,10 @@ CONTACT = f"\n\nהמקור: {bot.CONTACT_URL}"
 
 @pytest.fixture
 def app(monkeypatch):
-    """האפליקציה עם בוט מזויף: fake(question) -> Answer, או חריגה. היומן לא נכתב לקובץ."""
+    """האפליקציה עם בוט מזויף: fake(question) -> Answer, או חריגה. היומן לא נכתב לקובץ. הבנת השאלה לא זמינה
+    (בלי API) - הבוט האמיתי (real_answer) עובד לפי כללי הקוד."""
     monkeypatch.setattr(conversation_log, "_append", lambda record: None)
+    monkeypatch.setattr(bot, "try_understand", lambda *args, **kwargs: None)
 
     def start(fake, dev: bool = False) -> AppTest:
         monkeypatch.setattr(bot, "answer", lambda question, history=(), on_stage=None: fake(question))

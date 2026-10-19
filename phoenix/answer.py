@@ -29,6 +29,7 @@ from . import bm25, config, llm
 from .chunk import CHUNKS_FILE, SENTENCE_END
 from .fallback import AllProvidersFailed, OutOfTime, time_budget, time_left
 from .search import Hit, SearchResult, search
+from .understand import Understanding, try_understand
 
 CONTEXT_CHUNKS = 5
 # Gemini מקבל 5 קטעים מלאים (~11K טוקנים). שאר המודלים הם גיבוי עם מגבלת גודל בקשה
@@ -208,6 +209,8 @@ class Answer:
     pages: int = 0             # כמה עמודים שונים נבדקו בחיפוש (לשורה בסוף התשובה בצ'אט)
     warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
+    understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
+    more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
 
 
 @lru_cache
@@ -605,10 +608,12 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
 
 
 def respond(question: str, result: SearchResult, history: list[dict] = (), threshold: float | None = None,
-            standalone: str | None = None, parallel: bool = False, on_stage=None) -> Answer:
+            standalone: str | None = None, parallel: bool = False, on_stage=None,
+            understanding: "Understanding | None" = None) -> Answer:
     """ההחלטה והתשובה, מתוך תוצאות חיפוש קיימות. threshold=0 = תמיד לשאול את המודל (לכיול).
     parallel: אותה שאלה לשני מודלים במקביל (רק בצ'אט; הבדיקות - מודל אחד, בזה אחר זה).
-    on_stage: חיווי שלבים בצ'אט - נקרא בתחילת כל שלב. בלי (בבדיקות) - שום דבר לא משתנה."""
+    on_stage: חיווי שלבים בצ'אט - נקרא בתחילת כל שלב. בלי (בבדיקות) - שום דבר לא משתנה.
+    understanding: התוצאה של הבנת השאלה - ממנה "אישית" והמונח שנבדק באתר. בלי (הקריאה נכשלה) - כללי הקוד."""
     ranker = result.reranker.split(":")[0]  # cohere / local / none
     calibrated = ranker in config.RERANK_THRESHOLDS
     threshold = config.RERANK_THRESHOLDS.get(ranker, 0.0) if threshold is None else threshold
@@ -627,19 +632,28 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
     if not hits:
         return not_on_site("no_results")
-    # שאלה אישית לפי הכלל בקוד (כיסוי, זכאות או יתרה בגוף ראשון) מקבלת תשובה אישית גם מתחת לסף. הסף
-    # מחליט אם יש באתר תשובה לשאלה - ולשאלה אישית התשובה היא תמיד הפניה, ומה שהאתר אומר באופן כללי אם
-    # יש (נבדק: "מה היתרה בקרן הפנסיה שלי?" קיבלה 0.805 ונענתה "לא מופיע באתר").
-    personal = is_personal_question(standalone)
+    # שאלה אישית (כיסוי, יתרה, ייעוץ או מצב תביעה - לפי הבנת השאלה, ובגיבוי לפי הכלל בקוד) מקבלת תשובה אישית
+    # גם מתחת לסף. הסף מחליט אם יש באתר תשובה לשאלה - ולשאלה אישית התשובה היא תמיד הפניה, ומה שהאתר אומר
+    # באופן כללי אם יש (נבדק: "מה היתרה בקרן הפנסיה שלי?" קיבלה 0.805 ונענתה "לא מופיע באתר").
+    personal = understanding.personal if understanding else is_personal_question(standalone)
     if calibrated and hits[0].score < threshold and not personal:  # שכבה 1
         if on_stage:
             on_stage("below_threshold")
+        if understanding:  # הבנת השאלה כבר קבעה שהיא קשורה (שאלה לא קשורה לא מגיעה לחיפוש)
+            return not_on_site("below_threshold")
         start = time.perf_counter()
         off_topic = is_off_topic(standalone)
         timings["topic"] = time.perf_counter() - start
         if off_topic:
             return Answer(OFF_TOPIC_TEXT, "off_topic", "below_threshold_off_topic", [], **base)
         return not_on_site("below_threshold")
+
+    def unknown_terms() -> list[str]:
+        """D4: המונח שהשאלה שואלת עליו (key_term מהבנת השאלה) לא מופיע באתר - "טרקטורון" כשבאתר יש רק
+        "טרקטורים". בלי הבנת שאלה (גיבוי) - כל מילה שהלקוחה כתבה, כמו קודם."""
+        if understanding:
+            return terms_not_on_site(understanding.key_term) if understanding.key_term else []
+        return own_terms_not_on_site(standalone, question, history)
 
     def finish(reply: llm.ChatResult) -> Answer:
         """הבדיקות על תשובת מודל (ציטוט, מספרים, מילים באתר, דליפה) -> מה שמוצג. בבקשות במקביל - לכל
@@ -667,7 +681,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                 return not_on_site("unverified_evidence", **extra)
             if bad := unsupported_numbers(answer_text, texts):
                 return not_on_site(f"unsupported_numbers:{','.join(bad)}", **extra)
-            if missing := own_terms_not_on_site(standalone, question, history):
+            if missing := unknown_terms():
                 return not_on_site(f"term_not_on_site:{','.join(missing)}", **extra)
             if not answer_text:
                 return not_on_site("empty_answer", **extra)
@@ -682,7 +696,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             generic = False
             verified = bool(cited) and any(quote_found(e, [text for _, text in cited]) for e in evidence)
             if (not answer_text or not verified or unsupported_numbers(answer_text, texts)
-                    or own_terms_not_on_site(standalone, question, history)):
+                    or unknown_terms()):
                 answer_text, cited, generic = PERSONAL_GENERIC, [], True
             answer_text, fixed = no_yes_no_opening(answer_text, texts)
             text = tidy_codes(add_referral(answer_text, referral))  # tidy שוב: הניסוח מחדש הוא טקסט חדש של המודל
@@ -718,19 +732,70 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
 
 def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
-    """history: [{"role": "user" | "assistant", "content": "..."}] - השיחה עד עכשיו, לשאלות המשך.
-    השיחה נכנסת לתמונה רק כשהשאלה תלויה בה (needs_context): אז מנסחים שאלה עצמאית לחיפוש, והמודל
-    רואה גם את השיחה. שאלה עצמאית נענית כמו שאלה ראשונה - בלי קריאה נוספת ובלי השיחה.
-    on_stage(stage, **info): חיווי שלבים בצ'אט - search, rerank (pages=N), compose, verify, או
-    below_threshold. ברכה ושאלת הבהרה - בלי שלבים; תשובה מהמטמון - בלי compose ו-verify (החיפוש רץ קודם:
+    """history: [{"role": "user" | "assistant", "content": "..."}] - השיחה עד עכשיו.
+    "המודל מבין, הקוד מאמת": קריאה אחת בהתחלה (understand.py) מחליטה אם זו שאלת המשך או נושא חדש, אם היא
+    אישית, אם צריך לשאול על איזה ביטוח, ואם היא קשורה בכלל - וגם מנסחת אותה כשאלה עצמאית לחיפוש. החיפוש, הסף,
+    מודל התשובה והבדיקות אחריו לא משתנים. אם הקריאה נכשלת - כללי הקוד (_answer_by_rules), כמו קודם.
+    on_stage(stage, **info): חיווי שלבים בצ'אט - understand, search, rerank (pages=N), compose, verify, או
+    below_threshold. ברכה והודעה ארוכה מדי - בלי שלבים; תשובה מהמטמון - בלי compose ו-verify (החיפוש רץ קודם:
     המפתח של המטמון כולל את הקטעים שנמצאו). בלי on_stage שום דבר לא משתנה."""
     start = time.perf_counter()
     if len(question) > MAX_QUESTION_CHARS:
         return Answer(TOO_LONG_TEXT.format(chars=len(question)), "too_long", "too_long", [], None, "none",
                       question=question, timings={"total": time.perf_counter() - start})
-    if greeting := greeting_answer(question):
+    if greeting := greeting_answer(question):  # רק ברכה או תודה, בלי שום מילה אחרת - בלי קריאה למודל
         greeting.timings["total"] = time.perf_counter() - start
         return greeting
+    history = list(history)
+    with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
+        if on_stage:
+            on_stage("understand")
+        understood = try_understand(question, history)
+        understand_s = time.perf_counter() - start
+        if understood:
+            result = _answer_understood(question, history, understood, on_stage)
+        else:
+            result = _answer_by_rules(question, history, on_stage)
+    result.timings["understand"] = understand_s
+    result.timings["total"] = time.perf_counter() - start
+    log.info("timings %s | %s", " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items()), question[:60])
+    return result
+
+
+def understanding_record(u: Understanding) -> dict:
+    """מה שהבנת השאלה החליטה, ליומן ולמצב מפתחת - בלי הטקסט החופשי של הלקוחה (חוץ מהמונח שנבדק באתר)."""
+    return {"intent": u.intent, "topic_changed": u.topic_changed, "needs_clarification": u.needs_clarification,
+            "insurance_type": u.insurance_type, "key_term": u.key_term, "language": u.language,
+            "sub_questions": len(u.sub_questions), "llm": u.llm}
+
+
+def _answer_understood(question: str, history: list[dict], u: Understanding, on_stage=None) -> Answer:
+    record = understanding_record(u)
+    if u.intent in ("greeting", "thanks"):  # ברכה עם עוד מילים ("היי, מה קורה איתכם?")
+        return Answer(THANKS_REPLY if u.intent == "thanks" else GREETING_REPLY, "greeting", f"understand_{u.intent}",
+                      [], None, "none", question=question, understanding=record)
+    if u.intent in ("off_topic", "injection"):  # בלי חיפוש ובלי מודל תשובה - שום דבר לא נשלח הלאה
+        return Answer(OFF_TOPIC_TEXT, "off_topic", f"understand_{u.intent}", [], None, "none",
+                      question=u.standalone_question, understanding=record)
+    if u.needs_clarification and not u.insurance_type:
+        clarify = clarification(question)
+        clarify.understanding = record
+        return clarify
+    # נושא חדש - מודל התשובה לא רואה את השיחה הקודמת; המשך - רואה אותה (רק כדי להבין, כלל 8)
+    context = [] if u.topic_changed else history
+    standalone = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
+    if on_stage:
+        on_stage("search")
+    result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
+                     standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage, understanding=u)
+    result.understanding = record
+    result.more_questions = u.sub_questions[1:]
+    return result
+
+
+def _answer_by_rules(question: str, history: list[dict], on_stage=None) -> Answer:
+    """הגיבוי כשהבנת השאלה לא זמינה: הכללים בקוד, כמו לפני שלב ההבנה."""
+    start = time.perf_counter()
     rest, greeted, _ = split_greeting(question)
     if greeted:  # "היי, איך מגישים תביעה?" - מתעלמים מהברכה ועונים על השאלה
         question = rest
@@ -741,24 +806,19 @@ def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:
     known_type = next((kind for m in reversed(context) if m["role"] == "user"
                        and (kind := insurance_type(m["content"]))), None) if missing_type else None
     if missing_type and not known_type:
-        clarify = clarification(question)
-        clarify.timings["total"] = time.perf_counter() - start
-        return clarify
-    with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
-        if on_stage:
-            on_stage("search")
-        standalone = standalone_question(question, context)
-        if known_type and not has_insurance_type(standalone):
-            # הניסוח מחדש השמיט את הסוג (נבדק: "איך מגישים תביעה בהפניקס?" אחרי שאלה על רכב) - הקוד משלים
-            # אותו מההודעה האחרונה של הלקוחה שהזכירה סוג
-            standalone = with_insurance_type(standalone, known_type)
-        condense = time.perf_counter() - start
-        result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
-                         standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage)
+        return clarification(question)
+    if on_stage:
+        on_stage("search")
+    standalone = standalone_question(question, context)
+    if known_type and not has_insurance_type(standalone):
+        # הניסוח מחדש השמיט את הסוג (נבדק: "איך מגישים תביעה בהפניקס?" אחרי שאלה על רכב) - הקוד משלים
+        # אותו מההודעה האחרונה של הלקוחה שהזכירה סוג
+        standalone = with_insurance_type(standalone, known_type)
+    condense = time.perf_counter() - start
+    result = respond(question, search(standalone, k=CONTEXT_CHUNKS, on_stage=on_stage), context,
+                     standalone=standalone, parallel=config.PARALLEL_LLM, on_stage=on_stage)
     if context:
         result.timings["condense"] = condense
-    result.timings["total"] = time.perf_counter() - start
-    log.info("timings %s | %s", " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items()), question[:60])
     return result
 
 

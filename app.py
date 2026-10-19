@@ -49,10 +49,11 @@ WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה 
            "קישור לעמוד המקור. כשהמידע לא מופיע באתר - אגיד זאת ואפנה לשירות הלקוחות. "
            "אין לי גישה לפוליסה האישית שלכם. אפשר לשאול למשל:")
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
-STAGE_NAMES = {"condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
+STAGE_NAMES = {"understand": "הבנת השאלה", "condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
                "llm": "מודל", "total": "סה\"כ"}
 # החיווי בשלבים: שורה ראשית ללקוחה, ומתחתיה המונח המקצועי באפור. pages = כמה עמודים שונים נמצאו בחיפוש.
 STAGE_LINES = {
+    "understand": ("💭 קורא את השאלה...", "הבנת השאלה: מודל שפה"),
     "search": ("🔍 מחפש את התשובה באתר הפניקס...", "חיפוש משולב: משמעות + מילות מפתח"),
     "rerank": ("📑 נמצאו {pages} עמודים מתאימים. בודק איזה מהם עונה בדיוק על השאלה...", "דירוג רלוונטיות (Rerank)"),
     "compose": ("✍️ מנסח תשובה מתוך המידע שנמצא...", "מודל שפה, רק מתוך הקטעים מהאתר"),
@@ -158,6 +159,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
             "timings": a.timings, "question": question, "race": a.race, "pages": a.pages, "warning": a.warning,
+            "understanding": a.understanding, "more_questions": a.more_questions,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
@@ -227,6 +229,10 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
                         unsafe_allow_html=True)
     if last and meta.get("kind") == "clarify":
         render_type_buttons(message)
+    if last and meta.get("more_questions"):  # כמה שאלות בהודעה אחת: עניתי על הראשונה, והשאר - בלחיצה
+        st.caption("שאלת גם:")
+        for i, more in enumerate(meta["more_questions"]):
+            st.button(more, key=f"more-{message.get('id')}-{i}", on_click=ask, args=(more,))
     if handoff := message.get("handoff"):
         if handoff["streak"]:
             st.info(STREAK_NOTICE)
@@ -238,6 +244,12 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
         with st.expander("פרטים טכניים"):
             st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
                        f"מודל: {llm.describe(meta['llm'])}")
+            if u := meta.get("understanding"):  # מה שלב הבנת השאלה החליט
+                st.caption(f"הבנת השאלה ({llm.describe(u.get('llm'))}): {u['intent']} · סוג: {u['insurance_type'] or '-'} · "
+                           f"מונח: {u['key_term'] or '-'} · נושא חדש: {'כן' if u['topic_changed'] else 'לא'} · "
+                           f"שפה: {u['language']}")
+            elif meta.get("kind") not in ("greeting", "too_long", "error"):
+                st.caption("הבנת השאלה לא הייתה זמינה - כללי הקוד (גיבוי)")
             if meta.get("warning"):  # מצב זהיר: אף מדרג לא היה זמין
                 st.caption(f"⚠️ {meta['warning']}")
             if meta.get("race"):  # בקשות במקביל ומעבר לגיבוי - רק כאן וביומן, לא ללקוחה

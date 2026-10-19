@@ -55,6 +55,10 @@ LLM_CHAIN = [
     # בלי Cohere כמודל שפה: הוא חולק את מכסת ה-Trial (1,000 בחודש) עם ה-Rerank, ואם היא נגמרת - הסף נכבה
 ]
 
+# שלב הבנת השאלה (understand.py): המודל הכי איכותי שיש לנו קודם (Pro לא זמין בחינמי), ואחריו השרשרת הרגילה
+UNDERSTAND_TIMEOUT: float | None = float(os.getenv("UNDERSTAND_TIMEOUT", "8"))  # בצ'אט; הבדיקות - בלי מגבלה
+UNDERSTAND_LLMS = [m.strip() for m in os.getenv("UNDERSTAND_LLMS", "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash").split(",")]
+
 # אמבדינגים: לכל ספק אינדקס משלו (וקטורים של מודלים שונים לא ניתנים להשוואה).
 EMBED_CHAIN = [
     ("gemini", "gemini-embedding-2"),
@@ -108,6 +112,8 @@ def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
     QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT = timeout, retries, max_wait
     from . import fallback  # כאן ולא למעלה: fallback לא תלוי ב-config, וזה המקום היחיד שמשנה אותו
     fallback.OVERLOAD_MEMORY = False
+    global UNDERSTAND_TIMEOUT
+    UNDERSTAND_TIMEOUT = None  # בבדיקות מודדים את הבנת השאלה עצמה, לא את הגיבוי
 
 
 _gemini_clients: dict[int, genai.Client] = {}
