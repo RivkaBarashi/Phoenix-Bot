@@ -106,6 +106,9 @@ RERANK_THRESHOLDS = {
     "cohere": float(os.getenv("RERANK_THRESHOLD", "0.82")),
     # כויל 19/10 (20 מועמדים, 384 טוקנים): ב-0.2 נשארו 21/23 שאלות עם תשובה, ו-20/20 בלי תשובה סורבו
     "local": float(os.getenv("RERANK_THRESHOLD_LOCAL", "0.2")),
+    # כויל 20/10 (20 מועמדים, כל קטע מקוצר לחלק הרלוונטי, 61 שאלות): השאלה עם תשובה הכי נמוכה 0.644, השאלה בלי
+    # תשובה הכי גבוהה 0.636 - ב-0.64 נשארו 31/31 ו-20/20 סורבו. המרווח צר; ב-0.65: 30/31 ו-20/20.
+    "voyage": float(os.getenv("RERANK_THRESHOLD_VOYAGE") or "0.64"),
 }
 RERANK_THRESHOLD = RERANK_THRESHOLDS["cohere"]  # הסף של המסלול הראשי (הבדיקות מכיילות מולו)
 

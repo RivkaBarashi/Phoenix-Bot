@@ -713,7 +713,7 @@ def test_cohere_is_a_reranker_only_not_a_language_model():
     assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "voyage", "local"]
 
 
-@pytest.mark.parametrize("reranker", ["cohere:rerank-v4.0-pro", "local:bge-reranker-v2-m3"])
+@pytest.mark.parametrize("reranker", ["cohere:rerank-v4.0-pro", "voyage:rerank-3", "local:bge-reranker-v2-m3"])
 def test_each_reranker_has_its_own_threshold(monkeypatch, reranker):
     """מתחת לסף של המדרג שדירג - "לא מופיע באתר" בלי לשאול את מודל התשובה; מעליו - המודל עונה."""
     from phoenix import config
