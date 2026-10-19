@@ -13,7 +13,8 @@
 משתמש בה רק כשהשאלה תלויה בשיחה ("ותוך כמה זמן?") - ראו answer.needs_context.
 
 יומן ומשוב: כל שאלה נרשמת ב-logs/conversations.jsonl (report.py מסכם), ומתחת לכל תשובה 👍/👎 שנשמר
-ביומן. בתשובה אישית או "לא מופיע באתר" - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
+ביומן. בתשובה אישית, "לא מופיע באתר" או תקלה - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
+"פרטים טכניים" מתחת לכל תשובה (החלטה, ציון, מודל, זמנים) - רק במצב מפתחת: ?dev=1 בכתובת.
 
 שאלת הבהרה: שאלה על ביטוח בלי סוג ("איך מגישים תביעה?") מקבלת "על איזה ביטוח מדובר?" עם כפתורים.
 לחיצה שולחת את השאלה המקורית + הסוג ("איך מגישים תביעה בביטוח רכב?"), כאילו הלקוחה כתבה אותה.
@@ -145,9 +146,10 @@ def to_html(text: str) -> str:
 
 def chat_history(messages: list[dict]) -> list[dict]:
     """השיחה עד עכשיו, לשאלות המשך: שאלות ותשובות בלבד. הודעת הפתיחה לא נשמרת בשיחה, והודעות שגיאה
-    ("משהו השתבש...") לא עוזרות להבין את השאלה הבאה."""
+    ("משהו השתבש...") לא עוזרות להבין את השאלה הבאה. הודעה ארוכה מדי ובקשת הקיצור שאחריה - גם לא: היא לא נענתה."""
     return [{"role": m["role"], "content": m["content"]} for m in messages
-            if m["role"] == "user" or (m.get("meta") or {}).get("kind") != "error"]
+            if (len(m["content"]) <= bot.MAX_QUESTION_CHARS if m["role"] == "user"
+                else (m.get("meta") or {}).get("kind") not in ("error", "too_long"))]
 
 
 def message_from_answer(a: bot.Answer, question: str = "") -> dict:
@@ -161,9 +163,10 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
 
 
-def error_message(reason: str) -> dict:
+def error_message(reason: str, question: str = "") -> dict:
     return {"role": "assistant", "content": ERROR_MESSAGE, "sources": [(CONTACT_TITLE, bot.CONTACT_URL)],
-            "meta": {"kind": "error", "reason": reason, "llm": None, "reranker": "-", "top_score": None}}
+            "meta": {"kind": "error", "reason": reason, "llm": None, "reranker": "-", "top_score": None,
+                     "question": question}}
 
 
 def _isolated(kind: str | None, value: str) -> str:
@@ -189,13 +192,11 @@ def stream_words(text: str):
 def render_type_buttons(message: dict):
     """כפתורי סוג הביטוח מתחת ל"על איזה ביטוח מדובר?" - רק בהודעה האחרונה, כדי שכפתור ישן לא ישלח שוב."""
     original = message["meta"].get("question", "")
-    labels = list(bot.INSURANCE_TYPES) + [OTHER_TYPE_LABEL]
-    widths = [len(label) + 4 for label in labels]  # עמודה לפי אורך הכפתור - "נסיעות לחו"ל" לא נחתך
-    for column, label in zip(st.columns(widths, gap="small"), labels):
-        if label == OTHER_TYPE_LABEL:
-            column.button(label, key=f"type-{message.get('id')}-other", on_click=ask_other_type, args=(original,))
-        else:
-            column.button(label, key=f"type-{message.get('id')}-{label}", on_click=choose_type, args=(original, label))
+    # שורה גמישה: כל כפתור ברוחב הטקסט שלו, ובמסך צר - ממשיכים בשורה הבאה (בעמודות "אחר" נחתך ל"א…")
+    with st.container(horizontal=True, wrap=True, gap="small"):
+        for label in list(bot.INSURANCE_TYPES):
+            st.button(label, key=f"type-{message.get('id')}-{label}", on_click=choose_type, args=(original, label))
+        st.button(OTHER_TYPE_LABEL, key=f"type-{message.get('id')}-other", on_click=ask_other_type, args=(original,))
 
 
 def render(message: dict, stream: bool = False, last: bool = False):
@@ -232,7 +233,7 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
         st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
     if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
         st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
-    if meta:
+    if meta and dev_mode():  # "פרטים טכניים" - רק במצב מפתחת
         score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
         with st.expander("פרטים טכניים"):
             st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
@@ -244,6 +245,11 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
             if meta.get("timings"):
                 st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
                                                   for k, v in meta["timings"].items()))
+
+
+def dev_mode() -> bool:
+    """מצב מפתחת: ?dev=1 בכתובת. רק בו מוצגים "פרטים טכניים" (החלטה, ציון, מודל, זמנים) - הלקוחה לא רואה אותם."""
+    return st.query_params.get("dev") == "1"
 
 
 def show_stage(slot, stage: str, **info):
@@ -262,11 +268,11 @@ def save_feedback(entry_id: str):
 
 
 def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:
-    """כפתור "המשך עם נציג בוואטסאפ" לתשובה personal או not_on_site, עם הודעה מוכנה שמסכמת את השאלה
+    """כפתור "המשך עם נציג בוואטסאפ" לתשובה personal, not_on_site או תקלה, עם הודעה מוכנה שמסכמת את השאלה
     (בשאלת המשך - השאלה העצמאית, שמובנת גם בלי השיחה). אחרי 2 "לא מופיע באתר" ברצף - הודעה בולטת,
     וההודעה המוכנה מסכמת את שתי השאלות. earlier: ההודעות שלפני התשובה הזו."""
     meta = reply["meta"]
-    if meta["kind"] not in ("personal", "not_on_site"):
+    if meta["kind"] not in ("personal", "not_on_site", "error"):
         return None
     question = (meta.get("standalone") or meta.get("question") or "")[:200]
     answers = [m for m in earlier if m["role"] == "assistant"]
@@ -277,6 +283,8 @@ def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:
         text = f"שלום, שאלתי את הבוט באתר הפניקס ולא מצאתי באתר תשובה לשתי שאלות: 1) {first} 2) {question}"
     elif meta["kind"] == "personal":
         text = f"שלום, יש לי שאלה על הפוליסה האישית שלי: {question}"
+    elif meta["kind"] == "error":
+        text = f"שלום, ניסיתי לשאול את הבוט באתר הפניקס והייתה תקלה. השאלה שלי: {question}"
     else:
         text = f"שלום, שאלתי את הבוט באתר הפניקס ולא מצאתי באתר תשובה לשאלה: {question}"
     return {"streak": streak, "url": f"{WHATSAPP_URL}?text={quote(text)}"}
@@ -358,7 +366,8 @@ def main():
                                                           race=result.race)
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
-                reply = error_message(type(exc).__name__)
+                reply = error_message(type(exc).__name__, question)
+                reply["handoff"] = handoff_for(reply, st.session_state.messages)
                 reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
             st.session_state.messages.append(reply)
             with status.container():  # התשובה במקום החיווי: מבנה כמו בהיסטוריה, בלי רכיב כפול בשאלה הבאה
