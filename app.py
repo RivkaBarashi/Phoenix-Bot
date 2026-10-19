@@ -93,7 +93,8 @@ def load_bot() -> dict:
     for p in embeddings.PROVIDERS:
         col = index.get_collection(p.name) if p.enabled else None
         vectors[p.name] = col.count() if col is not None else 0
-    config.gemini_client()
+    for number, _ in config.GEMINI_KEYS:  # לקוח לכל מפתח Gemini
+        config.gemini_client(number)
     return {"chunks": len(chunks), "vectors": vectors, "llms": [p.name for p in llm.PROVIDERS if p.enabled]}
 
 
@@ -208,7 +209,7 @@ def render(message: dict, stream: bool = False, last: bool = False):
             score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
             with st.expander("פרטים טכניים"):
                 st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
-                           f"מודל: {meta['llm'] or '-'}")
+                           f"מודל: {llm.describe(meta['llm'])}")
                 if meta.get("standalone"):
                     st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
                 if meta.get("timings"):

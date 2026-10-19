@@ -44,9 +44,13 @@ class SearchResult:
 def vector_search(query: str, n: int, embedder: str | None = None, fallback: bool = True) -> tuple[list[Hit], str]:
     preferred = embedder or config.EMBEDDER
     order = sorted((p.name for p in embeddings.PROVIDERS if p.enabled), key=lambda name: not name.startswith(preferred + ":"))
-    if not fallback:
-        order = order[:1]
-    collections = {name: col for name in order if (col := get_collection(name)) is not None and col.count()}
+    if not fallback:  # רק האינדקס שביקשו - אבל בכל המפתחות שלו
+        order = [name for name in order if name.startswith(preferred + ":")]
+    opened: dict[str, object] = {}  # אינדקס אחד לכל ספק, גם כשיש לו כמה מפתחות
+    for name in order:
+        if name.split(":")[0] not in opened:
+            opened[name.split(":")[0]] = get_collection(name)
+    collections = {name: col for name in order if (col := opened[name.split(":")[0]]) is not None and col.count()}
     if not collections:
         raise RuntimeError(f"אין אינדקס עבור {order} - צריך להריץ: python -m phoenix.index")
     vector, used = embeddings.embed_query(query, list(collections))

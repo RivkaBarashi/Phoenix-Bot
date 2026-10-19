@@ -40,7 +40,7 @@ def main():
         start = time.perf_counter()
         try:
             a = answer(question)
-            got, detail, text = a.kind, f"{a.reason} | {a.llm or '-'}", a.text
+            got, detail, text = a.kind, f"{a.reason} | {llm.describe(a.llm)}", a.text
         except Exception as exc:  # בדיקת עשן מדווחת על תקלה, היא לא קורסת בגללה
             got, detail, text = "exception", f"{type(exc).__name__}: {exc}", ""
         ok = got == expected

@@ -3,12 +3,12 @@
 קריאה = בקשה שיצאה לשירות בפועל, כולל כאלה שנכשלו (גם הן נספרות במגבלה לדקה).
 תשובה מהמטמון (של המודל או של ה-Rerank) לא נספרת כקריאה - היא מופיעה בנפרד, כחיסכון.
 """
-from . import config, llm, rerank
+from . import config, embeddings, llm, rerank
 from .fallback import CALLS, FAILED, resting
 
 SERVICES = {"gemini": "Gemini", "cohere": "Cohere", "groq": "Groq", "openrouter": "OpenRouter", "voyage": "Voyage"}
-LLM_NAMES = {f"{p}:{m}" for p, m in config.LLM_CHAIN}
-EMBED_NAMES = {f"{p}:{m}" for p, m in config.EMBED_CHAIN}
+LLM_NAMES = set(llm.ALL_NAMES)  # כולל כל צירופי מפתח+מודל של Gemini
+EMBED_NAMES = {p.name for p in embeddings.PROVIDERS}
 RERANK_NAMES = {f"{p}:{m}" for p, m in config.RERANK_CHAIN}
 
 
@@ -37,6 +37,15 @@ def report() -> str:
         if tokens := sum(llm.TOKENS[n] for n in mine):
             line += f" | {tokens:,} טוקנים"
         lines.append(line)
+    keys = {}
+    for n in names:  # Gemini לפי מפתח: "gemini:gemini-3.5-flash#2" -> מפתח 2
+        if n.startswith("gemini:") and "#" in n and _calls(n):
+            number = n.rsplit("#", 1)[1]
+            calls, failed = keys.get(number, (0, 0))
+            keys[number] = (calls + _calls(n), failed + FAILED[n])
+    if keys:
+        lines.append("   Gemini לפי מפתח: " + " | ".join(
+            f"מפתח {k}: {c}" + (f" ({f} נכשלו)" if f else "") for k, (c, f) in sorted(keys.items())))
     detail = [f"{n} {_calls(n)}" + (f" ({FAILED[n]} נכשלו)" if FAILED[n] else "") for n in sorted(names) if _calls(n)]
     if detail:
         lines.append("   לפי מודל: " + " | ".join(detail))

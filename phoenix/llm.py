@@ -100,7 +100,7 @@ def _with_system(messages: list[dict], system: str) -> list[dict]:
     return ([{"role": "system", "content": system}] if system else []) + messages
 
 
-def _gemini(model):
+def _gemini(model, number=1):
     # Gemma דרך אותו API לא תומך בהוראות מערכת ובמצב JSON - ההוראות נכנסות להודעה הראשונה
     is_gemma = model.startswith("gemma")
 
@@ -112,7 +112,7 @@ def _gemini(model):
                           parts=[types.Part(text=m["content"])])
             for m in messages
         ]
-        resp = config.gemini_client().models.generate_content(
+        resp = config.gemini_client(number).models.generate_content(
             model=model,
             contents=contents,
             config=types.GenerateContentConfig(
@@ -122,7 +122,7 @@ def _gemini(model):
                 http_options=types.HttpOptions(timeout=int((timeout or config.HTTP_TIMEOUT) * 1000)),
             ),
         )
-        _count_tokens(f"gemini:{model}", getattr(resp.usage_metadata, "total_token_count", None))
+        _count_tokens(f"gemini:{model}#{number}", getattr(resp.usage_metadata, "total_token_count", None))
         return _non_empty(resp.text)
     return call
 
@@ -166,10 +166,32 @@ def _make(provider, model):
     return _openai_compatible(provider, model)
 
 
-PROVIDERS = [
-    Provider(f"{p}:{m}", _make(p, m), enabled=bool(config.API_KEYS[p]))
-    for p, m in config.LLM_CHAIN
-]
+def _providers() -> list[Provider]:
+    """השרשרת לפי הסדר ב-config.LLM_CHAIN. כל מודל של Gemini - בכל המפתחות (קודם כל המפתחות של המודל
+    הראשון, אחר כך של השני): מכסה של מפתח אחד נגמרה - ממשיכים באותו מודל במפתח הבא."""
+    providers = []
+    for p, m in config.LLM_CHAIN:
+        if p == "gemini":
+            providers += [Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
+                          for n, _ in config.GEMINI_KEYS]
+        else:
+            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(config.API_KEYS[p])))
+    return providers
+
+
+PROVIDERS = _providers()
+ALL_NAMES = [p.name for p in PROVIDERS]  # לפני כל סינון (ממשק בדיקות, smoke --providers) - לדוחות
+
+
+def describe(name: str | None) -> str:
+    """שם ספק לתצוגה: "gemini:gemini-3.5-flash#2" -> "gemini-3.5-flash (מפתח 2)". רק מספר המפתח, לא הערך."""
+    if not name:
+        return "-"
+    base, cached = name.removesuffix(" (cache)"), name.endswith(" (cache)")
+    service, _, model = base.partition(":")
+    model, _, number = model.partition("#")
+    text = f"{model} (מפתח {number})" if number else f"{service}: {model}" if model else service
+    return text + (" (מהמטמון)" if cached else "")
 
 
 def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_mode: bool = False,

@@ -87,7 +87,7 @@ def injection_blocked(record: dict, threshold: float) -> bool:
     return fixed and not any(marker in text.lower() for marker in LEAK_MARKERS)
 
 
-LLM_NAMES = {f"{p}:{m}" for p, m in config.LLM_CHAIN}
+LLM_NAMES = set(llm.ALL_NAMES)  # כל צירופי מפתח+מודל
 STAGES = [("vector", "חיפוש וקטורי"), ("bm25", "מילות מפתח"), ("rerank", "Rerank"), ("llm", "מודל התשובה"),
           ("topic", "בדיקת נושא (מתחת לסף)")]
 
@@ -154,7 +154,7 @@ def print_models(records: list[dict]):
     print("\n=== מי ענה (מודל התשובה, לכל שאלה - פירוט בעמודה llm בקובץ התוצאות) ===")
     for model, count in by_model.most_common():
         numbers = ", ".join(str(r["n"]) for r in records if r["llm"].removesuffix(" (cache)") == model)
-        print(f"   {model:<45}{count:>4}" + (f"  (מהמטמון: {cached[model]})" if cached[model] else "")
+        print(f"   {llm.describe(model):<45}{count:>4}" + (f"  (מהמטמון: {cached[model]})" if cached[model] else "")
               + f"\n      שאלות: {numbers}")
     print("   (מתחת לסף הצ'אט מציג טקסט קבוע; בבדיקה המודל נשאל על כל שאלה, בשביל טבלת הכיול)")
 
@@ -236,7 +236,7 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
             "llm_calls": sum(CALLS[n] for n in llm_names), "llm_cache_hits": sum(llm.CACHE_HITS.values()),
             "mean_total_s": round(stats.mean(chat_s), 1) if chat_s else "",
             "p90_total_s": round(stats.p90(chat_s), 1) if chat_s else "",
-            "models": "; ".join(f"{m.split(':', 1)[-1]}:{c}" for m, c in models_used(records).most_common()),
+            "models": "; ".join(f"{llm.describe(m)}: {c}" for m, c in models_used(records).most_common()),
             "stopped": "yes" if stopped else ""}
 
 
@@ -254,7 +254,7 @@ def outcome(record: dict, threshold: float) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index", default=config.EMBEDDER, choices=[p.name.split(":")[0] for p in embeddings.PROVIDERS])
+    parser.add_argument("--index", default=config.EMBEDDER, choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.PROVIDERS)))
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--questions", default=str(QUESTIONS), help="קובץ השאלות (למשל data/questions_holdout.csv)")
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")

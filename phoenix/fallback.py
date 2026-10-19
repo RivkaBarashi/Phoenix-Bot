@@ -92,9 +92,17 @@ def time_left() -> float | None:
 
 @dataclass
 class Provider:
-    name: str                 # למשל "gemini:gemini-3.8-flash"
+    name: str                 # למשל "gemini:gemini-3.8-flash#2" (מודל + מספר מפתח)
     call: Callable[..., Any]
     enabled: bool = True      # False כשאין מפתח ב-.env
+    group: str = ""           # המודל בכל המפתחות ("gemini:gemini-3.8-flash"): עומס (503/504) מנוחה לכולם
+    key: str = ""             # המפתח בכל המודלים ("gemini#2"): מפתח לא תקין - מנוחה לכולם
+
+
+def is_resting(p: Provider) -> bool:
+    """הצירוף מפתח+מודל, המודל (עומס) או המפתח (לא תקין) עכשיו בהפסקה."""
+    now = time.time()
+    return any(_resting_until.get(k, 0) > now for k in (p.name, p.group, p.key) if k)
 
 
 def _status_code(exc: Exception) -> int | None:
@@ -181,7 +189,7 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
     for p in providers:
         if not p.enabled:
             continue
-        if _resting_until.get(p.name, 0) > time.time():
+        if is_resting(p):
             errors.append(f"{p.name}: resting")
             continue
         for attempt in range(retries + 1):
@@ -217,7 +225,10 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     reset = retry_after(exc)
                     if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
                         rest = min(max(reset, 1), 86400)
-                    _resting_until[p.name] = time.time() + rest
+                    # מכסה / מגבלה לדקה / מודל לא קיים: רק הצירוף מפתח+מודל נח, ואותו מודל ממשיך במפתח הבא.
+                    # מפתח לא תקין: המפתח נח בכל המודלים.
+                    target = p.key if kind == AUTH and p.key else p.name
+                    _resting_until[target] = time.time() + rest
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])
                 break

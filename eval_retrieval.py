@@ -111,7 +111,7 @@ def run_search(question: str, index: str, timings: dict | None = None) -> tuple[
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index", default=config.EMBEDDER, choices=[p.name.split(":")[0] for p in embeddings.PROVIDERS])
+    parser.add_argument("--index", default=config.EMBEDDER, choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.PROVIDERS)))
     parser.add_argument("--questions", default=str(QUESTIONS), help="קובץ השאלות (למשל data/questions_holdout.csv)")
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
     parser.add_argument("--category", "--types", dest="category", default="answerable,not_on_site,personal",

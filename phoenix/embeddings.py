@@ -37,7 +37,7 @@ def gemini_input(text: str, is_query: bool) -> str:
     return f"title: {title} | text: {body}"
 
 
-def _gemini(model):
+def _gemini(model, number=1):
     uses_prefix = model.startswith("gemini-embedding-2")  # gemini-embedding-001 עובד עם task_type
 
     def call(texts, is_query, timeout=None):
@@ -49,7 +49,7 @@ def _gemini(model):
         if timeout:
             cfg = (cfg or types.EmbedContentConfig()).model_copy(
                 update={"http_options": types.HttpOptions(timeout=int(timeout * 1000))})
-        resp = config.gemini_client().models.embed_content(
+        resp = config.gemini_client(number).models.embed_content(
             model=model,
             # gemini-embedding-2 מאחד רשימת מחרוזות לוקטור אחד - לכן כל טקסט כ-Content נפרד
             contents=[types.Content(parts=[types.Part(text=t)]) for t in inputs],
@@ -75,8 +75,12 @@ def _voyage(model):
 _FACTORIES = {"gemini": _gemini, "voyage": _voyage}
 
 PROVIDERS = [
-    Provider(f"{p}:{m}", _FACTORIES[p](m), enabled=bool(config.API_KEYS[p]))
+    # Gemini: אותו מודל בכל המפתחות - אותם וקטורים, אותו אינדקס (fnx_gemini). מכסה של מפתח נגמרה - המפתח הבא
+    provider
     for p, m in config.EMBED_CHAIN
+    for provider in ([Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
+                      for n, _ in config.GEMINI_KEYS] if p == "gemini"
+                     else [Provider(f"{p}:{m}", _FACTORIES[p](m), enabled=bool(config.API_KEYS[p]))])
 ]
 
 

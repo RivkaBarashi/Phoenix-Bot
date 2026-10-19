@@ -27,6 +27,13 @@ API_KEYS = {
     "voyage": os.getenv("VOYAGE_API_KEY", ""),
     "firecrawl": os.getenv("FIRECRAWL_API_KEY", ""),
 }
+# מאגר מפתחות Gemini: כל מפתח מחשבון ומפרויקט נפרד, ולכן עם מכסה יומית משלו לכל מודל.
+# המספר הוא המספר בשם המשתנה (GEMINI_API_KEY = 1, GEMINI_API_KEY_2 = 2 ...) - כך הוא מופיע בדוחות, בלי הערך.
+GEMINI_KEYS: list[tuple[int, str]] = [
+    (number, key) for number, key in
+    [(1, API_KEYS["gemini"].strip())] + [(n, os.getenv(f"GEMINI_API_KEY_{n}", "").strip()) for n in range(2, 10)]
+    if key
+]
 
 # מודל שפה לתשובות, לפי סדר. בחינמי של Gemini לכל מודל מכסה יומית נפרדת, ולמודלי Flash
 # היא רק 20 בקשות ביום (נבדק 16/10, מתאפסת בחצות שעון פסיפיק) - לכן כמה דגמי Flash ברצף,
@@ -90,8 +97,9 @@ def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
 
 
 @lru_cache
-def gemini_client() -> genai.Client:
+def gemini_client(number: int = 1) -> genai.Client:
+    """לקוח Gemini למפתח מספר number (1 = GEMINI_API_KEY, 2 = GEMINI_API_KEY_2 ...)."""
     return genai.Client(
-        api_key=API_KEYS["gemini"],
+        api_key=dict(GEMINI_KEYS).get(number, API_KEYS["gemini"]),
         http_options=types.HttpOptions(timeout=HTTP_TIMEOUT * 1000),
     )

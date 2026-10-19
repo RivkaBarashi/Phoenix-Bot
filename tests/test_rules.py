@@ -333,3 +333,53 @@ def test_regular_question_without_a_model_is_still_an_error(monkeypatch):
         raise fallback.AllProvidersFailed("llm", ["all models: quota"])
     monkeypatch.setattr(llm, "chat", unavailable)
     assert A.respond("מה המספר של מוקד תביעות רכב?", HIGH_HIT).reason == "llm_unavailable"
+
+
+# ---------------------------------------------------------------- מאגר מפתחות Gemini (ספקים מדומים, בלי API)
+
+class FakeApiError(Exception):
+    """שגיאה כמו של google-genai: קוד HTTP בשדה code."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+DAILY_QUOTA = "Quota exceeded for metric GenerateRequestsPerDay, limit 20 per day. Please retry in 6h12m3s."
+
+
+def chain_providers(behaviour: dict, called: list) -> list:
+    """2 מודלים x 2 מפתחות, לפי הסדר: מודל ראשון בכל המפתחות, ואז השני."""
+    def make(name):
+        def call(*args):
+            called.append(name)
+            if isinstance(behaviour.get(name), Exception):
+                raise behaviour[name]
+            return name
+        return call
+    return [fallback.Provider(f"t:{m}#{k}", make(f"{m}#{k}"), group=f"t:{m}", key=f"t#{k}")
+            for m in ("m1", "m2") for k in (1, 2)]
+
+
+def test_daily_quota_moves_to_the_next_key_of_the_same_model(monkeypatch):
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    called = []
+    providers = chain_providers({"m1#1": FakeApiError(429, DAILY_QUOTA)}, called)
+    assert fallback.run_chain("test", providers, retries=0)[1] == "t:m1#2"
+    assert called == ["m1#1", "m1#2"]                 # אותו מודל, המפתח הבא - לפני מודל אחר
+    rest = fallback.resting()
+    assert rest["t:m1#1"] > 6 * 3600                  # הצירוף מפתח+מודל נח עד האיפוס שהספק דיווח
+    assert "t:m1" not in rest and "t#1" not in rest   # המודל (בשאר המפתחות) והמפתח (בשאר המודלים) - לא
+    called.clear()
+    fallback.run_chain("test", providers, retries=0)
+    assert called == ["m1#2"]                         # בקריאה הבאה: מדלגים על m1#1 בלי לנסות
+
+
+def test_invalid_key_rests_on_all_models(monkeypatch):
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    called = []
+    providers = chain_providers({"m1#1": FakeApiError(403, "API key not valid")}, called)
+    fallback.run_chain("test", providers, retries=0)
+    called.clear()
+    assert fallback.run_chain("test", providers[2:], retries=0)[1] == "t:m2#2"
+    assert called == ["m2#2"]                         # מפתח 1 לא נוסה גם במודל השני

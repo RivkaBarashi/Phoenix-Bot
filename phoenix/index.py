@@ -52,7 +52,8 @@ def get_collection(provider: str, create: bool = False):
     אינדקס שנבנה במודל אחר או בפורמט קלט אחר (embeddings.INPUT_FORMAT) לא תואם לשאלות
     של היום: create=True בונה אותו מחדש, create=False מחזיר None.
     """
-    name, model = collection_name(provider), provider.split(":", 1)[1]
+    name = collection_name(provider)
+    model = provider.split(":", 1)[1].split("#")[0]  # "gemini-embedding-2#3" - אותו מודל, מפתח 3
     wanted = {"model": model, "input_format": embeddings.INPUT_FORMAT[provider.split(":")[0]]}
     if name in {c.name for c in db().list_collections()}:
         col = db().get_collection(name, embedding_function=None)
@@ -91,6 +92,7 @@ class Job:
     rest_until: float = 0.0
     stopped: str = ""
     quota_strikes: int = 0
+    spares: list = None  # מפתחות נוספים לאותו מודל: מכסה של מפתח נגמרה - עוברים למפתח הבא בלי לחכות
 
     @property
     def kind(self) -> str:
@@ -129,6 +131,9 @@ def build(jobs: list[Job]):
                     print(f"  {job.kind}: {kind}, ממתין {wait:.0f} שניות"
                           + (f" - ובינתיים ממשיך עם {', '.join(others)}" if others else "")
                           + f"  [{limit_reason(exc)}]", flush=True)
+                elif kind == QUOTA and job.spares:
+                    job.provider = job.spares.pop(0)
+                    print(f"  {job.kind}: מכסה יומית במפתח הזה - ממשיך במפתח הבא ({job.provider.name})", flush=True)
                 elif kind == QUOTA and (wait := retry_after(exc)) and wait <= MAX_QUOTA_WAIT:
                     # מכסה יומית שהספק אומר מתי היא מתאפסת (ג'מיני: 1,000 בקשות ביום) - מחכים ואז ממשיכים
                     job.rest_until = time.time() + wait + 30
@@ -158,16 +163,18 @@ def build(jobs: list[Job]):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--only", choices=[p.name.split(":")[0] for p in embeddings.PROVIDERS])
+    parser.add_argument("--only", choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.PROVIDERS)))
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
     chunks = [json.loads(line) for line in open(CHUNKS_FILE, encoding="utf-8")]
     ids = {c["id"] for c in chunks}
     jobs = []
+    by_collection: dict[str, list[Provider]] = {}  # אינדקס אחד לכל ספק, וכל המפתחות שלו כגיבוי
     for p in embeddings.PROVIDERS:
-        if not p.enabled or (args.only and not p.name.startswith(args.only + ":")):
-            continue
+        if p.enabled and not (args.only and not p.name.startswith(args.only + ":")):
+            by_collection.setdefault(collection_name(p.name), []).append(p)
+    for p, *spares in by_collection.values():
         col = get_collection(p.name, create=True)
         stored = col.get(include=["documents", "embeddings"])
         have = set(stored["ids"])
@@ -187,7 +194,7 @@ def main():
         pending = [c for c in missing if c["text"] not in by_text]
         print(f"{collection_name(p.name)} ({p.name}): {len(current)} כבר באינדקס, {len(reuse)} הועתקו "
               f"מווקטור קיים (טקסט זהה), {len(pending)} להטמעה, {len(stale)} ישנים נמחקו")
-        jobs.append(Job(p, col, pending, len(chunks)))
+        jobs.append(Job(p, col, pending, len(chunks), spares=spares))
 
     start = time.time()
     build(jobs)
