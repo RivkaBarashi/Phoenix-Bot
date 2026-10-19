@@ -5,6 +5,7 @@ run_chain מנסה ספק אחרי ספק לפי הסדר. ספק = מודל + �
   - מכסה יומית: הצירוף מפתח+מודל נח עד האיפוס שהספק מדווח, ואותו מודל ממשיך במפתח הבא.
   - מגבלה לדקה (429): הצירוף נח עד שהספק אומר שהוא פנוי (בבדיקות: ניסיון חוזר אחד אחרי המתנה קצרה).
   - עומס (503/504) או חריגת זמן: המודל נח 5 דקות בכל המפתחות, ועוברים מיד למודל הבא - בלי המתנה.
+    בסקריפטי הבדיקות (config.patient) - כמו לפני כן: ניסיון חוזר אחד, ואז רק הצירוף מפתח+מודל נח 30 שניות.
   - מפתח לא תקין: המפתח נח בכל המודלים.
 """
 import collections
@@ -33,6 +34,11 @@ ERROR = "error"              # כל השאר (400 וכו')
 # עומס (503/504) או חריגת זמן: לא מחכים ולא מנסים שוב את אותו מודל - עוברים מיד למודל הבא.
 RETRYABLE = {RATE_LIMIT}
 OVERLOAD_REST = 300  # עומס: המודל מדולג 5 דקות בלבד (בכל המפתחות), לא עד איפוס המכסה
+# זיכרון העומס - לצ'אט. config.patient() (סקריפטי הבדיקות) מכבה אותו: עומס מקבל ניסיון חוזר באותו מודל, ואז
+# רק הצירוף מפתח+מודל נח PATIENT_OVERLOAD_REST שניות - כמו לפני כן. כך ריצה על מודל אחד קבוע לא מאבדת אותו
+# ל-5 דקות (ונעצרת אחרי 3 כישלונות) בגלל 503 אחד.
+OVERLOAD_MEMORY = True
+PATIENT_OVERLOAD_REST = 30
 COOLDOWN_SECONDS = {
     RATE_LIMIT: 60,
     QUOTA: 3600,
@@ -220,19 +226,20 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     errors.append(f"{p.name}: cut short by the question time limit")
                     LAST_ERRORS[purpose] = errors
                     raise OutOfTime(purpose, errors) from exc
-                if kind in RETRYABLE and attempt < retries:
+                overload = kind == UNAVAILABLE
+                if (kind in RETRYABLE or overload and not OVERLOAD_MEMORY) and attempt < retries:
                     wait = min(max_wait, retry_after(exc) or 2 ** (attempt + 1) + random.random())
                     log.info("%s: %s %s, retrying in %.0fs", purpose, p.name, kind, wait)
                     time.sleep(wait)
                     continue
                 if cooldown and kind in COOLDOWN_SECONDS:
-                    rest = COOLDOWN_SECONDS[kind]
+                    rest = PATIENT_OVERLOAD_REST if overload and not OVERLOAD_MEMORY else COOLDOWN_SECONDS[kind]
                     reset = retry_after(exc)
                     if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
                         rest = min(max(reset, 1), 86400)
                     # מכסה / מגבלה לדקה / מודל לא קיים: רק הצירוף מפתח+מודל נח, ואותו מודל ממשיך במפתח הבא.
                     # מפתח לא תקין: המפתח נח בכל המודלים. עומס: המודל נח 5 דקות בכל המפתחות.
-                    target = (p.key if kind == AUTH and p.key else p.group if kind == UNAVAILABLE and p.group
+                    target = (p.key if kind == AUTH and p.key else p.group if overload and OVERLOAD_MEMORY and p.group
                               else p.name)
                     _resting_until[target] = time.time() + rest
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")

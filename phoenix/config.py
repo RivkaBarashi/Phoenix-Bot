@@ -94,9 +94,12 @@ PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true"
 
 
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
-    """לסקריפטים בלבד (eval_*.py): המתנה ארוכה יותר לכל ספק."""
+    """לסקריפטים בלבד (eval_*.py): המתנה ארוכה יותר לכל ספק, ועל עומס (503) - ניסיון חוזר באותו מודל במקום
+    לדלג עליו 5 דקות (זיכרון העומס הוא לצ'אט - fallback.OVERLOAD_MEMORY)."""
     global QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT
     QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT = timeout, retries, max_wait
+    from . import fallback  # כאן ולא למעלה: fallback לא תלוי ב-config, וזה המקום היחיד שמשנה אותו
+    fallback.OVERLOAD_MEMORY = False
 
 
 _gemini_clients: dict[int, genai.Client] = {}

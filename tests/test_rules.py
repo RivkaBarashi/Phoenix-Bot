@@ -417,6 +417,24 @@ def test_timeout_counts_as_overload(monkeypatch):
     assert called == ["slow", "fast"] and 290 < fallback.resting()["t:m1"] <= 300
 
 
+def test_eval_scripts_retry_overload_on_the_same_model(monkeypatch):
+    """בסקריפטי הבדיקות (config.patient): 503 -> ניסיון חוזר אחד, ואז רק הצירוף מפתח+מודל נח 30 שניות ואותו מודל
+    ממשיך במפתח הבא. ריצה על מודל אחד קבוע לא מאבדת אותו ל-5 דקות."""
+    from phoenix import config
+    for name in ("QUERY_TIMEOUT", "QUERY_RETRIES", "QUERY_MAX_WAIT"):
+        monkeypatch.setattr(config, name, getattr(config, name))  # patient() משנה אותם - יוחזרו בסוף הבדיקה
+    monkeypatch.setattr(fallback, "OVERLOAD_MEMORY", True)
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    config.patient()
+    assert fallback.OVERLOAD_MEMORY is False
+    called = []
+    providers = chain_providers({"m1#1": FakeApiError(503, "The model is overloaded. Please try again later.")}, called)
+    assert fallback.run_chain("test", providers, retries=1, max_wait=0)[1] == "t:m1#2"
+    assert called == ["m1#1", "m1#1", "m1#2"]  # ניסיון חוזר, ואז אותו מודל במפתח הבא - לא מודל אחר
+    rest = fallback.resting()
+    assert 25 < rest["t:m1#1"] <= 30 and "t:m1" not in rest
+
+
 def test_llm_chat_keeps_model_and_key_groups(monkeypatch):
     """דרך llm.chat (לא רק run_chain): עומס במודל 1 - המודל מדולג בכל המפתחות."""
     monkeypatch.setattr(fallback, "_resting_until", {})
