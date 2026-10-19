@@ -57,6 +57,21 @@ copy .env.example .env
 לחיצה כפולה על `run_chat.bat`, או `.venv\Scripts\streamlit run app.py` – הצ'אט נפתח ב-http://localhost:8501.
 מצב מפתחת (החלטה, ציון, מודל ומפתח, זמנים מתחת לכל תשובה): http://localhost:8501/?dev=1.
 
+## ענן (Docker)
+
+אימג' אחד שרץ בכל ענן שמריץ קונטיינרים (Hugging Face Spaces, AWS App Runner / ECS, Google Cloud Run, Render):
+
+```bat
+docker build -t phoenix-bot .
+docker run --env-file .env -p 8501:8501 phoenix-bot
+```
+
+- **המפתחות** – רק כמשתני סביבה (ה-Secrets של הענן), באותם שמות כמו ב-`.env.example`. הם לא נכנסים לאימג'.
+- **האינדקס** (`data/chroma`, ~65MB) נכנס לאימג' כמו שהוא – לא בונים אותו מחדש. בענן שבונה מ-Git (Hugging Face,
+  Streamlit Cloud) צריך להעלות אותו עם Git LFS.
+- **הפורט** נקבע לפי `PORT` (ברירת מחדל 8501). בדיקת תקינות: `/_stcore/health`.
+- **מאחורי סינון HTTPS** (כמו Netspark) – תעודת השורש של הסינון ב-`certs/` (ראו `certs/README.md`).
+
 ## בדיקות
 
 | פקודה | מה בודקת |
