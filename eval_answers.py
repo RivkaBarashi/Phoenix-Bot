@@ -72,6 +72,25 @@ def judge(question: str, expected: str, got: str, personal: bool = False) -> tup
         return "n/a", "השופט לא זמין"
 
 
+def pin_llm(model: str) -> list[str]:
+    """--llm: כל הקריאות של הבוט (תשובה, בדיקת נושא) רק למודל Gemini הזה - בכל המפתחות שלו לפי הסדר (מאגר
+    המפתחות), ובלי גיבוי למודל אחר: נגמרה המכסה בכל המפתחות - 3 כישלונות ברצף והריצה נעצרת. השופט לא מושפע
+    (מזוהה לפי ההוראות שלו - הגיבוי של הבוט מבקש את אותם ספקים). בלי מטמון: יש בו תשובות של מודלים אחרים."""
+    pinned = [p.name for p in llm.PROVIDERS if p.group == f"gemini:{model}" and p.enabled]
+    if not pinned:
+        sys.exit(f"--llm {model}: אין מודל Gemini כזה בשרשרת (config.LLM_CHAIN), או שאין לו מפתח")
+    chat = llm.chat
+
+    def pinned_chat(messages, *args, names=None, **kwargs):
+        if kwargs.get("system") in (JUDGE_PROMPT, PERSONAL_JUDGE_PROMPT):
+            return chat(messages, *args, names=names, **kwargs)
+        return chat(messages, *args, names=pinned, **kwargs)
+
+    llm.chat = pinned_chat
+    llm.CACHE_MODE = "write"
+    return pinned
+
+
 # סימנים לכך שההוראות או מבנה התשובה דלפו החוצה
 LEAK_MARKERS = ("kind", "evidence", "json", "not_on_site", "off_topic", "system prompt", "מקור יחיד", "כללים:")
 
@@ -260,6 +279,8 @@ def main():
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
     parser.add_argument("--category", help="רק הסוגים האלה: " + ", ".join(TYPES))
     parser.add_argument("--fresh", action="store_true", help="לשאול את המודלים מחדש, בלי המטמון")
+    parser.add_argument("--llm", help="מודל Gemini אחד קבוע לבוט, בכל המפתחות ובלי גיבוי (למשל gemini-3.5-flash). "
+                                      "השופט נשאר Groq/OpenRouter. כולל --fresh")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     config.patient()  # בבדיקות מחכים יותר לכל ספק (בצ'אט: 15 שניות ועוברים מיד לבא)
@@ -267,12 +288,15 @@ def main():
     answer_layer.COMPACT_LLMS = [p for p in answer_layer.COMPACT_LLMS if p != "cohere"]
     if args.fresh:
         llm.CACHE_MODE = "write"
+    pinned = pin_llm(args.llm) if args.llm else []
 
     selected = select_rows(args.questions, args.only, args.category)
     version = hashlib.sha1(answer_layer.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
     print(f"אינדקס: {args.index} | Rerank: {RERANKER} | סף נוכחי: {config.RERANK_THRESHOLD} | "
           f"{len(selected)} שאלות מ-{Path(args.questions).name} | גרסת הוראות {version} | "
-          f"מטמון: {'בלי (--fresh)' if args.fresh else 'כן'}")
+          f"מטמון: {'בלי (--fresh)' if args.fresh else 'בלי (--llm)' if pinned else 'כן'}")
+    if pinned:
+        print(f"מודל קבוע: {args.llm}, מפתחות {', '.join(name.split('#')[1] for name in pinned)} - בלי גיבוי למודל אחר")
 
     records = []
     streak, stopped = FailureStreak(), False
