@@ -3,6 +3,7 @@
 הרצה:  .venv\\Scripts\\python -m pytest
 """
 import json
+import threading
 import time
 
 import pytest
@@ -488,6 +489,27 @@ def test_eval_is_never_parallel(monkeypatch):
     fake_race(monkeypatch, {"chain": (0.0, VALID)})
     monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בבדיקות אין בקשות במקביל"))
     assert A.respond("איך מגישים תביעה?", RACE_HIT).llm == "gemini:chain#1"
+
+
+def test_one_gemini_client_per_key_even_when_threads_ask_at_once(monkeypatch):
+    """בבקשות במקביל שני threads ביקשו בפעם הראשונה לקוח לאותו מפתח: נוצרו שניים, הכפול נמחק, והספרייה סגרה
+    את החיבור שלו באמצע הבקשה ("client has been closed" ב-smoke_test)."""
+    from phoenix import config
+    created = []
+
+    def slow_client(**kwargs):
+        time.sleep(0.05)  # היצירה לוקחת זמן - כך כמה threads נכנסים יחד
+        created.append(object())
+        return created[-1]
+    monkeypatch.setattr(config.genai, "Client", slow_client)
+    monkeypatch.setattr(config, "_gemini_clients", {})
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(config.gemini_client(3))) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(created) == 1 and len(got) == 6 and all(c is created[0] for c in got)
 
 
 # ---------------------------------------------------------------- חיווי שלבים בצ'אט (חיפוש ומודל מזויפים, בלי API)

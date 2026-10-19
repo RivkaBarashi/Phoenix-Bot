@@ -3,7 +3,7 @@
 כדי לשנות את סדר הגיבוי - משנים את הסדר ברשימות למטה.
 """
 import os
-from functools import lru_cache
+import threading
 from pathlib import Path
 
 import truststore
@@ -99,10 +99,18 @@ def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
     QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT = timeout, retries, max_wait
 
 
-@lru_cache
+_gemini_clients: dict[int, genai.Client] = {}
+_gemini_clients_lock = threading.Lock()
+
+
 def gemini_client(number: int = 1) -> genai.Client:
-    """לקוח Gemini למפתח מספר number (1 = GEMINI_API_KEY, 2 = GEMINI_API_KEY_2 ...)."""
-    return genai.Client(
-        api_key=dict(GEMINI_KEYS).get(number, API_KEYS["gemini"]),
-        http_options=types.HttpOptions(timeout=HTTP_TIMEOUT * 1000),
-    )
+    """לקוח Gemini למפתח מספר number (1 = GEMINI_API_KEY, 2 = GEMINI_API_KEY_2 ...). לקוח אחד לכל מפתח, גם כששני
+    threads מבקשים אותו בפעם הראשונה באותו רגע (בקשות במקביל): לקוח כפול נמחק מיד, והספרייה סוגרת את החיבור
+    שלו באמצע הבקשה - "Cannot send a request, as the client has been closed"."""
+    with _gemini_clients_lock:
+        if number not in _gemini_clients:
+            _gemini_clients[number] = genai.Client(
+                api_key=dict(GEMINI_KEYS).get(number, API_KEYS["gemini"]),
+                http_options=types.HttpOptions(timeout=HTTP_TIMEOUT * 1000),
+            )
+        return _gemini_clients[number]
