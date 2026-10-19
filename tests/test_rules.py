@@ -996,9 +996,19 @@ def test_answers_come_only_from_strong_models(monkeypatch):
     assert asked == [["gemini"]]  # רק Gemini - שום ניסיון אצל Groq/OpenRouter
 
 
+def fake_providers(monkeypatch, models=("gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"), keys=2):
+    """ספקים מזויפים: כל מודל בכמה מפתחות, ועוד Groq - כך הבדיקה לא תלויה במפתחות שב-.env (ב-CI אין)."""
+    from phoenix.fallback import Provider
+    providers = [Provider(f"gemini:{m}#{n}", lambda *a, **k: "", group=f"gemini:{m}", key=f"gemini#{n}")
+                 for m in models for n in range(1, keys + 1)] + [Provider("groq:x", lambda *a, **k: "")]
+    monkeypatch.setattr(llm, "PROVIDERS", providers)
+    return providers
+
+
 def test_understanding_runs_only_on_the_strong_models(monkeypatch):
     """הבנת השאלה לא עוברת ל-Groq/OpenRouter: כל Gemini Flash לא זמין - כללי הקוד."""
     from phoenix import config, understand
+    fake_providers(monkeypatch)
     asked = []
 
     def chat(messages, names=None, **kwargs):
@@ -1018,6 +1028,7 @@ def test_race_is_on_in_the_chat_with_3_6_and_3_8():
 
 def test_race_pair_prefers_the_configured_models_and_fills_in(monkeypatch):
     """הזוג: 3.6 ו-3.8 (לא 3.6 ו-3.7 לפי סדר השרשרת), כל אחד מתחיל במפתח אחר. 3.8 נח - 3.7 נכנס במקומו."""
+    fake_providers(monkeypatch)
     pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
     assert pair[0][0].startswith("gemini:gemini-3.6-flash#") and pair[1][0].startswith("gemini:gemini-3.8-flash#")
     assert pair[0][0].split("#")[1] != pair[1][0].split("#")[1]
