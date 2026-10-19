@@ -66,6 +66,26 @@ MAX_QUESTION_CHARS = 1000
 TOO_LONG_TEXT = ("ההודעה ארוכה מדי ({chars:,} תווים). אפשר לקצר אותה לשאלה אחת, עד 1,000 תווים? "
                  "כך אוכל לחפש באתר תשובה מדויקת.")
 
+# --- שלב 4: לא לומר "לא מופיע באתר" כשהמידע כן באתר ורק הבדיקה פסלה את הניסוח ---
+# פסילות שאפשר לתקן: מחזירים למודל את הסיבה המדויקת, פעם אחת. נכשל שוב - "מצאתי מידע קרוב" עם קישור לעמוד.
+REPAIRABLE = ("no_source", "unverified_evidence", "unsupported_numbers", "empty_answer")
+UNVERIFIED_TEXT = "מצאתי באתר מידע קרוב, אבל לא הצלחתי לאמת תשובה מדויקת. המידע נמצא בעמוד שבקישור למטה."
+REPAIR_PROMPT = ("התשובה שלך נפסלה בבדיקה אוטומטית מול האתר: {problem} תקן את זה והחזר את ה-JSON כולו מחדש, לפי "
+                 "אותם כללים. אם אי אפשר לענות מהקטעים - kind = \"not_on_site\".")
+MIN_REPAIR_SECONDS = 5  # בצ'אט: פחות מזה מהזמן לשאלה - בלי ניסיון תיקון
+
+
+def repair_note(reason: str) -> str:
+    """הסיבה המדויקת לפסילה, כמו שהמודל צריך לשמוע אותה."""
+    if reason.startswith("unsupported_numbers:"):
+        return (f"המספרים {reason.split(':', 1)[1]} שבתשובה לא מופיעים באף קטע. כתוב רק מספרים שמופיעים בקטעים, "
+                "בדיוק כמו שהם כתובים.")
+    return {"no_source": "לא ציינת ב-sources את מספר הקטע שעליו התשובה מבוססת.",
+            "unverified_evidence": "המשפט ב-evidence לא נמצא מילה במילה בקטע שציינת ב-sources. העתק אותו מהקטע "
+                                   "בדיוק, בלי לשנות אף מילה, או ציין את הקטע הנכון.",
+            "empty_answer": "השדה answer ריק."}.get(reason, reason)
+
+
 CAUTIOUS_WARNING = "מצב זהיר: אף מדרג לא היה זמין, ולכן אין סף - המודל החליט לבד (והקוד אימת את התשובה)."
 
 # --- שאלת הבהרה: שאלה על ביטוח בלי סוג הביטוח ("איך מגישים תביעה?") - בלי חיפוש ובלי מודל ---
@@ -209,6 +229,7 @@ class Answer:
     pages: int = 0             # כמה עמודים שונים נבדקו בחיפוש (לשורה בסוף התשובה בצ'אט)
     warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
+    repaired: str = ""         # התשובה עברה רק אחרי ניסיון תיקון - הסיבה לפסילה הראשונה (ליומן ולבדיקות)
     understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
     more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
 
@@ -710,10 +731,48 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         return not_on_site("model_not_found", referral, **extra)
 
     start = time.perf_counter()
+    def unverified(rejected: Answer) -> Answer:
+        """שלב 4: המידע באתר, אבל אי אפשר לאמת תשובה מדויקת - אומרים את זה, עם קישור לעמוד הרלוונטי."""
+        cited = _cited((rejected.raw or {}).get("sources"), hits)
+        page = next((url for url, _ in cited if url != CONTACT_URL), hits[0].url)
+        urls = list(dict.fromkeys([page, CONTACT_URL]))
+        return Answer(f"{UNVERIFIED_TEXT} {GENERIC_REFERRAL}\n\n{format_sources(urls)}", "unverified",
+                      f"unverified:{rejected.reason}", urls, **base, llm=rejected.llm, raw=rejected.raw)
+
+    def settle(outcome: Answer) -> Answer:
+        """פסילה שאפשר לתקן - ניסיון אחד עם הסיבה המדויקת. נפסלה שוב (או דליפה) - unverified."""
+        if outcome.reason.startswith("leak_guard"):  # לא מחזירים למודל תשובה שדלפו בה ההוראות
+            return unverified(outcome)
+        if not outcome.reason.startswith(REPAIRABLE):
+            return outcome
+        left = time_left()
+        if outcome.raw is None or (left is not None and left < MIN_REPAIR_SECONDS):
+            return unverified(outcome)
+        if on_stage:
+            on_stage("compose")
+        repair_start = time.perf_counter()
+        messages = [{"role": "user", "content": _user_message(question, standalone, history, hits)},
+                    {"role": "assistant", "content": json.dumps(outcome.raw, ensure_ascii=False)},
+                    {"role": "user", "content": REPAIR_PROMPT.format(problem=repair_note(outcome.reason))}]
+        try:
+            fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
+                             only=FULL_CONTEXT_LLMS)
+        except AllProvidersFailed:
+            return unverified(outcome)
+        finally:
+            timings["repair"] = time.perf_counter() - repair_start
+        if on_stage:
+            on_stage("verify")
+        again = finish(fixed)
+        if again.reason.startswith(REPAIRABLE) or again.reason.startswith("leak_guard"):
+            return unverified(again)
+        again.repaired = outcome.reason
+        return again
+
     try:  # שכבה 2
         if parallel and (raced := _race(question, standalone, history, hits, finish, on_stage)):
             timings["llm"] = time.perf_counter() - start
-            return raced
+            return settle(raced)
         reply = _ask_model(question, standalone, history, hits, on_stage)
     except AllProvidersFailed as exc:
         timings["llm"] = time.perf_counter() - start
@@ -728,7 +787,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     timings["llm"] = time.perf_counter() - start
     if on_stage and not reply.cached:
         on_stage("verify")
-    return finish(reply)
+    return settle(finish(reply))
 
 
 def answer(question: str, history: list[dict] = (), on_stage=None) -> Answer:

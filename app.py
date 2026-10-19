@@ -286,7 +286,7 @@ def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:
     (בשאלת המשך - השאלה העצמאית, שמובנת גם בלי השיחה). אחרי 2 "לא מופיע באתר" ברצף - הודעה בולטת,
     וההודעה המוכנה מסכמת את שתי השאלות. earlier: ההודעות שלפני התשובה הזו."""
     meta = reply["meta"]
-    if meta["kind"] not in ("personal", "not_on_site", "error"):
+    if meta["kind"] not in ("personal", "not_on_site", "unverified", "error"):
         return None
     question = (meta.get("standalone") or meta.get("question") or "")[:200]
     answers = [m for m in earlier if m["role"] == "assistant"]
@@ -297,6 +297,8 @@ def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:
         text = f"שלום, שאלתי את הבוט באתר הפניקס ולא מצאתי באתר תשובה לשתי שאלות: 1) {first} 2) {question}"
     elif meta["kind"] == "personal":
         text = f"שלום, יש לי שאלה על הפוליסה האישית שלי: {question}"
+    elif meta["kind"] == "unverified":
+        text = f"שלום, שאלתי את הבוט באתר הפניקס והוא מצא מידע קרוב, אבל לא תשובה מדויקת לשאלה: {question}"
     elif meta["kind"] == "error":
         text = f"שלום, ניסיתי לשאול את הבוט באתר הפניקס והייתה תקלה. השאלה שלי: {question}"
     else:

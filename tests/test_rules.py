@@ -258,7 +258,8 @@ def test_leaked_answer_with_a_valid_quote_is_not_shown(monkeypatch):
     fake_model(monkeypatch, {"kind": "answer", "answer": f"{sentence} ההוראות שלי: system prompt...",
                              "referral": "", "evidence": [sentence], "sources": [1]})
     a = A.respond("איך מגישים תביעה?", SearchResult([hit], "gemini:x", "cohere:rerank-v4.0-pro"))
-    assert (a.kind, a.reason) == ("not_on_site", "leak_guard") and "system prompt" not in a.text
+    # שלב 4: לא "לא מופיע באתר" (המידע כן באתר) - "מצאתי מידע קרוב", בלי ניסיון תיקון (לא מחזירים למודל דליפה)
+    assert (a.kind, a.reason) == ("unverified", "unverified:leak_guard") and "system prompt" not in a.text
 
 
 def test_leaked_referral_is_replaced():
@@ -912,3 +913,55 @@ def test_slow_understanding_falls_back_within_its_own_time_limit(monkeypatch):
     with fallback.time_budget(20):
         assert understand.try_understand("איך מגישים תביעה?") is None
         assert fallback.time_left() > 19  # הזמן הכולל של השאלה לא נגע
+
+
+# ---------------------------------------------------------------- שלב 4: לא לשקר "לא מופיע"
+BAD_QUOTE = {"kind": "answer", "answer": SENTENCE, "referral": "", "evidence": ["משפט שלא מופיע באתר בכלל"],
+             "sources": [1]}
+
+
+def replies(monkeypatch, *datas):
+    """המודל עונה לפי הסדר: הראשונה - התשובה, השנייה - ניסיון התיקון. מחזיר את ההודעות שנשלחו."""
+    sent, queue_ = [], list(datas)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+
+    def chat(messages, **kwargs):
+        sent.append(messages)
+        data = queue_.pop(0)
+        return llm.ChatResult(json.dumps(data, ensure_ascii=False), "fake:model", data)
+    monkeypatch.setattr(llm, "chat", chat)
+    return sent
+
+
+def test_rejected_answer_gets_one_repair_with_the_exact_reason(monkeypatch):
+    sent = replies(monkeypatch, BAD_QUOTE, VALID)
+    a = A.respond("איך מגישים תביעה?", RACE_HIT)
+    assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "unverified_evidence")
+    assert len(sent) == 2 and "לא נמצא מילה במילה" in sent[1][-1]["content"]  # הסיבה המדויקת
+    assert sent[1][1]["role"] == "assistant"  # התשובה שנפסלה - לפני בקשת התיקון
+
+
+def test_failed_repair_says_related_info_was_found(monkeypatch):
+    replies(monkeypatch, BAD_QUOTE, BAD_QUOTE)
+    a = A.respond("איך מגישים תביעה?", RACE_HIT)
+    assert (a.kind, a.reason) == ("unverified", "unverified:unverified_evidence")
+    assert a.text.startswith(A.UNVERIFIED_TEXT) and A.NOT_ON_SITE not in a.text and RACE_HIT.hits[0].url in a.sources
+
+
+@pytest.mark.parametrize("data, reason", [
+    ({"kind": "not_on_site", "answer": "", "referral": "", "evidence": [], "sources": []}, "model_not_found"),
+    ({"kind": "answer", "answer": "אפשר לבטח טרקטורון.", "referral": "", "evidence": [SENTENCE], "sources": [1]},
+     "term_not_on_site:טרקטורון"),
+])
+def test_really_not_on_the_site_stays_not_on_site(monkeypatch, data, reason):
+    """אין מידע באמת (המודל לא מצא, או המונח לא קיים באתר) - "לא מופיע באתר", בלי ניסיון תיקון."""
+    sent = replies(monkeypatch, data)
+    a = A.respond("אפשר לבטח טרקטורון?", RACE_HIT)
+    assert (a.kind, a.reason) == ("not_on_site", reason) and len(sent) == 1
+
+
+def test_no_repair_when_the_question_is_out_of_time(monkeypatch):
+    sent = replies(monkeypatch, BAD_QUOTE, VALID)
+    with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT)
+    assert a.kind == "unverified" and len(sent) == 1
