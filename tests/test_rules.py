@@ -383,3 +383,32 @@ def test_invalid_key_rests_on_all_models(monkeypatch):
     called.clear()
     assert fallback.run_chain("test", providers[2:], retries=0)[1] == "t:m2#2"
     assert called == ["m2#2"]                         # מפתח 1 לא נוסה גם במודל השני
+
+
+# ---------------------------------------------------------------- עומס: 5 דקות, ומעבר מיד למודל הבא
+
+def test_overload_rests_the_model_five_minutes_on_all_keys(monkeypatch):
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    called = []
+    providers = chain_providers({"m1#1": FakeApiError(503, "The model is overloaded. Please try again later.")}, called)
+    assert fallback.run_chain("test", providers, retries=1, max_wait=10)[1] == "t:m2#1"
+    assert called == ["m1#1", "m2#1"]       # בלי ניסיון חוזר ובלי המתנה, ובלי m1 במפתח 2: עוברים למודל הבא
+    rest = fallback.resting()
+    assert 290 < rest["t:m1"] <= 300         # המודל נח 5 דקות - לא עד איפוס המכסה
+    called.clear()
+    fallback.run_chain("test", providers, retries=0)
+    assert called == ["m2#1"]               # ב-5 הדקות הבאות - המודל מדולג בכל המפתחות
+
+
+def test_timeout_counts_as_overload(monkeypatch):
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    called = []
+
+    def slow(*args):
+        called.append("slow")
+        time.sleep(1)
+
+    providers = [fallback.Provider("t:m1#1", slow, group="t:m1", key="t#1"),
+                 fallback.Provider("t:m2#1", lambda *a: called.append("fast") or "ok", group="t:m2", key="t#1")]
+    assert fallback.run_chain("test", providers, retries=1, deadline=0.2)[1] == "t:m2#1"
+    assert called == ["slow", "fast"] and 290 < fallback.resting()["t:m1"] <= 300

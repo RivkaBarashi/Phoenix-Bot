@@ -1,8 +1,11 @@
 """מנגנון הגיבוי המשותף לכל המטרות (מודל שפה, אמבדינגים, Rerank, איסוף).
 
-run_chain מנסה ספק אחרי ספק לפי הסדר. על עומס (429) או נפילה (5xx) הוא מחכה
-קצת ומנסה שוב, ואם זה לא עוזר - עובר לספק הבא. ספק שנחסם "נח" לזמן מה
-(דקה על מגבלה לדקה, שעה על מכסה יומית) כדי שלא נבזבז עליו זמן בכל בקשה.
+run_chain מנסה ספק אחרי ספק לפי הסדר. ספק = מודל + מפתח (ב-Gemini יש כמה מפתחות). ספק שנחסם "נח"
+לזמן מה, כדי שלא נבזבז עליו זמן בכל בקשה:
+  - מכסה יומית: הצירוף מפתח+מודל נח עד האיפוס שהספק מדווח, ואותו מודל ממשיך במפתח הבא.
+  - מגבלה לדקה (429): הצירוף נח עד שהספק אומר שהוא פנוי (בבדיקות: ניסיון חוזר אחד אחרי המתנה קצרה).
+  - עומס (503/504) או חריגת זמן: המודל נח 5 דקות בכל המפתחות, ועוברים מיד למודל הבא - בלי המתנה.
+  - מפתח לא תקין: המפתח נח בכל המודלים.
 """
 import collections
 import contextlib
@@ -27,11 +30,13 @@ UNAVAILABLE = "unavailable"  # 5xx, timeout, תקלת רשת
 EMPTY = "empty"              # הספק ענה, אבל בלי תוכן שימושי
 ERROR = "error"              # כל השאר (400 וכו')
 
-RETRYABLE = {RATE_LIMIT, UNAVAILABLE}
+# עומס (503/504) או חריגת זמן: לא מחכים ולא מנסים שוב את אותו מודל - עוברים מיד למודל הבא.
+RETRYABLE = {RATE_LIMIT}
+OVERLOAD_REST = 300  # עומס: המודל מדולג 5 דקות בלבד (בכל המפתחות), לא עד איפוס המכסה
 COOLDOWN_SECONDS = {
     RATE_LIMIT: 60,
     QUOTA: 3600,
-    UNAVAILABLE: 30,
+    UNAVAILABLE: OVERLOAD_REST,
     AUTH: float("inf"),
     NOT_FOUND: float("inf"),
 }
@@ -226,8 +231,9 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
                         rest = min(max(reset, 1), 86400)
                     # מכסה / מגבלה לדקה / מודל לא קיים: רק הצירוף מפתח+מודל נח, ואותו מודל ממשיך במפתח הבא.
-                    # מפתח לא תקין: המפתח נח בכל המודלים.
-                    target = p.key if kind == AUTH and p.key else p.name
+                    # מפתח לא תקין: המפתח נח בכל המודלים. עומס: המודל נח 5 דקות בכל המפתחות.
+                    target = (p.key if kind == AUTH and p.key else p.group if kind == UNAVAILABLE and p.group
+                              else p.name)
                     _resting_until[target] = time.time() + rest
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])
