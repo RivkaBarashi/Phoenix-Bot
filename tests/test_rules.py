@@ -437,3 +437,54 @@ def test_llm_chat_keeps_model_and_key_groups(monkeypatch):
     monkeypatch.setattr(llm, "PROVIDERS", fake)
     assert REAL_CHAT([{"role": "user", "content": "x"}]).provider == "gemini:m2#1"
     assert called == ["m1#1", "m2#1"]  # m1 במפתח 2 לא נוסה: עומס הוא של המודל
+
+
+# ---------------------------------------------------------------- בקשות במקביל בצ'אט (מודל מזויף, בלי API)
+
+SENTENCE = "כדי להגיש תביעה ממלאים טופס תביעה דיגיטלי ומצרפים את המסמכים הדרושים."
+RACE_HIT = SearchResult([Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE}", score=0.95)],
+                        "gemini:x", "cohere:rerank-v4.0-pro")
+VALID = {"kind": "answer", "answer": SENTENCE, "referral": "", "evidence": [SENTENCE], "sources": [1]}
+UNVERIFIED = {"kind": "answer", "answer": "ממלאים טופס.", "referral": "", "evidence": ["משפט שלא מופיע באתר בכלל"],
+              "sources": [1]}
+
+
+def fake_race(monkeypatch, plan: dict):
+    """plan: הספק הראשון של כל צד (או "chain" לשרשרת הרגילה) -> (השהיה בשניות, תשובה או חריגה)."""
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    monkeypatch.setattr(llm, "race_pair", lambda service="gemini": [["gemini:a#1"], ["gemini:b#2"]])
+
+    def chat(messages, names=None, **kwargs):
+        delay, data = plan[names[0] if names else "chain"]
+        time.sleep(delay)
+        if isinstance(data, Exception):
+            raise data
+        return llm.ChatResult(json.dumps(data, ensure_ascii=False), names[0] if names else "gemini:chain#1", data)
+    monkeypatch.setattr(llm, "chat", chat)
+
+
+def test_race_first_valid_answer_wins(monkeypatch):
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, VALID), "gemini:b#2": (2.0, VALID)})
+    start = time.perf_counter()
+    a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert (a.kind, a.llm) == ("answer", "gemini:a#1") and "במקביל" in a.race
+    assert time.perf_counter() - start < 1.5      # לא מחכים לתשובה השנייה
+
+
+def test_race_waits_when_the_first_answer_fails_verification(monkeypatch):
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, UNVERIFIED), "gemini:b#2": (0.3, VALID)})
+    a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert (a.kind, a.reason, a.llm) == ("answer", "verified", "gemini:b#2")
+
+
+def test_race_both_fail_continues_with_the_chain(monkeypatch):
+    failed = fallback.AllProvidersFailed("llm", ["quota"])
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (0.0, failed), "chain": (0.0, VALID)})
+    a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert (a.kind, a.llm) == ("answer", "gemini:chain#1")
+
+
+def test_eval_is_never_parallel(monkeypatch):
+    fake_race(monkeypatch, {"chain": (0.0, VALID)})
+    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בבדיקות אין בקשות במקביל"))
+    assert A.respond("איך מגישים תביעה?", RACE_HIT).llm == "gemini:chain#1"

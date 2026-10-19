@@ -88,6 +88,9 @@ QUERY_MAX_WAIT = 0.0
 # זמן כולל לשאלה אחת בצ'אט - כל השלבים יחד (השלמת שאלת המשך, חיפוש, Rerank, מודל). כל ניסיון אצל ספק מקבל
 # רק את מה שנשאר; כשנשארות פחות מ-3 שניות - הודעה ידידותית, בלי ניסיון נוסף. (הבדיקות לא מוגבלות.)
 QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
+# בצ'אט: כל שאלה נשלחת במקביל לשני מודלי Gemini שונים (במפתחות שונים), והתשובה הראשונה שעוברת את כל
+# הבדיקות מוצגת. כפול קריאות למודל - false מכבה. הבדיקות (eval) תמיד מודל אחד, בזה אחר זה.
+PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):

@@ -137,7 +137,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     text = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources מוסיף "המקור:" / "המקורות:" בסוף
     titles = {h.url: h.title for h in a.hits} | {bot.CONTACT_URL: CONTACT_TITLE}
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
-            "timings": a.timings, "question": question,
+            "timings": a.timings, "question": question, "race": a.race,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
@@ -210,6 +210,8 @@ def render(message: dict, stream: bool = False, last: bool = False):
             with st.expander("פרטים טכניים"):
                 st.caption(f"החלטה: {meta['kind']} ({meta['reason']}) · ציון Rerank: {score} ({meta['reranker']}) · "
                            f"מודל: {llm.describe(meta['llm'])}")
+                if meta.get("race"):  # בקשות במקביל ומעבר לגיבוי - רק כאן וביומן, לא ללקוחה
+                    st.caption(f"{meta['race']} · ענה: {llm.describe(meta['llm'])}")
                 if meta.get("standalone"):
                     st.caption(f"שאלת המשך - הבוט חיפש: {meta['standalone']}")
                 if meta.get("timings"):
@@ -314,7 +316,8 @@ def main():
                 result = bot.answer(question, history)
                 reply = message_from_answer(result, question)
                 reply["handoff"] = handoff_for(reply, st.session_state.messages)
-                reply["id"] = conversation_log.log_answer(session, question, result, handoff=bool(reply["handoff"]))
+                reply["id"] = conversation_log.log_answer(session, question, result, handoff=bool(reply["handoff"]),
+                                                          race=result.race)
             except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
                 log.exception("answering failed")
                 reply = error_message(type(exc).__name__)

@@ -25,7 +25,7 @@ import httpx
 from google.genai import types
 
 from . import config
-from .fallback import EmptyResult, Provider, run_chain
+from .fallback import EmptyResult, Provider, is_resting, run_chain
 
 OPENAI_COMPATIBLE_URLS = {
     "groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -194,26 +194,67 @@ def describe(name: str | None) -> str:
     return text + (" (מהמטמון)" if cached else "")
 
 
+def _from_cache(key: str, parse: Callable[[str], Any] | None) -> ChatResult | None:
+    if not (hit := _cache_get(key)):
+        return None
+    try:
+        data = parse(hit["text"]) if parse else None
+    except ValueError:  # הבודק השתנה מאז ששמרנו - שואלים את המודל מחדש
+        return None
+    CACHE_HITS[hit["provider"]] += 1
+    return ChatResult(hit["text"], hit["provider"], data, cached=True)
+
+
+def lookup(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
+           parse: Callable[[str], Any] | None = None) -> ChatResult | None:
+    """תשובה מהמטמון בלבד (בלי קריאה), עם אותו מפתח כמו chat - לפני ששולחים לשני מודלים במקביל."""
+    return _from_cache(cache_key(messages, system, temperature, json_mode, only), parse) if CACHE_MODE == "on" else None
+
+
+def remember(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
+             result: ChatResult):
+    """שומר במטמון את התשובה שנבחרה (בבקשות במקביל - רק של המנצח)."""
+    if CACHE_MODE != "off":
+        _cache_put(cache_key(messages, system, temperature, json_mode, only),
+                   {"text": result.text, "provider": result.provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
+
+
+def race_pair(service: str = "gemini") -> list[list[str]]:
+    """שני מודלים שונים שאליהם נשלחת אותה שאלה במקביל: לכל אחד - כל המפתחות שלו לפי הסדר, ובמודל השני
+    מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". פחות משני מודלים זמינים - רשימה ריקה."""
+    groups: dict[str, list[Provider]] = {}
+    for p in PROVIDERS:
+        if p.name.startswith(service + ":") and p.enabled and not is_resting(p):
+            groups.setdefault(p.group or p.name, []).append(p)
+    if len(groups) < 2:
+        return []
+    first, second = list(groups.values())[:2]
+    if len(second) > 1 and second[0].key == first[0].key:
+        second = second[1:] + second[:1]
+    return [[p.name for p in first], [p.name for p in second]]
+
+
 def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_mode: bool = False,
-         parse: Callable[[str], Any] | None = None, only: list[str] | None = None) -> ChatResult:
+         parse: Callable[[str], Any] | None = None, only: list[str] | None = None,
+         names: list[str] | None = None, cache: bool = True) -> ChatResult:
     """messages: [{"role": "user" | "assistant", "content": "..."}]
 
     json_mode: לבקש JSON (ב-Gemini גם ברמת ה-API; אצל השאר לפי הפרומפט).
     parse: מפענח/בודק את התשובה. אם הוא זורק ValueError (למשל JSON שבור) - התשובה נחשבת
            פגומה ועוברים לספק הבא.
     only: רק ספקים מהסוגים האלה, למשל ["groq", "openrouter"].
+    names: רק הספקים האלה, בסדר הזה (בקשה אחת מתוך שתיים במקביל).
+    cache: False - בלי לקרוא מהמטמון ובלי לכתוב אליו (בבקשות במקביל רק המנצח נשמר, ב-remember).
     """
     key = cache_key(messages, system, temperature, json_mode, only)
-    if CACHE_MODE == "on" and (hit := _cache_get(key)):
-        try:
-            data = parse(hit["text"]) if parse else None
-        except ValueError:  # הבודק השתנה מאז ששמרנו - שואלים את המודל מחדש
-            pass
-        else:
-            CACHE_HITS[hit["provider"]] += 1
-            return ChatResult(hit["text"], hit["provider"], data, cached=True)
+    if cache and CACHE_MODE == "on" and (hit := _from_cache(key, parse)):
+        return hit
 
-    providers = [p for p in PROVIDERS if not only or p.name.split(":")[0] in only]
+    if names is not None:
+        by_name = {p.name: p for p in PROVIDERS}
+        providers = [by_name[n] for n in names if n in by_name]
+    else:
+        providers = [p for p in PROVIDERS if not only or p.name.split(":")[0] in only]
 
     def checked(p: Provider) -> Provider:
         def call(messages, system, temperature):
@@ -230,6 +271,6 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
     (text, data), provider = run_chain("llm", [checked(p) for p in providers], messages, system, temperature,
                                        retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
                                        deadline=config.QUERY_TIMEOUT)
-    if CACHE_MODE != "off":
+    if cache and CACHE_MODE != "off":
         _cache_put(key, {"text": text, "provider": provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
     return ChatResult(text, provider, data)
