@@ -47,7 +47,7 @@ EXAMPLES = [
 ]
 WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה רק לפי המידע שבאתר fnx.co.il, ומצרף לכל תשובה "
            "קישור לעמוד המקור. כשהמידע לא מופיע באתר - אגיד זאת ואפנה לשירות הלקוחות. "
-           "אין לי גישה לפוליסה האישית שלכם. אפשר לשאול למשל:")
+           "אין לי גישה למידע האישי שלכם (כיסוי, יתרה או תביעות). אפשר לשאול למשל:")
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
 STAGE_NAMES = {"understand": "הבנת השאלה", "condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
                "llm": "מודל", "total": "סה\"כ"}
@@ -296,7 +296,7 @@ def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:
         first = (previous.get("standalone") or previous.get("question") or "")[:200]
         text = f"שלום, שאלתי את הבוט באתר הפניקס ולא מצאתי באתר תשובה לשתי שאלות: 1) {first} 2) {question}"
     elif meta["kind"] == "personal":
-        text = f"שלום, יש לי שאלה על הפוליסה האישית שלי: {question}"
+        text = f"שלום, יש לי שאלה על המידע האישי שלי: {question}"
     elif meta["kind"] == "unverified":
         text = f"שלום, שאלתי את הבוט באתר הפניקס והוא מצא מידע קרוב, אבל לא תשובה מדויקת לשאלה: {question}"
     elif meta["kind"] == "error":

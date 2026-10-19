@@ -965,3 +965,15 @@ def test_no_repair_when_the_question_is_out_of_time(monkeypatch):
     with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
         a = A.respond("איך מגישים תביעה?", RACE_HIT)
     assert a.kind == "unverified" and len(sent) == 1
+
+
+# ---------------------------------------------------------------- שלב 5: נוסח אישי
+def test_personal_wording_fits_any_personal_question():
+    """לא רק "הכיסוי בפוליסה": גם יתרה בקרן ומצב תביעה. "האזור האישי" - רק כי הביטוי מופיע באתר."""
+    from phoenix.chunk import CHUNKS_FILE
+    site = " ".join(json.loads(line)["text"] for line in open(CHUNKS_FILE, encoding="utf-8"))
+    assert "באזור האישי" in site
+    for text in (A.PERSONAL_GENERIC, A.PERSONAL_OPENING):
+        assert "פוליס" not in text and "באזור האישי" in text
+        assert all(word in text for word in ("כיסוי", "יתרה", "מצב תביעה"))
+    assert " ".join(A.PERSONAL_OPENING.split()) in " ".join(A.SYSTEM_PROMPT.split())  # כלל 3 בהוראות - אותה פתיחה
