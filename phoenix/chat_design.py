@@ -85,6 +85,7 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
 .px-bubble .answer {{ line-height:1.55; }}
 .px-bubble .answer bdi {{ white-space:nowrap; }}  /* a phone does not break after the dash ("073-" and "2076100") */
 .px-sources {{ margin-top:8px; font-size:14px; line-height:1.5; }}
+.px-checked {{ margin-top:4px; font-size:12px; line-height:1.4; color:var(--grey); }}
 .px-meta {{ direction:ltr; display:flex; align-items:center; gap:4px; font-size:12px; line-height:1; color:var(--grey);
   white-space:nowrap; padding-bottom:3px; }}
 .px-side {{ display:flex; flex-direction:column; align-items:center; gap:4px; flex:none; width:56px; }}
@@ -100,11 +101,23 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
   border:1.5px solid var(--navy) !important; border-radius:999px !important; min-height:0 !important; padding:6px 16px !important;
   font-size:14px; font-weight:500; line-height:1.3; box-shadow:none !important; }}
 .stMain [data-testid^="stBaseButton"] p, .stMain [data-testid^="stBaseLinkButton"] p {{ font-size:14px; margin:0; }}
+.stMain .stButton, .stMain [data-testid="stLinkButton"], .stMain [data-testid^="stBaseLinkButton"] {{ width:auto !important; }}
 .stMain [data-testid^="stBaseButton"]:hover, .stMain [data-testid^="stBaseLinkButton"]:hover {{ background:var(--navy) !important; color:#fff !important; }}
 .stMain [data-testid^="stBaseButton"]:hover p, .stMain [data-testid^="stBaseLinkButton"]:hover p {{ color:#fff !important; }}
-.stMainBlockContainer [data-testid="stElementContainer"]:has(> .stButton, > [data-testid="stLinkButton"]):not([data-testid="stHorizontalBlock"] > *),
-.stMainBlockContainer [data-testid="stHorizontalBlock"] {{ padding:0 14px 16px 78px; display:flex; justify-content:flex-end; }}
+.stMainBlockContainer [data-testid="stElementContainer"]:has(> .stButton, > [data-testid="stLinkButton"]):not([data-testid="stHorizontalBlock"] > *) {{
+  width:100%; box-sizing:border-box; padding:0 14px 16px 78px; display:flex; justify-content:flex-end; }}
+
+.stMainBlockContainer [data-testid="stHorizontalBlock"] {{ width:100%; box-sizing:border-box; padding:0 14px 16px 78px; display:flex;
+  justify-content:flex-end; }}
 .stMainBlockContainer [data-testid="stHorizontalBlock"] {{ flex-wrap:wrap; gap:8px; }}
+
+/* 👍/👎 under the bot's bubble (at its left edge): small, grey, the chosen one navy. The icons are a Material Symbols font. */
+.stMainBlockContainer [data-testid="stElementContainer"]:has([data-testid="stFeedback"]) {{ width:100%; box-sizing:border-box;
+  padding:0 14px 12px 78px; display:flex; justify-content:flex-end; margin-top:-8px; }}
+[data-testid="stFeedback"] button {{ background:transparent !important; border:none !important; box-shadow:none !important; }}
+[data-testid="stFeedback"] button, [data-testid="stFeedback"] button span {{ color:var(--grey) !important; }}
+[data-testid="stFeedback"] button:hover, [data-testid="stFeedback"] button:hover span,
+[data-testid="stFeedback"] button[aria-checked="true"], [data-testid="stFeedback"] button[aria-checked="true"] span {{ color:var(--navy) !important; }}
 
 /* the input row: a pill with an orange frame, and the send button outside it, on its right */
 [data-testid="stChatInput"] {{ background:transparent; width:100%; }}

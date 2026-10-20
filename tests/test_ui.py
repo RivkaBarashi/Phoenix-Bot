@@ -129,13 +129,20 @@ def test_design_messages_are_bubbles_with_time_and_the_source_inside(app):
     assert all(len(m["time"]) == 5 and m["time"][2] == ":" for m in messages)
 
 
-def test_design_shows_nothing_that_is_not_in_the_images(app):
-    """בלי כפתור "שיחה חדשה", בלי כפתורי דוגמה, בלי 👍/👎, בלי "נבדק מול N עמודים", ובלי פרטים טכניים ללקוחה."""
-    at = ask(app(regular), "מה המספר של מוקד תביעות רכב?")
+def test_design_keeps_every_feature_and_hides_only_technical_details(app):
+    """החלטת הבעלים: כל הפיצ'רים נשארים (במראה של העיצוב), ורק פרטים טכניים מוסתרים - ללקוחה."""
+    at = app(regular)
+    labels = [b.label for b in at.button]
+    assert len(labels) == 3 and all("?" in label for label in labels)  # כפתורי הדוגמה, לפני השאלה הראשונה
+    assert "אני עונה רק לפי המידע שבאתר" in page_html(at)             # טקסט הפתיחה, עם הדוגמאות
+    at = ask(at, "מה המספר של מוקד תביעות רכב?")
     html_text = page_html(at)
-    assert [b.label for b in at.button] == []
-    assert not at.get("feedback") and not at.expander
-    for forbidden in ("שיחה חדשה", "נבדק מול", "פרטים טכניים", "Powered by", "Privacy", "By chatting"):
+    assert [b.label for b in at.button] == []                          # אחרי השאלה הראשונה - בלי דוגמאות
+    assert len(at.get("feedback")) == 1                                 # 👍/👎 נשאר
+    assert "נבדק מול 3 עמודים באתר · 1.0 שניות" in html_text            # והשורה "נבדק מול N עמודים"
+    assert "המקור: <a href=" in html_text and not at.expander           # שורת המקור בבועה; בלי "פרטים טכניים" ללקוחה
+    assert "אני עונה רק לפי המידע שבאתר" not in html_text              # טקסט הפתיחה רק בהתחלה: אחריו - כמו בתמונה
+    for forbidden in ("שיחה חדשה", "פרטים טכניים", "Powered by", "Privacy", "By chatting"):
         assert forbidden not in html_text
     assert "rerank" not in html_text.lower() and "cohere" not in html_text.lower()
 

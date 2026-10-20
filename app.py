@@ -48,6 +48,15 @@ from phoenix import chat_design as design
 log = logging.getLogger("phoenix.app")
 
 TEST_PROVIDERS = [p.strip() for p in os.getenv("CHAT_LLM_PROVIDERS", "").split(",") if p.strip()]
+EXAMPLES = [
+    "יש לי נזילה בבית, איך מגישים תביעה?",
+    "תוך כמה זמן מטפלים בתביעת מחלות קשות?",
+    "מה המספר של מוקד תביעות רכב ורכוש?",
+]
+# טקסט הפתיחה הקודם, בלי המשפט הראשון שלו ("שלום! אני הבוט של אתר הפניקס") - הוא כבר בכרטיס הברכה של העיצוב.
+# מוצג עם כפתורי הדוגמה רק בהתחלה, לפני השאלה הראשונה: אחריה השיחה נראית בדיוק כמו בתמונה.
+WELCOME = ("אני עונה רק לפי המידע שבאתר fnx.co.il, ומצרף לכל תשובה קישור לעמוד המקור. כשהמידע לא מופיע באתר - אגיד זאת "
+           "ואפנה לשירות הלקוחות. אין לי גישה למידע האישי שלכם (כיסוי, יתרה או תביעות). אפשר לשאול למשל:")
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
 STAGE_NAMES = {"understand": "הבנת השאלה", "condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
                "search_wait": "המתנה לחיפוש המוקדם", "llm": "מודל", "repair": "תיקון", "total": "סה\"כ"}
@@ -183,12 +192,22 @@ def sources_html(message: dict) -> str:
     return f'<div class="px-sources">{label}: {links}</div>'
 
 
+def checked_html(message: dict) -> str:
+    """"נבדק מול N עמודים באתר · X שניות" - מתחת למקור, באפור קטן (כמו קודם: רק לתשובה עם מקור)."""
+    meta = message.get("meta") or {}
+    if not (message.get("sources") and meta.get("pages") and meta.get("kind") != "error"):
+        return ""
+    seconds = (meta.get("timings") or {}).get("total", 0)
+    return f'<div class="px-checked">נבדק מול {meta["pages"]} עמודים באתר · {seconds:.1f} שניות</div>'
+
+
 def bubble(message: dict, text: str | None = None, with_sources: bool = True) -> str:
     """ההודעה כבועה: של הלקוחה (מימין, כחולה) או של הבוט (משמאל, לבנה עם מסגרת). text - רק חלק מהטקסט (בהקלדה)."""
     content = to_html(message["content"] if text is None else text)
     if message["role"] == "user":
         return design.user_html(content, message.get("time", ""))
-    return design.bot_html(content, sources_html(message) if with_sources else "", message.get("time", ""))
+    return design.bot_html(content, (sources_html(message) + checked_html(message)) if with_sources else "",
+                           message.get("time", ""))
 
 
 def render_type_buttons(message: dict):
@@ -229,6 +248,8 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
         if handoff["streak"]:
             st.markdown(bubble({"role": "assistant", "content": STREAK_NOTICE}), unsafe_allow_html=True)
         st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
+    if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
+        st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
     if meta and dev_mode():  # "פרטים טכניים" - רק במצב מפתחת
         score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
         with st.expander("פרטים טכניים"):
@@ -394,6 +415,11 @@ def main():
             question = bot.with_insurance_type(original, typed)
 
     st.markdown(design.hero_html(), unsafe_allow_html=True)
+    if not st.session_state.messages and not question:  # בהתחלה: טקסט הפתיחה ודוגמאות לשאלה
+        st.markdown(design.bot_html(to_html(WELCOME)), unsafe_allow_html=True)
+        with st.container(horizontal=True, wrap=True, gap="small"):
+            for i, example in enumerate(EXAMPLES):
+                st.button(example, key=f"example-{i}", on_click=ask, args=(example,))
     for i, message in enumerate(st.session_state.messages):  # כפתורי סוג ביטוח - רק בהודעה האחרונה שעוד מחכה
         render(message, last=i == len(st.session_state.messages) - 1 and not question)
 
