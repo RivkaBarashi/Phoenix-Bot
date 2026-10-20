@@ -100,3 +100,48 @@ def test_clarification_shows_a_button_for_every_insurance_type(app):
     for kind in bot.INSURANCE_TYPES:
         assert labels.count(kind) == 1, kind
     assert {"חיות מחמד", "משכנתא", "אובדן כושר עבודה"} <= set(labels)
+
+
+# ---------------------------------------------------------------- העיצוב (design-references/FINAL-DESIGN-INSTRUCTIONS.md)
+def page_html(at: AppTest) -> str:
+    return "\n".join(m.value for m in at.markdown)
+
+
+def test_design_header_greeting_and_input(app):
+    """הפס העליון, כרטיס הברכה עם "הפניקס" בכתום, ותיבת הכתיבה - כמו בהוראות העיצוב."""
+    at = app(regular)
+    html_text = page_html(at)
+    assert not at.exception
+    assert "הבוט האישי שלך" in html_text and 'class="px-close"' in html_text
+    assert ('שלום! 👋<br>אני הבוט של <span class="px-orange">הפניקס</span>,<br>ואני עונה על כל שאלה<br>לפי המידע שבאתר.'
+            in html_text)
+    assert "app/static/robot.png" in html_text
+    assert at.chat_input[0].placeholder == "כתבו לי שאלה..."
+
+
+def test_design_messages_are_bubbles_with_time_and_the_source_inside(app):
+    at = ask(app(regular), "מה המספר של מוקד תביעות רכב?")
+    html_text = page_html(at)
+    assert 'class="px-row px-user"' in html_text and 'class="px-row px-bot"' in html_text
+    assert html_text.count('class="px-meta"') == 1 and html_text.count('class="px-time"') == 1  # שעה ו-✓✓ לשאלה, שעה לתשובה
+    assert "המקור: <a href=" in html_text and bot.CONTACT_URL in html_text
+    messages = at.session_state["messages"]
+    assert all(len(m["time"]) == 5 and m["time"][2] == ":" for m in messages)
+
+
+def test_design_shows_nothing_that_is_not_in_the_images(app):
+    """בלי כפתור "שיחה חדשה", בלי כפתורי דוגמה, בלי 👍/👎, בלי "נבדק מול N עמודים", ובלי פרטים טכניים ללקוחה."""
+    at = ask(app(regular), "מה המספר של מוקד תביעות רכב?")
+    html_text = page_html(at)
+    assert [b.label for b in at.button] == []
+    assert not at.get("feedback") and not at.expander
+    for forbidden in ("שיחה חדשה", "נבדק מול", "פרטים טכניים", "Powered by", "Privacy", "By chatting"):
+        assert forbidden not in html_text
+    assert "rerank" not in html_text.lower() and "cohere" not in html_text.lower()
+
+
+def test_design_colors_are_only_the_palette():
+    from phoenix import chat_design
+    import re
+    colors = set(re.findall(r"#[0-9A-Fa-f]{6}\b", chat_design.css()))
+    assert {c.upper() for c in colors} <= {"#111C3F", "#FF5A23", "#F7F8FB", "#8A8FA0", "#FFFFFF"}

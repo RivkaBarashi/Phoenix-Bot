@@ -14,3 +14,4 @@ data/*.xlsx
 data/~$*
 data/eval_answers_*
 tests/
+design-references/

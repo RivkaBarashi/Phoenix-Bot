@@ -1,6 +1,8 @@
 # הממשק משתמש במפתחות ה-API שב-.env - לכן הוא נגיש רק מהמחשב הזה, לא מהרשת.
 [server]
 address = "localhost"
+# static/ (the robot image of the chat window) is served at app/static/
+enableStaticServing = true
 
 [client]
 # שגיאה לא צפויה לא מציגה traceback למשתמשת - הפירוט נשאר בטרמינל

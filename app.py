@@ -2,6 +2,9 @@
 
 הרצה:  .venv\\Scripts\\streamlit run app.py   (או לחיצה כפולה על run_chat.bat)
 
+העיצוב (design-references/FINAL-DESIGN-INSTRUCTIONS.md) נמצא ב-phoenix/chat_design.py: צבעים, חלון, פס עליון, כרטיס ברכה,
+בועות ותיבת כתיבה. התמונות ב-static/ (נחתכו מ-design-main.png ב-design-references/make_assets.py).
+
 הממשק רק מציג את השיחה וקורא ל-phoenix.answer.answer. כל ההחלטות - חיפוש, סף, ההוראות
 למודל והבדיקות בקוד - נשארות בקוד של הבוט ולא משתנות מכאן.
 
@@ -13,7 +16,7 @@
 משתמש בה רק כשהשאלה תלויה בשיחה ("ותוך כמה זמן?") - ראו answer.needs_context.
 
 יומן ומשוב: כל שאלה נרשמת ב-logs/conversations.jsonl, ובענן גם ב-Upstash - משותף לשני האתרים (report.py
-מסכם; --cloud - היומן שבענן). מתחת לכל תשובה 👍/👎 שנשמר ביומן.
+מסכם; --cloud - היומן שבענן). 👍/👎 מתחת לתשובה לא מוצג בעיצוב (לא מופיע בתמונות); הפונקציה save_feedback והיומן נשארו.
 
 שמירת השיחה ברענון: לכל שיחה מזהה בכתובת (?c=...), והשיחה נשמרת ב-Upstash ל-24 שעות (מספרים ארוכים שהלקוחה
 כתבה - מוסתרים, כמו ביומן). רענון הדף - השיחה חוזרת. בלי Upstash - הבוט עובד כרגיל, רק בלי לשמור. בתשובה אישית, "לא מופיע באתר" או תקלה - כפתור להמשך עם נציג בוואטסאפ, עם הודעה מוכנה.
@@ -34,41 +37,34 @@ import re
 import time
 import uuid
 from functools import partial
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import streamlit as st
 
 from phoenix import answer as bot
 from phoenix import bm25, config, conversation_log, embeddings, index, llm, store
+from phoenix import chat_design as design
 
 log = logging.getLogger("phoenix.app")
 
 TEST_PROVIDERS = [p.strip() for p in os.getenv("CHAT_LLM_PROVIDERS", "").split(",") if p.strip()]
-EXAMPLES = [
-    "יש לי נזילה בבית, איך מגישים תביעה?",
-    "תוך כמה זמן מטפלים בתביעת מחלות קשות?",
-    "מה המספר של מוקד תביעות רכב ורכוש?",
-]
-WELCOME = ("שלום! אני הבוט של אתר הפניקס. אני עונה רק לפי המידע שבאתר fnx.co.il, ומצרף לכל תשובה "
-           "קישור לעמוד המקור. כשהמידע לא מופיע באתר - אגיד זאת ואפנה לשירות הלקוחות. "
-           "אין לי גישה למידע האישי שלכם (כיסוי, יתרה או תביעות). אפשר לשאול למשל:")
 CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"
 STAGE_NAMES = {"understand": "הבנת השאלה", "condense": "השלמת שאלה", "vector": "חיפוש וקטורי", "bm25": "מילות מפתח", "rerank": "Rerank",
                "search_wait": "המתנה לחיפוש המוקדם", "llm": "מודל", "repair": "תיקון", "total": "סה\"כ"}
 EARLY_SEARCH = {"reused": "החיפוש המוקדם (במקביל להבנה) שימש לתשובה",
                 "redone": "הניסוח העצמאי שונה מהותית - חיפוש שני עליו"}
-# החיווי בשלבים: שורה ראשית ללקוחה, ומתחתיה המונח המקצועי באפור. pages = כמה עמודים שונים נמצאו בחיפוש.
+# החיווי בשלבים: שורה אחת בבועה של הבוט. pages = כמה עמודים שונים נמצאו בחיפוש.
 STAGE_LINES = {
-    "understand": ("💭 קורא את השאלה...", "הבנת השאלה: מודל שפה"),
-    "search": ("🔍 מחפש את התשובה באתר הפניקס...", "חיפוש משולב: משמעות + מילות מפתח"),
-    "rerank": ("📑 נמצאו {pages} עמודים מתאימים. בודק איזה מהם עונה בדיוק על השאלה...", "דירוג רלוונטיות (Rerank)"),
-    "compose": ("✍️ מנסח תשובה מתוך המידע שנמצא...", "מודל שפה, רק מתוך הקטעים מהאתר"),
-    "verify": ("✅ מוודא שכל פרט בתשובה כתוב באתר...", "אימות ציטוט ומספרים מול המקור"),
-    "below_threshold": ("🔎 בדקתי את העמודים הרלוונטיים, והמידע הזה לא מופיע באתר", "ציון הרלוונטיות מתחת לסף"),
+    "understand": "💭 קורא את השאלה...",
+    "search": "🔍 מחפש את התשובה באתר הפניקס...",
+    "rerank": "📑 נמצאו {pages} עמודים מתאימים. בודק איזה מהם עונה בדיוק על השאלה...",
+    "compose": "✍️ מנסח תשובה מתוך המידע שנמצא...",
+    "verify": "✅ מוודא שכל פרט בתשובה כתוב באתר...",
+    "below_threshold": "🔎 בדקתי את העמודים הרלוונטיים, והמידע הזה לא מופיע באתר",
 }
 # העברה לנציג אנושי: הוואטסאפ של שירות הלקוחות (054-9893455, מעמוד צור קשר באתר)
 WHATSAPP_URL = "https://wa.me/972549893455"
-HANDOFF_LABEL = "💬 המשך עם נציג בוואטסאפ"
+HANDOFF_LABEL = "המשך עם נציג בוואטסאפ"
 OTHER_TYPE_LABEL = "אחר"
 OTHER_TYPE_TEXT = "איזה ביטוח? כתבו את סוג הביטוח בתיבה למטה (למשל: ביטוח לעסק, ביטוח למטען)."
 OTHER_TYPE_MAX_WORDS = 4  # אחרי "אחר": תשובה קצרה = סוג הביטוח; ארוכה יותר = שאלה חדשה
@@ -77,21 +73,6 @@ ERROR_MESSAGE = ("משהו השתבש ולא הצלחתי לענות כרגע. �
                  "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 LOAD_ERROR = ("הבוט לא הצליח להיטען. צריך לוודא שהאינדקס נבנה (python -m phoenix.chunk ואז "
               "python -m phoenix.index) ולהפעיל את הממשק מחדש.")
-
-RTL_CSS = """
-<style>
-.stApp, [data-testid="stChatMessage"], [data-testid="stChatInput"] { direction: rtl; text-align: right; }
-[data-testid="stChatInput"] textarea { direction: rtl; text-align: right; }
-.answer { line-height: 1.7; }
-.answer bdi { white-space: nowrap; }  /* טלפון לא נשבר בין שורות אחרי המקף ("073-" ו-"2076100") */
-.sources { font-size: 0.9rem; border-top: 1px solid rgba(128, 128, 128, 0.3); margin-top: 0.5rem; padding-top: 0.4rem; }
-.stage-main { line-height: 1.7; animation: stage-pulse 1.6s ease-in-out infinite; }  /* הבוט עובד - לא תקוע */
-.stage-term, .checked { font-size: 0.8rem; opacity: 0.65; }  /* אפור, גם בערכת צבעים כהה */
-.checked { margin-top: 0.2rem; }
-@keyframes stage-pulse { 50% { opacity: 0.55; } }
-@media (prefers-reduced-motion: reduce) { .stage-main { animation: none; } }
-</style>
-"""
 
 # טלפונים, קישורים, מיילים וקודי כוכבית מוצגים משמאל לימין בתוך הטקסט העברי, כדי שלא יתהפכו.
 # מייל - רק אותיות לטיניות: ב"ל-Healthd@Fnx.co.il" ה-"ל-" שייכת לעברית ונשארת מימין למייל.
@@ -187,15 +168,27 @@ def _isolated(kind: str | None, value: str) -> str:
     return f"{LRI}{value}{PDI}"
 
 
-def stream_words(text: str):
-    """הצגה הדרגתית של תשובה שכבר עברה את כל הבדיקות. לא מזרימים ישר מהמודל: אחרי שהוא מסיים
-    הקוד עוד בודק את הציטוט והמספרים, ותשובה שנפסלה לא אמורה להופיע על המסך אפילו לרגע.
-    טלפונים וקודי כוכבית מבודדים משמאל לימין כבר בזמן ההקלדה, ולא רק בגרסה הסופית."""
-    shown = "".join(_isolated(kind, value) for kind, value in ltr_segments(text))
-    for piece in re.split(r"(\s+)", shown):
-        yield piece.replace("*", "\\*").replace("_", "\\_")  # בלי עיצוב Markdown באמצע ההקלדה
-        if piece.strip():
-            time.sleep(0.03)
+def clock() -> str:
+    return time.strftime("%H:%M")
+
+
+def sources_html(message: dict) -> str:
+    """"המקור: ..." בתוך הבועה, עם שם העמוד כקישור."""
+    if not message.get("sources"):
+        return ""
+    label = "המקור" if len(message["sources"]) == 1 else "המקורות"
+    links = " · ".join(
+        f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{html.escape(title)}</a>'
+        for title, url in message["sources"])
+    return f'<div class="px-sources">{label}: {links}</div>'
+
+
+def bubble(message: dict, text: str | None = None, with_sources: bool = True) -> str:
+    """ההודעה כבועה: של הלקוחה (מימין, כחולה) או של הבוט (משמאל, לבנה עם מסגרת). text - רק חלק מהטקסט (בהקלדה)."""
+    content = to_html(message["content"] if text is None else text)
+    if message["role"] == "user":
+        return design.user_html(content, message.get("time", ""))
+    return design.bot_html(content, sources_html(message) if with_sources else "", message.get("time", ""))
 
 
 def render_type_buttons(message: dict):
@@ -209,43 +202,33 @@ def render_type_buttons(message: dict):
 
 
 def render(message: dict, stream: bool = False, last: bool = False):
-    with st.chat_message(message["role"]):
-        render_body(message, stream, last)
+    render_body(message, stream, last)
 
 
 def render_body(message: dict, stream: bool = False, last: bool = False):
-    """תוכן ההודעה, בתוך בועה שכבר פתוחה (של render, או הבועה שבה הוצג החיווי בשלבים)."""
+    """ההודעה (בועה), ומתחתיה מה שנדרש לה: כפתורי הבהרה, שאלות נוספות, העברה לנציג ופרטים טכניים (?dev=1).
+    stream - הצגה הדרגתית של תשובה שכבר עברה את כל הבדיקות (הקוד בודק את הציטוט והמספרים לפני שהיא מוצגת)."""
     meta = message.get("meta") or {}
-    body = f'<div class="answer">{to_html(message["content"])}</div>'
     if stream:
         placeholder = st.empty()
-        with placeholder:
-            st.write_stream(stream_words(message["content"]))
-        placeholder.markdown(body, unsafe_allow_html=True)  # הגרסה הסופית: קישורים וטלפונים משמאל לימין
+        shown = ""
+        for piece in re.split(r"(\s+)", message["content"]):
+            shown += piece
+            if piece.strip():
+                placeholder.markdown(bubble(message, shown, with_sources=False), unsafe_allow_html=True)
+                time.sleep(0.03)
+        placeholder.markdown(bubble(message), unsafe_allow_html=True)  # הגרסה הסופית: קישורים, טלפונים ומקורות
     else:
-        st.markdown(body, unsafe_allow_html=True)
-    if message.get("sources"):
-        label = "המקור" if len(message["sources"]) == 1 else "המקורות"
-        links = " · ".join(
-            f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{html.escape(title)}</a>'
-            for title, url in message["sources"])
-        st.markdown(f'<div class="sources">📄 {label}: {links}</div>', unsafe_allow_html=True)
-        if meta.get("pages") and meta.get("kind") != "error":  # מול כמה עמודים נבדקה התשובה, ותוך כמה זמן
-            seconds = (meta.get("timings") or {}).get("total", 0)
-            st.markdown(f'<div class="checked">נבדק מול {meta["pages"]} עמודים באתר · {seconds:.1f} שניות</div>',
-                        unsafe_allow_html=True)
+        st.markdown(bubble(message), unsafe_allow_html=True)
     if last and meta.get("kind") == "clarify":
         render_type_buttons(message)
     if last and meta.get("more_questions"):  # כמה שאלות בהודעה אחת: עניתי על הראשונה, והשאר - בלחיצה
-        st.caption("שאלת גם:")
         for i, more in enumerate(meta["more_questions"]):
             st.button(more, key=f"more-{message.get('id')}-{i}", on_click=ask, args=(more,))
     if handoff := message.get("handoff"):
         if handoff["streak"]:
-            st.info(STREAK_NOTICE)
+            st.markdown(bubble({"role": "assistant", "content": STREAK_NOTICE}), unsafe_allow_html=True)
         st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
-    if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
-        st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
     if meta and dev_mode():  # "פרטים טכניים" - רק במצב מפתחת
         score = f"{meta['top_score']:.3f}" if meta.get("top_score") is not None else "-"
         with st.expander("פרטים טכניים"):
@@ -313,13 +296,12 @@ def dev_mode() -> bool:
 
 
 def show_stage(slot, stage: str, **info):
-    """החיווי בשלבים: השלב שהבוט התחיל עכשיו מחליף את הקודם, באותו מקום בבועה. נקרא מתוך answer.answer
+    """החיווי בשלבים: השלב שהבוט התחיל עכשיו מחליף את הקודם, באותו מקום - בועה של הבוט. נקרא מתוך answer.answer
     (on_stage), ולכן מתחלף רק כשהשלב הקודם באמת הסתיים."""
     if stage not in STAGE_LINES or (stage == "rerank" and not info.get("pages")):  # אין מועמדים - אין מה לדרג
         return
-    line, term = STAGE_LINES[stage]
-    slot.markdown(f'<div class="stage"><div class="stage-main">{html.escape(line.format(**info))}</div>'
-                  f'<div class="stage-term">{html.escape(term)}</div></div>', unsafe_allow_html=True)
+    line = html.escape(STAGE_LINES[stage].format(**info))
+    slot.markdown(design.bot_html(f'<div class="stage-main">{line}</div>'), unsafe_allow_html=True)
 
 
 def save_feedback(entry_id: str):
@@ -365,7 +347,7 @@ def choose_type(original: str, kind: str):
 def ask_other_type(original: str):
     """"אחר": מבקשים לכתוב את סוג הביטוח. מה שייכתב (אם זה קצר) יתחבר לשאלה המקורית."""
     st.session_state.awaiting_type = original
-    st.session_state.messages.append({"role": "assistant", "content": OTHER_TYPE_TEXT,
+    st.session_state.messages.append({"role": "assistant", "content": OTHER_TYPE_TEXT, "time": clock(),
                                       "meta": {"kind": "clarify_other", "reason": "other_type", "llm": None,
                                                "reranker": "-", "top_score": None}})
 
@@ -377,17 +359,21 @@ def new_chat():
     st.query_params["c"] = st.session_state.session_id
 
 
+def close_href() -> str:
+    """הסימן ✕ בפס העליון: שיחה חדשה - אותה כתובת עם מזהה שיחה חדש (מצב מפתחת נשמר)."""
+    params = {k: v for k, v in st.query_params.items() if k in ("dev", "legacy")}
+    return "?" + urlencode(params | {"c": uuid.uuid4().hex[:12]})
+
+
 def main():
     st.set_page_config(page_title="הבוט של אתר הפניקס", page_icon="💬", layout="centered")
-    st.markdown(RTL_CSS, unsafe_allow_html=True)
+    st.markdown(design.css(), unsafe_allow_html=True)
     if "session_id" not in st.session_state:  # כניסה ראשונה או רענון: המזהה מהכתובת, והשיחה - מ-Upstash
         st.session_state.session_id = conversation_id()  # מזהה אנונימי של השיחה - ליומן ולשמירה
         st.session_state.messages = restore_conversation(st.session_state.session_id)
     st.session_state.setdefault("messages", [])
 
-    title_col, button_col = st.columns([4, 1], vertical_alignment="bottom")
-    title_col.title("שאלו את הבוט של הפניקס")
-    button_col.button("שיחה חדשה", on_click=new_chat, use_container_width=True)
+    st.markdown(design.header_html(close_href()), unsafe_allow_html=True)
     if TEST_PROVIDERS:
         st.caption(f"מצב בדיקות ממשק - מודלים: {', '.join(TEST_PROVIDERS)}")
 
@@ -398,7 +384,7 @@ def main():
         st.error(LOAD_ERROR)
         st.stop()
 
-    typed = st.chat_input("כתבו שאלה...")
+    typed = st.chat_input("כתבו לי שאלה...")
     if typed is not None and not typed.strip():
         st.toast("כתבו שאלה ואז שלחו")
     question = (typed or "").strip() or st.session_state.pop("pending", None)
@@ -407,42 +393,37 @@ def main():
         if len(typed.split()) <= OTHER_TYPE_MAX_WORDS:
             question = bot.with_insurance_type(original, typed)
 
-    with st.chat_message("assistant"):
-        st.markdown(f'<div class="answer">{to_html(WELCOME)}</div>', unsafe_allow_html=True)
-        if not st.session_state.messages and not question:
-            for i, example in enumerate(EXAMPLES):
-                st.button(example, key=f"example-{i}", on_click=ask, args=(example,))
-
+    st.markdown(design.hero_html(), unsafe_allow_html=True)
     for i, message in enumerate(st.session_state.messages):  # כפתורי סוג ביטוח - רק בהודעה האחרונה שעוד מחכה
         render(message, last=i == len(st.session_state.messages) - 1 and not question)
 
     if question:
-        user_message = {"role": "user", "content": question}
+        user_message = {"role": "user", "content": question, "time": clock()}
         st.session_state.messages.append(user_message)
         render(user_message)
-        with st.chat_message("assistant"):  # החיווי בשלבים, ואחריו התשובה - באותה בועה
-            status = st.empty()
-            session = st.session_state.session_id
-            try:
-                history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
-                # מצב מפתחת: בלי מטמון (מודדים את הבוט); ?legacy=1 - בלי שיפורי הזמנים, למדידת "לפני"
-                with config.legacy_mode(dev_mode() and st.query_params.get("legacy") == "1"):
-                    result = bot.answer(question, history, on_stage=partial(show_stage, status), cache=not dev_mode())
-                reply = message_from_answer(result, question)
-                reply["handoff"] = handoff_for(reply, st.session_state.messages)
-                reply["id"] = conversation_log.log_answer(
-                    session, question, result, handoff=bool(reply["handoff"]), race=result.race,
-                    early_search=result.early_search, cached=result.cached,
-                    legacy=dev_mode() and st.query_params.get("legacy") == "1")
-            except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
-                log.exception("answering failed")
-                reply = error_message(type(exc).__name__, question)
-                reply["handoff"] = handoff_for(reply, st.session_state.messages)
-                reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
-            st.session_state.messages.append(reply)
-            save_conversation(session, st.session_state.messages)
-            with status.container():  # התשובה במקום החיווי: מבנה כמו בהיסטוריה, בלי רכיב כפול בשאלה הבאה
-                render_body(reply, stream=True, last=True)
+        status = st.empty()  # החיווי בשלבים, ואחריו התשובה - באותה בועה
+        session = st.session_state.session_id
+        try:
+            history = chat_history(st.session_state.messages[:-1])  # בלי השאלה הנוכחית
+            # מצב מפתחת: בלי מטמון (מודדים את הבוט); ?legacy=1 - בלי שיפורי הזמנים, למדידת "לפני"
+            with config.legacy_mode(dev_mode() and st.query_params.get("legacy") == "1"):
+                result = bot.answer(question, history, on_stage=partial(show_stage, status), cache=not dev_mode())
+            reply = message_from_answer(result, question)
+            reply["handoff"] = handoff_for(reply, st.session_state.messages)
+            reply["id"] = conversation_log.log_answer(
+                session, question, result, handoff=bool(reply["handoff"]), race=result.race,
+                early_search=result.early_search, cached=result.cached,
+                legacy=dev_mode() and st.query_params.get("legacy") == "1")
+        except Exception as exc:  # תקלה לא צפויה (רשת, מכסה, באג) - הודעה ידידותית, הפירוט רק ביומן
+            log.exception("answering failed")
+            reply = error_message(type(exc).__name__, question)
+            reply["handoff"] = handoff_for(reply, st.session_state.messages)
+            reply["id"] = conversation_log.log_error(session, question, type(exc).__name__)
+        reply["time"] = clock()
+        st.session_state.messages.append(reply)
+        save_conversation(session, st.session_state.messages)
+        with status.container():  # התשובה במקום החיווי: מבנה כמו בהיסטוריה, בלי רכיב כפול בשאלה הבאה
+            render_body(reply, stream=True, last=True)
 
 
 if __name__ == "__main__":

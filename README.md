@@ -154,6 +154,15 @@ git push origin feature/chat-ui:release
 כל שאלה בשיחה חדשה עם `?dev=1` (בלי מטמון). `--legacy` – בלי שיפורי הזמנים, למדידת "לפני". `report.py --cloud` –
 ממוצע, p90 ומקסימום לכל שלב מהיומן המשותף (`--site`, `--legacy only|without` לסינון).
 
+## עיצוב החלון
+
+העיצוב לפי `design-references/FINAL-DESIGN-INSTRUCTIONS.md` (וגם `design-main.png`, `input-box.png`, `send-icon.svg`):
+- `phoenix/chat_design.py` – הצבעים (רק `#111C3F`, `#FF5A23`, `#F7F8FB`, `#8A8FA0` ולבן), חלון מעוגל (28px) עם צל, פס עליון,
+  כרטיס ברכה, בועות (הלקוחה מימין, הבוט משמאל), ותיבת הכתיבה (כמוסה עם מסגרת כתומה וכפתור שליחה מחוץ לה). גופן Heebo.
+- `static/` – הרובוט והאייקונים, חתוכים מ-`design-main.png` בלי לצייר מחדש (`design-references/make_assets.py`).
+  מוגשים ב-`app/static/` (`enableStaticServing` ב-`.streamlit/config.toml`).
+- הלוגיקה של הבוט לא השתנתה. כפתורי ההבהרה, "המשך עם נציג בוואטסאפ" ושורת המקור נשארו, בסגנון הצבעים של העיצוב.
+
 ## בדיקות
 
 | פקודה | מה בודקת |
