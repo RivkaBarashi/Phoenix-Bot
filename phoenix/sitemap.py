@@ -4,8 +4,9 @@
 
 יוצר:
   data/urls.txt            - כל הכתובות ב-sitemap (כולל sitemaps פנימיים)
-  data/urls_important.txt  - רק תביעות, שאלות נפוצות, דירה, רכב, בריאות ויצירת קשר,
-                             בלי עמודים ש-robots.txt אוסר לסרוק
+  data/urls_all.txt        - כל האתר: כל כתובות ה-sitemap חוץ מההחרגות ב-ALL_EXCLUDE ועמודים ש-robots.txt אוסר
+                             (מה שהבוט לומד ממנו; ההחרגות וסיבתן נשמרות ב-data/urls_excluded.txt)
+  data/urls_important.txt  - הרשימה הישנה והמצומצמת (תביעות, שאלות נפוצות, דירה, רכב, בריאות ויצירת קשר). לא נמחקת
 """
 import re
 import sys
@@ -31,8 +32,15 @@ CATEGORIES = {
     "contact": r"^/customer-service/$|contact|be-in-touch|call-back|/chat/|service-charter"
                r"|public-inquiries|your-request-for-info",
 }
-# לא שימושי ללקוחה: אנגלית, תגיות, הודעות על תביעות ייצוגיות, סטטיסטיקות
+# לא שימושי ללקוחה: אנגלית, תגיות, הודעות על תביעות ייצוגיות, סטטיסטיקות (הרשימה הישנה, urls_important.txt)
 EXCLUDE = r"^/en/|^/tags/|^/404|/class-actions/|/claims-statistical-info/"
+# הרשימה המלאה (urls_all.txt): רק אלה מוחרגים, ועוד עמודים ש-robots.txt אוסר. לכל החרגה סיבה, והיא נרשמת ב-README.
+ALL_EXCLUDE = {
+    "english": (r"^/en/", "עמודי אנגלית - האתר הוא בעברית והבוט עונה בעברית"),
+    "tags": (r"^/tags/", "עמודי תגיות - רשימות קישורים לכתבות, בלי תוכן משלהם"),
+    "404": (r"^/404", "עמוד השגיאה של האתר"),
+    "sitemap": (r"sitemap", "קובצי sitemap - לא עמודי תוכן"),
+}
 
 
 def fetch_sitemap_urls(url: str, seen: set[str] | None = None) -> list[str]:
@@ -79,6 +87,15 @@ def is_allowed(url: str, disallowed: list[re.Pattern]) -> bool:
     return not any(p.match(target) for p in disallowed)
 
 
+def exclusion_reason(url: str, disallowed: list[re.Pattern]) -> str | None:
+    """למה כתובת לא נכנסת לרשימה המלאה (מפתח ב-ALL_EXCLUDE, או "robots"), או None אם היא נכנסת."""
+    path = unquote(urlparse(url).path).lower()
+    for key, (pattern, _) in ALL_EXCLUDE.items():
+        if re.search(pattern, path):
+            return key
+    return None if is_allowed(url, disallowed) else "robots"
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     DATA_DIR.mkdir(exist_ok=True)
@@ -88,11 +105,20 @@ def main():
     blocked = [u for u in urls if not is_allowed(u, disallowed)]
     important = [u for u in urls if categories(u) and is_allowed(u, disallowed)]
 
+    reasons = {u: exclusion_reason(u, disallowed) for u in urls}
+    everything = [u for u in urls if not reasons[u]]
+    excluded = [(reasons[u], u) for u in urls if reasons[u]]
+
     (DATA_DIR / "urls.txt").write_text("\n".join(urls) + "\n", encoding="utf-8")
     (DATA_DIR / "urls_important.txt").write_text("\n".join(important) + "\n", encoding="utf-8")
+    (DATA_DIR / "urls_all.txt").write_text("\n".join(everything) + "\n", encoding="utf-8")
+    (DATA_DIR / "urls_excluded.txt").write_text("".join(f"{why}\t{u}\n" for why, u in excluded), encoding="utf-8")
 
     print(f"data/urls.txt:           {len(urls)} כתובות")
     print(f"data/urls_important.txt: {len(important)} כתובות")
+    print(f"data/urls_all.txt:       {len(everything)} כתובות (כל האתר)")
+    for why in [*ALL_EXCLUDE, "robots"]:
+        print(f"  הוחרגו - {why:9} {sum(1 for w, _ in excluded if w == why)}")
     print(f"  ({len(blocked)} כתובות ב-sitemap חסומות ב-robots.txt - לא נכנסו לרשימה החשובה)")
     print("לפי קטגוריה (עמוד יכול להיות ביותר מאחת):")
     for name in CATEGORIES:

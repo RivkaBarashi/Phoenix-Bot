@@ -1382,3 +1382,22 @@ def test_one_model_said_personal_for_an_info_question_gets_the_repair_too(monkey
     with fallback.time_budget(20):
         a = A.respond("איך מגישים תביעה?", RACE_HIT, understanding=with_intent("info"))
     assert (a.kind, a.repaired) == ("answer", "personal_but_general") and calls == [1, 3]
+
+
+# ---------------------------------------------------------------- סריקת כל האתר: תחומי ביטוח חדשים בכפתורי ההבהרה
+@pytest.mark.parametrize("kind, question, expected", [
+    ("חיות מחמד", "איך מגישים תביעה?", "איך מגישים תביעה בביטוח חיות מחמד?"),
+    ("משכנתא", "כמה עולה ביטוח?", "כמה עולה ביטוח משכנתא?"),
+    ("אובדן כושר עבודה", "איך מבטלים את הביטוח שלי?", "איך מבטלים את ביטוח אובדן כושר העבודה שלי?"),
+    ("חיות מחמד", "איך מבטלים את הביטוח שלי?", "איך מבטלים את ביטוח חיית המחמד שלי?"),
+])
+def test_new_insurance_types_in_the_clarification_buttons(kind, question, expected):
+    assert kind in A.INSURANCE_TYPES
+    assert A.with_insurance_type(question, kind) == expected
+
+
+def test_understanding_prompt_names_every_button_type():
+    """כל כפתור הבהרה הוא ערך אפשרי ל-insurance_type בהוראות שלב ההבנה (המודל מחליט, לא רשימת מילים בקוד)."""
+    from phoenix.understand import UNDERSTAND_PROMPT
+    for kind in A.INSURANCE_TYPES:
+        assert kind.replace('"', '\\"') in UNDERSTAND_PROMPT or kind in UNDERSTAND_PROMPT, kind

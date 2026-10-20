@@ -91,3 +91,12 @@ def test_conversation_comes_back_after_refresh_and_numbers_are_hidden(app, monke
     at.chat_input[0].set_value("ת\"ז 123456789, איך מגישים תביעה בביטוח רכב?").run()
     saved = json.loads(next(c for c in written if c[0] == "SET" and c[1] == "conv:abcdef123456")[2])
     assert len(saved) == 4 and "123456789" not in saved[2]["content"] and "[מספר הוסתר]" in saved[2]["content"]
+
+
+def test_clarification_shows_a_button_for_every_insurance_type(app):
+    at = ask(app(real_answer), "איך מגישים תביעה?")
+    labels = [b.label for b in at.button]
+    assert not at.exception
+    for kind in bot.INSURANCE_TYPES:
+        assert labels.count(kind) == 1, kind
+    assert {"חיות מחמד", "משכנתא", "אובדן כושר עבודה"} <= set(labels)
