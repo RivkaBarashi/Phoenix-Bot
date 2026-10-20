@@ -5,6 +5,7 @@
 """
 import datetime as dt
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -105,4 +106,6 @@ PROVIDERS = [
 def fetch_page(url: str) -> Page:
     # בלי "מנוחה" לספקים: כשל בעמוד אחד לא אומר שהספק כולו לא עובד.
     (final_url, title, text), via = run_chain("fetch", PROVIDERS, url, retries=2, max_wait=30, cooldown=False)
+    # בלי פרמטרים של מעקב (?utm_source=... ): הכתובת שהבוט מצטט היא של העמוד עצמו (נמצא 20/10: הפניה של האתר הוסיפה utm)
+    final_url = urlsplit(final_url)._replace(query="", fragment="").geturl()
     return Page(final_url, url, title, text, dt.datetime.now(dt.UTC).isoformat(timespec="seconds"), via)

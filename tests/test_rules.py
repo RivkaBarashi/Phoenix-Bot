@@ -102,9 +102,9 @@ def test_invented_numbers_are_caught(answer_text, bad):
 # ---------------------------------------------------------------- terms_not_on_site (מול האינדקס המקומי)
 
 @pytest.mark.parametrize("question, missing", [
-    ("אפשר לבטח אצלכם טרקטורון?", ["טרקטורון"]),       # באתר יש רק "טרקטורים"
+    ("אפשר לבטח אצלכם גלשן?", ["גלשן"]),                # מונח שאין באתר (נכון ל-20/10, 1,302 קטעים)
     ("כמה עולה ביטוח לקורולה?", ["לקורולה"]),            # "קורונה" באתר - מילה אחרת
-    ("יש לכם ביטוח לרחפן?", ["לרחפן"]),
+    ("יש לכם ביטוח לקלנועית?", ["לקלנועית"]),
     ("יש לכם ביטוח לקרוואן?", []),                      # "קרוואנים" באתר - ן סופית
     ("איך מגישים תביעה על נזקי מים?", []),
 ])
@@ -851,12 +851,12 @@ def test_personal_intents_bypass_the_threshold(monkeypatch, question, intent):
 
 
 def test_the_term_check_looks_at_the_key_term_only(monkeypatch):
-    """D4: "ביטוח דירא" (שגיאת כתיב) לא פוסל תשובה - בודקים רק את key_term; "טרקטורון" - לא באתר."""
+    """D4: "ביטוח דירא" (שגיאת כתיב) לא פוסל תשובה - בודקים רק את key_term; "גלשן" - לא באתר."""
     understood(monkeypatch, U("איך מגישים תביעה בביטוח דירה?", insurance_type="דירה"))
     assert A.answer("איך מגישים תביעה בביטוח דירא?").kind == "answer"
-    understood(monkeypatch, U("האם אפשר לבטח טרקטורון?", key_term="טרקטורון"))
-    a = A.answer("יש לי טרקטורון, אפשר לבטח?")
-    assert (a.kind, a.reason) == ("not_on_site", "term_not_on_site:טרקטורון")
+    understood(monkeypatch, U("האם אפשר לבטח גלשן?", key_term="גלשן"))
+    a = A.answer("יש לי גלשן, אפשר לבטח?")
+    assert (a.kind, a.reason) == ("not_on_site", "term_not_on_site:גלשן")
 
 
 def test_two_questions_in_one_message(monkeypatch):
@@ -950,13 +950,13 @@ def test_failed_repair_says_related_info_was_found(monkeypatch):
 
 @pytest.mark.parametrize("data, reason", [
     ({"kind": "not_on_site", "answer": "", "referral": "", "evidence": [], "sources": []}, "model_not_found"),
-    ({"kind": "answer", "answer": "אפשר לבטח טרקטורון.", "referral": "", "evidence": [SENTENCE], "sources": [1]},
-     "term_not_on_site:טרקטורון"),
+    ({"kind": "answer", "answer": "אפשר לבטח גלשן.", "referral": "", "evidence": [SENTENCE], "sources": [1]},
+     "term_not_on_site:גלשן"),
 ])
 def test_really_not_on_the_site_stays_not_on_site(monkeypatch, data, reason):
     """אין מידע באמת (המודל לא מצא, או המונח לא קיים באתר) - "לא מופיע באתר", בלי ניסיון תיקון."""
     sent = replies(monkeypatch, data)
-    a = A.respond("אפשר לבטח טרקטורון?", RACE_HIT)
+    a = A.respond("אפשר לבטח גלשן?", RACE_HIT)
     assert (a.kind, a.reason) == ("not_on_site", reason) and len(sent) == 1
 
 

@@ -16,8 +16,10 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from urllib.parse import urlparse
 
@@ -33,6 +35,7 @@ REDIRECTS_FILE = DATA_DIR / "redirects.json"
 FAILED_FILE = DATA_DIR / "crawl_failed.txt"
 DELAY_SECONDS = 1.0  # קצב מנומס: הפסקה בין עמוד לעמוד
 MAX_BAD_PERCENT, MIN_ATTEMPTS_FOR_STOP = 5.0, 40
+SITE_HOST = "www.fnx.co.il"
 
 
 def page_file(url: str):
@@ -69,6 +72,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--urls", default=str(DATA_DIR / "urls_important.txt"))
     parser.add_argument("--refresh", action="store_true", help="להוריד מחדש גם עמודים שכבר נשמרו")
+    parser.add_argument("--workers", type=int, default=1, help="כמה עמודים במקביל (בקשה לאתר בשנייה לכל היותר)")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     PAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,38 +84,55 @@ def main():
     print(f"{len(urls)} כתובות, {len(urls) - len(todo)} כבר נשמרו, מורידים {len(todo)}")
 
     failed = load_failed()
-    via, saved_now, duplicates, attempts, bad, stopped = Counter(), set(), 0, 0, 0, False
+    via, saved_now, duplicates, offsite, attempts, bad, stopped = Counter(), set(), 0, 0, 0, 0, False
+
+    # בכמה תהליכונים במקביל (--workers): ההמתנה בין בקשות לאתר היא משותפת לכולם (בקשה אחת בשנייה לכל היותר), והחלק
+    # האיטי - Firecrawl לעמוד שנבנה ב-JavaScript - רץ במקביל. כך סריקה של אלף עמודים לא לוקחת שעתיים.
+    gate, next_slot = threading.Lock(), [0.0]
+
+    def fetch(url: str):
+        with gate:
+            now = time.monotonic()
+            time.sleep(max(next_slot[0] - now, 0.0))
+            next_slot[0] = max(now, next_slot[0]) + DELAY_SECONDS
+        try:
+            return url, fetch_page(url), None
+        except (PageGone, AllProvidersFailed) as exc:
+            return url, None, exc
+
+    pool = ThreadPoolExecutor(max_workers=args.workers)
     try:
-        for url in tqdm(todo, unit="page"):
+        for url, page, exc in tqdm(pool.map(fetch, todo), total=len(todo), unit="page"):
             attempts += 1
-            try:
-                page = fetch_page(url)
+            if page:
                 failed.pop(url, None)
                 if page.url != url:
                     redirects[url] = page.url
-                if page.url in saved_now:
+                if urlparse(page.url).netloc != SITE_HOST:
+                    offsite += 1  # הפניה לדומיין אחר (למשל phoenixfinancial.co.il): נרשמת ב-redirects.json, העמוד לא נשמר
+                elif page.url in saved_now:
                     duplicates += 1
                 else:
                     page_file(page.url).write_text(json.dumps(asdict(page), ensure_ascii=False, indent=1), encoding="utf-8")
                     saved_now.add(page.url)
                     via[page.via] += 1
-            except PageGone:
+            elif isinstance(exc, PageGone):
                 failed[url] = "404\tgone"
-            except AllProvidersFailed as exc:
+            else:
                 kind = failure_kind(exc.errors)
                 failed[url] = f"{kind}\t{' | '.join(exc.errors)[:300]}"
                 bad += kind != "404"
-            time.sleep(DELAY_SECONDS)
             if attempts >= MIN_ATTEMPTS_FOR_STOP and 100 * bad / attempts > MAX_BAD_PERCENT:
                 stopped = True
                 break
     finally:  # גם בעצירה או בקריסה: מה שנאסף נשמר, והכישלונות והפניות נרשמים
+        pool.shutdown(wait=False, cancel_futures=True)
         REDIRECTS_FILE.write_text(json.dumps(redirects, ensure_ascii=False, indent=1), encoding="utf-8")
         FAILED_FILE.write_text("".join(f"{u}\t{why}\n" for u, why in sorted(failed.items())), encoding="utf-8")
 
     kinds = Counter(why.split("\t")[0] for why in failed.values())
     print(f"\nנשמרו: {sum(via.values())} (לפי מקור: {dict(via)})")
-    print(f"הפניות לכתובת אחרת: {len(redirects)}, מתוכן {duplicates} כפילויות שדולגו")
+    print(f"הפניות לכתובת אחרת: {len(redirects)}, מתוכן {duplicates} כפילויות שדולגו ו-{offsite} לדומיין אחר (לא נשמרו)")
     print(f"נכשלו (בקובץ, כולל הרצות קודמות): {len(failed)} - לפי סוג: {dict(kinds)}" +
           (" - פירוט ב-data/crawl_failed.txt" if failed else ""))
     print(f"סה״כ בתיקייה: {len(list(PAGES_DIR.glob('*.json')))} עמודים")
