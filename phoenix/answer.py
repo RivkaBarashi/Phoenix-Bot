@@ -78,6 +78,11 @@ UNVERIFIED_TEXT = "מצאתי באתר מידע קרוב, אבל לא הצלחת
 REPAIR_PROMPT = ("התשובה שלך נפסלה בבדיקה אוטומטית מול האתר: {problem} תקן את זה והחזר את ה-JSON כולו מחדש, לפי "
                  "אותם כללים. אם אי אפשר לענות מהקטעים - kind = \"not_on_site\".")
 MIN_REPAIR_SECONDS = 6  # בצ'אט: פחות מזה מהזמן לשאלה - בלי ניסיון תיקון
+# שלב ההבנה קבע שזו שאלת מידע, ומודל התשובה בכל זאת ענה "אישי" (20/10, שאלה 4: "אני עוברת דירה בשבוע הבא. ביטוח
+# התכולה מכסה את הרהיטים בזמן ההובלה?" - 3.6 ענה personal, 3.8 ענה תשובה נכונה): ניסיון אחד עם ההסבר הזה.
+GENERAL_NOTE = ("שלב הבנת השאלה קבע שזו שאלה כללית - מידע מהאתר, לא בדיקה של הפוליסה או של הנתונים האישיים של "
+                "הלקוח, גם אם היא כתובה בגוף ראשון. ענה עליה מתוך הקטעים כתשובה רגילה (kind = \"answer\") עם ציטוט "
+                "מדויק, ואם אין בקטעים תשובה - kind = \"not_on_site\".")
 
 
 def repair_note(reason: str) -> str:
@@ -236,6 +241,8 @@ class Answer:
     warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
     race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
     early_search: str = ""    # החיפוש המוקדם (במקביל להבנה): reused / redone, או "" כשלא היה - ליומן ולמצב מפתחת
+    personal_votes: int = 0   # כמה מודלי תשובה ענו "אישי" (במירוץ - מתוך כמה שענו); answered - כמה ענו בכלל
+    answered: int = 0
     cached: bool = False      # התשובה מהמטמון של התשובות המאומתות (answer_cache) - למצב מפתחת וליומן
     repaired: str = ""         # התשובה עברה רק אחרי ניסיון תיקון - הסיבה לפסילה הראשונה (ליומן ולבדיקות)
     understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
@@ -602,10 +609,12 @@ REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not
 
 
 def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], finish,
-          on_stage=None) -> "Answer | None":
+          on_stage=None, hold=None) -> "Answer | None":
     """אותה שאלה לשני מודלי Gemini שונים במקביל, כל אחד במפתח אחר. התשובה הראשונה שעוברת את כל הבדיקות
     מוצגת, והשנייה נזנחת (לא מחכים לה; הבקשה שכבר יצאה עדיין נספרת במכסה). אם הראשונה נפסלה - מחכים
-    לשנייה. None: אין שני מודלים זמינים, או ששניהם נכשלו - ממשיכים בשרשרת הרגילה, בזה אחר זה."""
+    לשנייה. None: אין שני מודלים זמינים, או ששניהם נכשלו - ממשיכים בשרשרת הרגילה, בזה אחר זה.
+    hold(outcome): תשובה שלא מנצחת כל עוד המודל השני עובד (תשובה "אישית" כששלב ההבנה אמר info) - מחכים לשני;
+    גם הוא כזה (או נכשל) - היא מוחזרת, עם personal_votes."""
     messages = [{"role": "user", "content": _user_message(question, standalone, history, hits)}]
     request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=FULL_CONTEXT_LLMS,
                    low_thinking=config.ANSWER_LOW_THINKING)
@@ -627,7 +636,7 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
     for names in pair:  # עם הזמן הכולל של השאלה (contextvars לא עוברים ל-thread חדש לבד)
         threading.Thread(target=contextvars.copy_context().run, args=(worker, names), daemon=True).start()
     racers = " מול ".join(llm.describe(names[0]) for names in pair)
-    rejected, errors = None, []
+    rejected, errors, held, votes, answered = None, [], None, 0, 0
     for _ in pair:
         left = time_left()
         try:
@@ -641,10 +650,18 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
             on_stage("verify")
         outcome = finish(reply)  # אותן בדיקות בדיוק, על כל תשובה בנפרד
         outcome.race = f"במקביל: {racers}"
+        answered += 1
+        votes += outcome.kind == "personal"
+        if hold and hold(outcome):  # "אישי" לשאלת מידע - לא מנצח; מחכים למודל השני (עד מגבלת הזמן)
+            held = held or (reply, outcome)
+            continue
         if not outcome.reason.startswith(REJECTED):
             llm.remember(messages, result=reply, **request)  # רק המנצח נשמר במטמון
             return outcome
         rejected = rejected or (reply, outcome)
+    if held:  # כל המודלים שענו אמרו "אישי" (או שהשני נכשל/נפסל) - התשובה האישית, ו-respond מחליט על תיקון
+        held[1].personal_votes, held[1].answered = votes, answered
+        return held[1]
     if rejected:  # שתי התשובות נפסלו (או אחת נפסלה והשנייה נכשלה) - הראשונה, כמו במודל אחד
         llm.remember(messages, result=rejected[0], **request)
         return rejected[1]
@@ -796,10 +813,45 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         again.repaired = outcome.reason
         return again
 
+    general = understanding is not None and understanding.intent == "info"
+
+    def general_question(outcome: Answer) -> Answer:
+        """שלב ההבנה אמר info וכל מודל שענה אמר "אישי": ניסיון תיקון אחד עם GENERAL_NOTE (אם נשארו 6 שניות).
+        עוברת את כל הבדיקות - מוצגת; אחרת - ההודעה האישית, כמו קודם."""
+        if not (general and outcome.kind == "personal" and outcome.personal_votes == outcome.answered > 0):
+            return outcome
+        left = time_left()
+        min_repair = 5 if config.LEGACY.get() else MIN_REPAIR_SECONDS
+        if outcome.raw is None or (left is not None and left < min_repair):
+            return outcome
+        if on_stage:
+            on_stage("compose")
+        repair_start = time.perf_counter()
+        messages = [{"role": "user", "content": _user_message(question, standalone, history, hits)},
+                    {"role": "assistant", "content": json.dumps(outcome.raw, ensure_ascii=False)},
+                    {"role": "user", "content": GENERAL_NOTE}]
+        try:
+            fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
+                             only=FULL_CONTEXT_LLMS, low_thinking=config.ANSWER_LOW_THINKING)
+        except AllProvidersFailed:
+            return outcome
+        finally:
+            timings["repair"] = time.perf_counter() - repair_start
+        if on_stage:
+            on_stage("verify")
+        again = finish(fixed)
+        if (again.kind, again.reason) == ("answer", "verified"):
+            again.repaired, again.race = "personal_but_general", outcome.race
+            return again
+        return outcome
+
+    def hold(outcome: Answer) -> bool:
+        return general and outcome.kind == "personal"
+
     try:  # שכבה 2
-        if parallel and (raced := _race(question, standalone, history, hits, finish, on_stage)):
+        if parallel and (raced := _race(question, standalone, history, hits, finish, on_stage, hold)):
             timings["llm"] = time.perf_counter() - start
-            return settle(raced)
+            return general_question(settle(raced))
         reply = _ask_model(question, standalone, history, hits, on_stage)
     except AllProvidersFailed as exc:
         timings["llm"] = time.perf_counter() - start
@@ -814,7 +866,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     timings["llm"] = time.perf_counter() - start
     if on_stage and not reply.cached:
         on_stage("verify")
-    return settle(finish(reply))
+    single = finish(reply)
+    single.personal_votes, single.answered = int(single.kind == "personal"), 1  # מודל אחד (בלי מירוץ)
+    return general_question(settle(single))
 
 
 _EARLY = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="early-search")

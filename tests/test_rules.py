@@ -1318,3 +1318,67 @@ def test_topic_check_below_the_threshold_has_its_own_time_limit(monkeypatch):
     with fallback.time_budget(20):
         assert A.is_off_topic("מה מזג האוויר מחר?") is False
     assert time.perf_counter() - start < 1.0
+
+
+# ---------------------------------------------------------------- שאלה 4: ההבנה אמרה info, מודל התשובה אמר "אישי"
+PERSONAL_REPLY = {"kind": "personal", "answer": SENTENCE, "referral": "", "evidence": [SENTENCE], "sources": [1]}
+
+
+def with_intent(intent: str):
+    from phoenix.understand import Understanding
+    return Understanding("איך מגישים תביעה בביטוח רכב?", intent, insurance_type="רכב", source="model", llm="gemini:x")
+
+
+def test_a_personal_answer_does_not_win_the_race_for_an_info_question(monkeypatch):
+    """(א) 3.6 ענה "אישי" מהר, 3.8 עוד עובד: מחכים ל-3.8, והתשובה הרגילה שלו מוצגת."""
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.5, VALID)})
+    a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert (a.kind, a.llm) == ("answer", "gemini:b#2")
+
+
+def test_both_personal_for_an_info_question_gets_one_repair(monkeypatch):
+    """(ב) שני המודלים אמרו "אישי" וההבנה אמרה info: ניסיון אחד עם ההסבר; עובר את הבדיקות - מוצג."""
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.0, PERSONAL_REPLY),
+                            "chain": (0.0, VALID)})
+    with fallback.time_budget(20):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "personal_but_general") and "repair" in a.timings
+
+
+def test_both_personal_and_the_repair_is_personal_too_shows_the_personal_message(monkeypatch):
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.0, PERSONAL_REPLY),
+                            "chain": (0.0, PERSONAL_REPLY)})
+    with fallback.time_budget(20):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert a.kind == "personal" and not a.repaired
+
+
+def test_no_repair_when_too_little_time_is_left(monkeypatch):
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.0, PERSONAL_REPLY),
+                            "chain": (0.0, VALID)})
+    with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert a.kind == "personal" and "repair" not in a.timings
+
+
+def test_a_real_personal_question_still_gets_the_personal_message_at_once(monkeypatch):
+    """(ג) ההבנה אמרה personal: "אישי" מנצח מיד - בלי לחכות למודל השני ובלי תיקון."""
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (2.0, VALID)})
+    start = time.perf_counter()
+    a = A.respond("האם הביטוח שלי כולל רכב חלופי?", RACE_HIT, parallel=True, understanding=with_intent("personal"))
+    assert a.kind == "personal" and time.perf_counter() - start < 1.5 and "repair" not in a.timings
+
+
+def test_one_model_said_personal_for_an_info_question_gets_the_repair_too(monkeypatch):
+    """בלי מירוץ (מודל אחד זמין): המודל היחיד שענה אמר "אישי" - אותו ניסיון תיקון."""
+    calls = []
+
+    def chat(messages, **kwargs):
+        calls.append(len(messages))
+        data = PERSONAL_REPLY if len(messages) == 1 else VALID
+        return llm.ChatResult(json.dumps(data, ensure_ascii=False), "gemini:only#1", data)
+    monkeypatch.setattr(llm, "chat", chat)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    with fallback.time_budget(20):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT, understanding=with_intent("info"))
+    assert (a.kind, a.repaired) == ("answer", "personal_but_general") and calls == [1, 3]
