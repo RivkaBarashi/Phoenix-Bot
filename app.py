@@ -311,6 +311,13 @@ def save_conversation(cid: str, messages: list[dict]):
     store.write(["SET", f"conv:{cid}", json.dumps(saved, ensure_ascii=False, default=str), "EX", CONVERSATION_TTL])
 
 
+def loaded_line(loaded: dict) -> str:
+    """"נטען: 1,302 קטעים · וקטורים gemini 1,302 · מפתחות Gemini 1-20" - השורה של מצב מפתחת מעל השיחה."""
+    keys = sorted({int(name.rsplit("#", 1)[1]) for name in loaded["llms"] if name.startswith("gemini:") and "#" in name})
+    vectors = " · ".join(f"וקטורים {name.split(':')[0]} {count:,}" for name, count in loaded["vectors"].items() if count)
+    return f"נטען: {loaded['chunks']:,} קטעים · {vectors} · מפתחות Gemini: {', '.join(map(str, keys)) or '-'}"
+
+
 def dev_mode() -> bool:
     """מצב מפתחת: ?dev=1 בכתובת. רק בו מוצגים "פרטים טכניים" (החלטה, ציון, מודל, זמנים) - הלקוחה לא רואה אותם."""
     return st.query_params.get("dev") == "1"
@@ -399,11 +406,13 @@ def main():
         st.caption(f"מצב בדיקות ממשק - מודלים: {', '.join(TEST_PROVIDERS)}")
 
     try:
-        load_bot()
+        loaded = load_bot()
     except Exception:
         log.exception("loading the bot failed")
         st.error(LOAD_ERROR)
         st.stop()
+    if dev_mode():  # מה נטען בשרת הזה: גודל האינדקס ומפתחות Gemini (בלי הערכים) - לבדיקת פריסה, בלי קריאה למודל
+        st.caption(loaded_line(loaded))
 
     typed = st.chat_input("כתבו לי שאלה...")
     if typed is not None and not typed.strip():

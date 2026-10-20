@@ -152,3 +152,15 @@ def test_design_colors_are_only_the_palette():
     import re
     colors = set(re.findall(r"#[0-9A-Fa-f]{6}\b", chat_design.css()))
     assert {c.upper() for c in colors} <= {"#111C3F", "#FF5A23", "#F7F8FB", "#8A8FA0", "#FFFFFF"}
+
+
+@pytest.mark.parametrize("dev", [False, True])
+def test_developer_mode_shows_what_this_server_loaded(app, dev):
+    """?dev=1: כמה קטעים באינדקס ואילו מפתחות Gemini נטענו (המספרים בלבד) - לבדיקת פריסה. ללקוחה - לא."""
+    at = app(regular, dev=dev)
+    lines = [c.value for c in at.caption if c.value.startswith("נטען:")]
+    assert not at.exception
+    if not dev:
+        assert lines == []
+    else:
+        assert len(lines) == 1 and "קטעים" in lines[0] and "מפתחות Gemini:" in lines[0] and "AIza" not in lines[0]
