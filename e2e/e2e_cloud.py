@@ -132,6 +132,8 @@ def main():
     mode.add_argument("--smoke", action="store_true")
     mode.add_argument("--questions", help="CSV עם עמודה question")
     parser.add_argument("--out", help="CSV לתוצאות")
+    parser.add_argument("--smoke-csv", help="עם --smoke: CSV של שאלות והתשובה הצפויה (עמודות question, expected) במקום 5 השאלות "
+                                            "הקבועות - לבדיקת התהליך בלי קריאות למודלים")
     parser.add_argument("--legacy", action="store_true", help="בלי שיפורי הזמנים - מדידת \"לפני\"")
     parser.add_argument("--browser", default="", help="msedge / chrome - דפדפן מותקן (ברירת מחדל: Chromium של Playwright)")
     args = parser.parse_args()
@@ -140,9 +142,13 @@ def main():
     if args.wake:
         wake(args.url, args.browser)
         return
+    cases = SMOKE
+    if args.smoke and args.smoke_csv:
+        cases = [(r["question"][:20], r["question"], r["expected"])
+                 for r in csv.DictReader(open(args.smoke_csv, encoding="utf-8-sig"))]
     if args.smoke:
-        rows = run(args.url, [q for _, q, _ in SMOKE], args.legacy, args.browser)
-        for (label, _, expected), row in zip(SMOKE, rows):
+        rows = run(args.url, [q for _, q, _ in cases], args.legacy, args.browser)
+        for (label, _, expected), row in zip(cases, rows):
             row["expected"], row["ok"] = expected, row["kind"] == expected
             if not row["ok"]:
                 print(f"   ✗ {label}: ציפינו ל-{expected}, התקבל {row['kind']} - {row['answer'][:150]}")
@@ -158,8 +164,8 @@ def main():
     if args.smoke:
         passed = sum(r["ok"] for r in rows)
         bot = [r["bot_s"] for r in rows if r["kind"] not in ("exception", "greeting")]
-        ok = passed == len(SMOKE) and bot and p90(bot) <= LIMIT_SECONDS
-        print(f"{passed}/{len(SMOKE)} נכונות, p90 של הבוט {p90(bot) if bot else 0:.1f} ש' -> {'עבר' if ok else 'נכשל'}")
+        ok = passed == len(cases) and (p90(bot) <= LIMIT_SECONDS if bot else bool(args.smoke_csv))
+        print(f"{passed}/{len(cases)} נכונות, p90 של הבוט {p90(bot) if bot else 0:.1f} ש' -> {'עבר' if ok else 'נכשל'}")
         sys.exit(0 if ok else 1)
 
 

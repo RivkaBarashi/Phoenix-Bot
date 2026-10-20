@@ -9,6 +9,7 @@
 האימות אחרי התשובה (ציטוט, מספרים, דליפה) - הקוד ממשיך לאמת כל תשובה. אם הקריאה נכשלת (אין מודל, JSON לא
 תקין) - הכללים הישנים בקוד, כגיבוי (rules_fallback).
 """
+import collections
 import contextvars
 import json
 import logging
@@ -151,6 +152,32 @@ def understand(question: str, history: list[dict] = (), models: list[str] | None
     return Understanding(**reply.data, source="model", llm=reply.provider)
 
 
+# כלל המודל הראשי (החלטת הבעלים, 20/10): המודל החזק (3.8) הוא הראשי כל עוד הוא עונה תוך STRONG_OK_SECONDS. פעמיים ברצף
+# שהוא לא ענה בזמן (או נכשל) - מודל הגיבוי (3.6) הוא הראשי: הוא מתחיל יחד איתו (בלי ההמתנה של 3 שניות), והתשובה התקינה
+# הראשונה קובעת - לא מחכים למודל השני. אחרי STRONG_SLOW_REST שניות המודל החזק נבדק שוב: ענה בזמן - חוזר להיות הראשי.
+# בשלב התשובה המירוץ כבר כך: שני המודלים מתחילים יחד, והתשובה הראשונה שעוברת את הבדיקות מוצגת (answer._race).
+STRONG_OK_SECONDS, STRONG_SLOW_STREAK, STRONG_SLOW_REST = 10.0, 2, 300.0
+_strong_recent: collections.deque = collections.deque(maxlen=STRONG_SLOW_STREAK)
+_strong_slow_until = 0.0
+_strong_lock = threading.Lock()
+
+
+def _note_strong(seconds: float, ok: bool) -> None:
+    """בקשת הבנה שהסתיימה במודל החזק: ענה תוך STRONG_OK_SECONDS - תקין; אחרת (איטי, נכשל, או נחתך בזמן) - איטי."""
+    global _strong_slow_until
+    slow = not ok or seconds >= STRONG_OK_SECONDS
+    with _strong_lock:
+        _strong_recent.append(slow)
+        if len(_strong_recent) == STRONG_SLOW_STREAK and all(_strong_recent):
+            _strong_slow_until = time.time() + STRONG_SLOW_REST
+        elif not slow:
+            _strong_slow_until = 0.0
+
+
+def strong_is_slow() -> bool:
+    return time.time() < _strong_slow_until
+
+
 def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
     """בצ'אט: המודלים החזקים (UNDERSTAND_LLMS בלי מודל הגיבוי) קודם. אין תשובה תוך UNDERSTAND_HEDGE_AFTER שניות,
     או שהם נכשלו מהר - אותה בקשה גם למודל הגיבוי (3.6), והתשובה התקינה הראשונה קובעת. בדרך כלל 3.8 עונה תוך
@@ -159,10 +186,15 @@ def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
     results: queue.Queue = queue.Queue()
 
     def worker(models):
+        began = time.perf_counter()
         try:
             results.put((understand(question, history, models), None))
+            ok = True
         except Exception as exc:  # noqa: BLE001 - כשל בצד אחד לא מפיל את השני
             results.put((None, exc))
+            ok = False
+        if models == first:  # גם אם כבר ויתרנו עליו: כמה זמן לקח למודל החזק (כלל המודל הראשי, למטה)
+            _note_strong(time.perf_counter() - began, ok)
 
     def start(models):  # עם הזמן של השאלה (contextvars לא עוברים ל-thread חדש לבד)
         threading.Thread(target=contextvars.copy_context().run, args=(worker, models), daemon=True).start()
@@ -170,7 +202,11 @@ def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
     with time_budget(limit):
         start(first)
         running, hedged, errors = 1, False, []
-        hedge_at = time.perf_counter() + config.UNDERSTAND_HEDGE_AFTER
+        delay = 0.0 if strong_is_slow() else config.UNDERSTAND_HEDGE_AFTER
+        if delay <= 0:  # המודל החזק איטי: הגיבוי מתחיל יחד איתו, והראשון שתקין קובע
+            start([config.UNDERSTAND_HEDGE])
+            running, hedged = running + 1, True
+        hedge_at = time.perf_counter() + delay
         while running:
             left = time_left() or 0.0
             wait = left if hedged else min(left, max(hedge_at - time.perf_counter(), 0.0))

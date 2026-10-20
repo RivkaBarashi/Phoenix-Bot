@@ -1441,3 +1441,47 @@ def test_understanding_prompt_names_every_button_type():
     from phoenix.understand import UNDERSTAND_PROMPT
     for kind in A.INSURANCE_TYPES:
         assert kind.replace('"', '\\"') in UNDERSTAND_PROMPT or kind in UNDERSTAND_PROMPT, kind
+
+
+# ---------------------------------------------------------------- כלל המודל הראשי: 3.8 איטי פעמיים ברצף -> 3.6 מתחיל יחד איתו
+@pytest.fixture
+def strong_state(monkeypatch):
+    """מצב נקי של המודל החזק, וסף "איטי" קצר כדי שהבדיקה לא תחכה 10 שניות."""
+    from phoenix import understand
+    monkeypatch.setattr(understand, "STRONG_OK_SECONDS", 0.2)
+    monkeypatch.setattr(understand, "_strong_recent", __import__("collections").deque(maxlen=2))
+    monkeypatch.setattr(understand, "_strong_slow_until", 0.0)
+    return understand
+
+
+def test_two_slow_answers_in_a_row_make_the_backup_start_together_with_the_strong_model(monkeypatch, strong_state):
+    understand = strong_state
+    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.5, "3.8"), "gemini-3.6-flash": (0.05, "3.6")})
+    monkeypatch.setattr(understand.config, "UNDERSTAND_HEDGE_AFTER", 0.25)
+    for _ in range(2):  # שתי שאלות שבהן 3.8 לא ענה בזמן (הוא ענה אחרי 0.5 > 0.2)
+        assert understand.try_understand("שאלה").llm in ("3.8", "3.6")
+    time.sleep(0.6)     # שתי הבקשות של 3.8 הסתיימו ונרשמו כאיטיות
+    assert understand.strong_is_slow()
+    asked.clear()
+    start = time.perf_counter()
+    assert understand.try_understand("שאלה").llm == "3.6"
+    assert set(asked) == {"gemini-3.8-flash", "gemini-3.6-flash"} and time.perf_counter() - start < 0.25  # בלי המתנה
+    time.sleep(0.6)  # הבקשה של 3.8 שננטשה מסיימת ונרשמת עכשיו - לא בתוך הבדיקה הבאה
+
+
+def test_one_slow_answer_does_not_change_the_primary_model(monkeypatch, strong_state):
+    understand = strong_state
+    hedge_world(monkeypatch, {"gemini-3.8-flash": (0.4, "3.8"), "gemini-3.6-flash": (0.05, "3.6")})
+    monkeypatch.setattr(understand.config, "UNDERSTAND_HEDGE_AFTER", 0.25)
+    understand.try_understand("שאלה")
+    time.sleep(0.5)
+    assert not understand.strong_is_slow()
+
+
+def test_the_strong_model_becomes_primary_again_after_a_fast_answer(monkeypatch, strong_state):
+    understand = strong_state
+    understand._note_strong(15.0, True)
+    understand._note_strong(1.0, False)  # נכשל
+    assert understand.strong_is_slow()
+    understand._note_strong(0.05, True)  # בדיקה חוזרת: ענה מהר
+    assert not understand.strong_is_slow()
