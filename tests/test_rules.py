@@ -1091,16 +1091,19 @@ def test_no_early_search_for_a_follow_up(monkeypatch):
     assert A.start_early_search("איך מגישים תביעה?", []) is None  # חסר סוג - שאלת הבהרה, בלי חיפוש
 
 
-def test_understanding_uses_the_lowest_thinking_level(monkeypatch):
+def test_understanding_thinking_strong_model_normal_backup_low(monkeypatch):
+    """החלטת הבעלים (20/10, 3.8 לא התאושש): המודל הראשי (3.8) בחשיבה רגילה, מודל הגיבוי (3.6) בחשיבה נמוכה."""
     from phoenix import understand
-    seen = {}
+    seen = []
 
     def chat(messages, **kwargs):
-        seen.update(kwargs)
+        seen.append(kwargs["low_thinking"])
         raise fallback.AllProvidersFailed("llm", ["down"])
     monkeypatch.setattr(understand.llm, "chat", chat)
-    understand.try_understand("שאלה")
-    assert seen["low_thinking"] is True
+    understand.try_understand("שאלה")                                      # המודלים החזקים
+    with pytest.raises(fallback.AllProvidersFailed):
+        understand.understand("שאלה", models=[understand.config.UNDERSTAND_HEDGE])  # בקשת הגיבוי
+    assert seen == [False, True]
 
 
 @pytest.mark.parametrize("model, level", [("gemini-3.6-flash", "MINIMAL"), ("gemini-3.8-flash", "LOW"),

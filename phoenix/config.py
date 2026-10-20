@@ -144,12 +144,14 @@ RACE_LLMS = [m.strip() for m in os.getenv("RACE_LLMS", "gemini-3.6-flash,gemini-
 PARALLEL_SEARCH = os.getenv("PARALLEL_SEARCH", "true").strip().lower() in ("1", "true", "yes", "on")
 SAME_SEARCH_JACCARD = 0.7
 # חשיבה: הרמה הנמוכה ביותר שכל מודל מקבל (נבדק 20/10: 3.6 - MINIMAL; 3.7 ו-3.8 דוחים MINIMAL - LOW). שלב ההבנה
-# תמיד בה (3.8 בהבנה: 2.6 שניות במקום 14-23 בעומס הלילה). בתשובה - רק עם ANSWER_LOW_THINKING, אחרי בדיקת איכות.
+# לפי UNDERSTAND_LOW_THINKING / UNDERSTAND_HEDGE_LOW_THINKING למטה. בתשובה - רק עם ANSWER_LOW_THINKING, אחרי בדיקת איכות.
 LOW_THINKING = {"gemini-3.6-flash": "MINIMAL", "gemini-3.7-flash": "LOW", "gemini-3.8-flash": "LOW"}
 ANSWER_LOW_THINKING = os.getenv("ANSWER_LOW_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
 # שלב ההבנה: חשיבה נמוכה לכל מודל (UNDERSTAND_LOW_THINKING), או רק למודל הגיבוי (UNDERSTAND_HEDGE_LOW_THINKING).
 # נבדק 20/10, הבנה בלבד על 75 השאלות, 3.6: נמוכה - שגויה 1/75, חציון 3.5 ש'; רגילה - שגויה 1/48, חציון 10.5 ש'.
-UNDERSTAND_LOW_THINKING = os.getenv("UNDERSTAND_LOW_THINKING", "true").strip().lower() in ("1", "true", "yes", "on")
+# 3.8 לא נבדק בחשיבה נמוכה (עומס אצל Google כל 20/10), ולכן לפי החלטת הבעלים: 3.8 (המודל הראשי) בחשיבה רגילה, כדי לא
+# לקחת סיכון על טעויות ניסוח בשאלות המנוסחות; מודל הגיבוי (3.6, אחרי 3 שניות) בחשיבה נמוכה - הוא שומר על הזמן.
+UNDERSTAND_LOW_THINKING = os.getenv("UNDERSTAND_LOW_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
 UNDERSTAND_HEDGE_LOW_THINKING = os.getenv("UNDERSTAND_HEDGE_LOW_THINKING", "true").strip().lower() in ("1", "true", "yes", "on")
 # מדידת "לפני ואחרי" על אותו שרת (סעיף 6ה): ?dev=1&legacy=1 עונה בלי שיפורי הזמנים - בלי מרוץ, בלי חיפוש מוקדם,
 # חשיבה רגילה בהבנה, תיקון כבר מ-5 שניות, ובלי מטמון. לשאלה אחת בלבד (contextvar) - לא משנה לאף אחד אחר.
