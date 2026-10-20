@@ -318,17 +318,30 @@ def greeting_answer(question: str) -> "Answer | None":
                   question=question)
 
 
+TOPIC_TIMEOUT = 5  # בצ'אט: בדיקת הנושא מתחת לסף - עד 5 שניות; המודל לא ענה - not_on_site (התשובה הבטוחה)
+
+
 def is_off_topic(question: str) -> bool:
-    """שאלה מתחת לסף: האם היא בכלל לא על ביטוח? (אם המודל לא זמין - לא, ונשארים עם not_on_site)."""
+    """שאלה מתחת לסף: האם היא בכלל לא על ביטוח? (אם המודל לא זמין - לא, ונשארים עם not_on_site).
+    בצ'אט עד TOPIC_TIMEOUT שניות: בעומס אצל Google (20/10, בענן) הבדיקה חיכתה את כל 12 השניות שנשארו - ובסוף
+    ממילא not_on_site. בבדיקות (בלי מגבלת זמן) - כמו קודם."""
     def parse(text: str) -> dict:
         data = json.loads(text[text.find("{"):text.rfind("}") + 1])
         if not isinstance(data.get("related"), bool):
             raise ValueError("missing 'related'")
         return data
+
+    def ask():
+        return llm.chat([{"role": "user", "content": question}], system=TOPIC_PROMPT, temperature=0,
+                        json_mode=True, parse=parse)
+    left = time_left()
     try:
-        reply = llm.chat([{"role": "user", "content": question}], system=TOPIC_PROMPT, temperature=0,
-                         json_mode=True, parse=parse)
-    except AllProvidersFailed:
+        if left is None:
+            reply = ask()
+        else:
+            with time_budget(min(TOPIC_TIMEOUT, left)):
+                reply = ask()
+    except AllProvidersFailed:  # כולל OutOfTime
         return False
     return reply.data["related"] is False
 

@@ -1303,3 +1303,18 @@ def test_understanding_falls_back_to_the_rules_when_both_fail(monkeypatch):
     down = fallback.AllProvidersFailed("llm", ["down"])
     hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, down), "gemini-3.6-flash": (0.0, down)})
     assert understand.try_understand("שאלה") is None
+
+
+def test_topic_check_below_the_threshold_has_its_own_time_limit(monkeypatch):
+    """בעומס: בדיקת הנושא לא אוכלת את כל הזמן של השאלה - אחרי TOPIC_TIMEOUT, not_on_site."""
+    monkeypatch.setattr(A, "TOPIC_TIMEOUT", 0.3)
+
+    def slow_chat(*args, **kwargs):
+        left = fallback.time_left()
+        time.sleep(min(left, 5) if left else 5)
+        raise fallback.OutOfTime("llm", ["out of time"])
+    monkeypatch.setattr(llm, "chat", slow_chat)
+    start = time.perf_counter()
+    with fallback.time_budget(20):
+        assert A.is_off_topic("מה מזג האוויר מחר?") is False
+    assert time.perf_counter() - start < 1.0
