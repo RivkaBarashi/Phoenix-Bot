@@ -61,8 +61,21 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
   border-radius:{RADIUS}px {RADIUS}px 0 0; display:flex; align-items:center; gap:12px; padding:0 20px; }}
 .px-icon {{ width:40px; height:40px; border-radius:50%; flex:none; background:#fff url("{_icon_uri()}") center/cover; }}
 .px-header-title {{ color:#fff; font-weight:700; font-size:18px; line-height:1; }}
-.px-close {{ margin-inline-start:auto; display:flex; align-items:center; justify-content:center; width:32px; height:32px; }}
+.px-new {{ margin-inline-start:auto; color:#fff !important; text-decoration:none !important; font-size:13px; font-weight:500;
+  line-height:1.2; white-space:nowrap; border:1.5px solid rgba(255,255,255,.85); border-radius:999px; padding:5px 12px; }}
+.px-new:hover {{ background:#fff; color:var(--navy) !important; }}
+.px-close {{ display:flex; align-items:center; justify-content:center; width:32px; height:32px; padding:0; border:none;
+  background:transparent; cursor:pointer; }}
 .px-close:hover {{ opacity:.8; }}
+
+/* closed (the X): the window is hidden and the owner's icon waits at the bottom left; a click shows the same window again,
+   with the same conversation (nothing is reloaded). The launcher is added to <body> by script_html(). */
+.px-launcher {{ display:none; position:fixed; left:20px; bottom:20px; width:76px; height:76px; padding:0; border:none;
+  background:transparent; cursor:pointer; z-index:1000; filter:drop-shadow(0 6px 14px rgba(17,28,63,.25)); }}
+.px-launcher img {{ width:100%; height:100%; display:block; }}
+.px-launcher:hover {{ transform:scale(1.05); }}
+body.px-closed .px-launcher {{ display:block; }}
+body.px-closed #root {{ display:none !important; }}  /* all of Streamlit; the launcher is outside it, in <body> */
 
 /* the greeting area: the robot, the decorations (in the image) and the card that overlaps its bottom */
 .px-hero {{ display:flex; flex-direction:column; align-items:center; padding:16px 0 12px; }}
@@ -141,12 +154,77 @@ def esc_attr(text: str) -> str:
     return text.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
-def header_html(close_href: str) -> str:
-    """The top bar: the robot icon and the title on the right, the close mark on the left. Closing = a new chat."""
+def header_html(new_chat_href: str) -> str:
+    """The top bar: the robot icon and the title on the right; on the left "שיחה חדשה" (a link to a new conversation id) and
+    the close mark (a button: script_html() hides the window and shows the launcher; the conversation stays)."""
     close = ('<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" '
              'stroke-linecap="round"><path d="M4 4l16 16M20 4L4 20"/></svg>')
     return (f'<div class="px-header"><div class="px-icon"></div><div class="px-header-title">הבוט האישי שלך</div>'
-            f'<a class="px-close" href="{esc_attr(close_href)}" target="_self" aria-label="סגירה">{close}</a></div>')
+            f'<a class="px-new" href="{esc_attr(new_chat_href)}" target="_self">שיחה חדשה</a>'
+            f'<button class="px-close" type="button" aria-label="סגירה" title="סגירה">{close}</button></div>')
+
+
+LAUNCHER_URL = "app/static/launcher.png"  # the owner's icon ("עוזר אישי"), as she sent it (design-references/launcher-icon.png)
+
+
+def script_html() -> str:
+    """For st.html(..., unsafe_allow_javascript=True), installed once per page (window.__pxUI):
+    - the X hides the window (body.px-closed) and shows the launcher at the bottom left; the launcher shows the window again;
+    - a short "send" sound when the customer sends a message (Enter in the box, or the send button), made by the browser
+      (Web Audio) - no file. window.__pxSends counts the sounds (for the browser test).
+    Event delegation on the document: Streamlit can redraw the header and the box, the listeners stay.
+    No "<" followed by a letter or "/" inside the script: Streamlit's HTML sanitizer drops such a script completely (checked
+    21/10 - the launcher was first written as an "<img ...>" string, and nothing ran)."""
+    return """<script>
+(function () {
+  if (window.__pxUI) return;
+  window.__pxUI = true;
+  var doc = document, audio = null;
+  function launcher() {
+    var b = doc.querySelector('.px-launcher');
+    if (!b) {
+      b = doc.createElement('button');
+      b.type = 'button'; b.className = 'px-launcher';
+      b.setAttribute('aria-label', 'פתיחת הבוט'); b.title = 'פתיחת הבוט';
+      var img = doc.createElement('img');
+      img.src = 'LAUNCHER'; img.alt = 'עוזר אישי';
+      b.appendChild(img);
+      doc.body.appendChild(b);
+    }
+    return b;
+  }
+  function pop() {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+      var t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(520, t);
+      o.frequency.exponentialRampToValueAtTime(1050, t + 0.12);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      o.connect(g); g.connect(audio.destination);
+      o.start(t); o.stop(t + 0.22);
+    } catch (e) {}
+    window.__pxSends = (window.__pxSends || 0) + 1;
+  }
+  function box() { return doc.querySelector('textarea[data-testid="stChatInputTextArea"]'); }
+  doc.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('.px-close')) { e.preventDefault(); launcher(); doc.body.classList.add('px-closed'); return; }
+    if (t.closest('.px-launcher')) { doc.body.classList.remove('px-closed'); return; }
+    var send = t.closest('[data-testid="stChatInputSubmitButton"]');
+    if (send && !send.disabled && box() && box().value.trim()) pop();
+  }, true);
+  doc.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && t && t.matches &&
+        t.matches('textarea[data-testid="stChatInputTextArea"]') && t.value.trim()) pop();
+  }, true);
+})();
+</script>""".replace("LAUNCHER", LAUNCHER_URL)
 
 
 def hero_html() -> str:

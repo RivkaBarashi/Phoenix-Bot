@@ -142,7 +142,7 @@ def test_design_keeps_every_feature_and_hides_only_technical_details(app):
     assert "נבדק מול 3 עמודים באתר · 1.0 שניות" in html_text            # והשורה "נבדק מול N עמודים"
     assert "המקור: <a href=" in html_text and not at.expander           # שורת המקור בבועה; בלי "פרטים טכניים" ללקוחה
     assert "אני עונה רק לפי המידע שבאתר" not in html_text              # טקסט הפתיחה רק בהתחלה: אחריו - כמו בתמונה
-    for forbidden in ("שיחה חדשה", "פרטים טכניים", "Powered by", "Privacy", "By chatting"):
+    for forbidden in ("פרטים טכניים", "Powered by", "Privacy", "By chatting"):
         assert forbidden not in html_text
     assert "rerank" not in html_text.lower() and "cohere" not in html_text.lower()
 
@@ -166,3 +166,39 @@ def test_developer_mode_shows_what_this_server_loaded(app, dev):
         assert len(lines) == 1 and "קטעים" in lines[0] and "מפתחות Gemini:" in lines[0] and "AIza" not in lines[0]
         from phoenix import answer_cache
         assert f"קוד {answer_cache.code_version()}" in lines[0] and f"אינדקס {answer_cache.index_version()}" in lines[0]
+
+
+@pytest.mark.parametrize("dev", [False, True])
+def test_header_new_chat_link_and_a_close_button_that_only_closes(app, dev):
+    """בקשת הבעלים (21/10): ✕ סוגר את החלון (כפתור, בלי ניווט - השיחה נשארת), "שיחה חדשה" לידו - קישור למזהה שיחה חדש
+    (מצב מפתחת נשמר). הסקריפט של הסגירה, האייקון וצליל השליחה - בעמוד פעם אחת."""
+    import re
+    at = app(regular, dev=dev)
+    html_text = page_html(at)
+    assert not at.exception
+    assert re.search(r'<button class="px-close" type="button"', html_text) and 'href' not in html_text.split('class="px-close"')[1][:40]
+    link = re.search(r'<a class="px-new" href="([^"]+)" target="_self">שיחה חדשה</a>', html_text)
+    import html as html_lib
+    href = html_lib.unescape(link.group(1)) if link else ""  # "&amp;" ב-HTML - "&" בדפדפן
+    assert re.search(r"[?&]c=[0-9a-f]{12}(?![0-9a-f])", href) and (("dev=1" in href) == dev)
+    assert href.split("c=")[1][:12] != at.session_state["session_id"]  # מזהה אחר - שיחה חדשה
+    scripts = [h.proto.body for h in at.html]
+    assert len(scripts) == 1 and "__pxUI" in scripts[0] and "app/static/launcher.png" in scripts[0]
+
+
+def test_the_launcher_icon_is_served_as_the_owner_sent_it():
+    from PIL import Image
+    root = Path(APP).parent
+    icon, original = Image.open(root / "static" / "launcher.png"), Image.open(root / "design-references" / "launcher-icon.png")
+    assert icon.size == (192, 192) and icon.mode == "RGBA" and original.size == (1024, 1024)
+    assert icon.getpixel((2, 2))[3] == 0 and icon.getpixel((96, 96))[3] == 255  # רקע שקוף מחוץ לעיגול, כמו המקור
+
+
+
+def test_the_script_has_no_tag_like_text_that_the_sanitizer_drops():
+    """Streamlit מוחק סקריפט שיש בו "<" ואחריו אות או "/" (נבדק 21/10): הסקריפט לא היה רץ בכלל."""
+    import re
+    from phoenix import chat_design
+    body = chat_design.script_html()
+    assert body.startswith("<script>") and body.endswith("</script>")
+    assert not re.search(r"<[/A-Za-z!]", body[len("<script>"):-len("</script>")])

@@ -390,8 +390,8 @@ def new_chat():
     st.query_params["c"] = st.session_state.session_id
 
 
-def close_href() -> str:
-    """הסימן ✕ בפס העליון: שיחה חדשה - אותה כתובת עם מזהה שיחה חדש (מצב מפתחת נשמר)."""
+def new_chat_href() -> str:
+    """"שיחה חדשה" בפס העליון: אותה כתובת עם מזהה שיחה חדש (מצב מפתחת נשמר). הסימן ✕ רק סוגר את החלון (script_html)."""
     params = {k: v for k, v in st.query_params.items() if k in ("dev", "legacy")}
     return "?" + urlencode(params | {"c": uuid.uuid4().hex[:12]})
 
@@ -399,12 +399,13 @@ def close_href() -> str:
 def main():
     st.set_page_config(page_title="הבוט של אתר הפניקס", page_icon="💬", layout="centered")
     st.markdown(design.css(), unsafe_allow_html=True)
+    st.html(design.script_html(), unsafe_allow_javascript=True)  # ✕ סוגר ופותח מהאייקון, וצליל שליחה - בדפדפן
     if "session_id" not in st.session_state:  # כניסה ראשונה או רענון: המזהה מהכתובת, והשיחה - מ-Upstash
         st.session_state.session_id = conversation_id()  # מזהה אנונימי של השיחה - ליומן ולשמירה
         st.session_state.messages = restore_conversation(st.session_state.session_id)
     st.session_state.setdefault("messages", [])
 
-    st.markdown(design.header_html(close_href()), unsafe_allow_html=True)
+    st.markdown(design.header_html(new_chat_href()), unsafe_allow_html=True)
     if TEST_PROVIDERS:
         st.caption(f"מצב בדיקות ממשק - מודלים: {', '.join(TEST_PROVIDERS)}")
 
