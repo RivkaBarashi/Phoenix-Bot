@@ -39,6 +39,13 @@ OVERLOAD_REST = 300  # עומס: המודל מדולג 5 דקות בלבד (בכ
 # ל-5 דקות (ונעצרת אחרי 3 כישלונות) בגלל 503 אחד.
 OVERLOAD_MEMORY = True
 PATIENT_OVERLOAD_REST = 30
+# עומס שחוזר מהר (503 "high demand", תקלת רשת) הוא עומס על הבקשה הבודדת, לא על המודל: נבדק 21/10 בלילה - 503 של 3.6
+# ב-13 מתוך 31 שאלות, ובכל ה-13 אותו מודל ענה במפתח הבא. לכן: רק הצירוף מפתח+מודל נח FAST_OVERLOAD_REST שניות, ואותו
+# מודל ממשיך מיד במפתח הבא. FAST_OVERLOAD_LIMIT תשובות כאלה ברצף באותה בקשה - עומס על המודל: הוא נח בכל המפתחות
+# FAST_OVERLOAD_GROUP_REST שניות. עומס איטי (timeout, 504 אחרי 15-20 שניות) - כמו קודם: המודל נח OVERLOAD_REST בכל המפתחות.
+FAST_OVERLOAD_REST = 60
+FAST_OVERLOAD_LIMIT = 4
+FAST_OVERLOAD_GROUP_REST = 60
 COOLDOWN_SECONDS = {
     RATE_LIMIT: 60,
     QUOTA: 3600,
@@ -155,6 +162,13 @@ def classify(exc: Exception) -> str:
     return ERROR
 
 
+def fast_overload(exc: Exception) -> bool:
+    """עומס שחוזר מהר (503, 500, תקלת רשת) - לא timeout ולא 504/DEADLINE_EXCEEDED, שמגיעים רק אחרי המתנה ארוכה."""
+    if isinstance(exc, TimeoutError):
+        return False
+    return _status_code(exc) != 504 and "DEADLINE" not in _error_text(exc).upper()
+
+
 def retry_after(exc: Exception) -> float | None:
     if isinstance(exc, httpx.HTTPStatusError):
         try:
@@ -197,6 +211,7 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
     """מחזיר (תוצאה, שם הספק שהצליח). זורק AllProvidersFailed אם כולם נכשלו.
     deadline: מגבלת זמן לכל ניסיון אצל ספק (בשניות). ספק שלא עונה בזמן - עוברים לבא."""
     errors = []
+    fast_overloads: collections.Counter = collections.Counter()  # עומס מהיר לכל מודל, בבקשה הזו
     for p in providers:
         if not p.enabled:
             continue
@@ -241,6 +256,12 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     # מפתח לא תקין: המפתח נח בכל המודלים. עומס: המודל נח 5 דקות בכל המפתחות.
                     target = (p.key if kind == AUTH and p.key else p.group if overload and OVERLOAD_MEMORY and p.group
                               else p.name)
+                    if overload and OVERLOAD_MEMORY and p.group and fast_overload(exc):
+                        fast_overloads[p.group] += 1
+                        if fast_overloads[p.group] < FAST_OVERLOAD_LIMIT:
+                            target, rest = p.name, FAST_OVERLOAD_REST  # אותו מודל - מיד במפתח הבא
+                        else:
+                            rest = FAST_OVERLOAD_GROUP_REST  # עומס על המודל: נח בכל המפתחות
                     _resting_until[target] = time.time() + rest
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])

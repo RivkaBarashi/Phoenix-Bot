@@ -416,14 +416,45 @@ def test_invalid_key_found_by_embeddings_is_skipped_by_the_chat_too(monkeypatch)
 
 # ---------------------------------------------------------------- עומס: 5 דקות, ומעבר מיד למודל הבא
 
-def test_overload_rests_the_model_five_minutes_on_all_keys(monkeypatch):
+def test_a_fast_503_moves_at_once_to_the_next_key_of_the_same_model(monkeypatch):
+    """503 (עומס על הבקשה הבודדת, נבדק 21/10): בלי המתנה ובלי ניסיון חוזר באותו מפתח - אותו מודל, המפתח הבא.
+    רק המפתח הזה נח דקה; המודל לא נח."""
     monkeypatch.setattr(fallback, "_resting_until", {})
     called = []
     providers = chain_providers({"m1#1": FakeApiError(503, "The model is overloaded. Please try again later.")}, called)
-    assert fallback.run_chain("test", providers, retries=1, max_wait=10)[1] == "t:m2#1"
-    assert called == ["m1#1", "m2#1"]       # בלי ניסיון חוזר ובלי המתנה, ובלי m1 במפתח 2: עוברים למודל הבא
+    assert fallback.run_chain("test", providers, retries=1, max_wait=10)[1] == "t:m1#2"
+    assert called == ["m1#1", "m1#2"]
     rest = fallback.resting()
-    assert 290 < rest["t:m1"] <= 300         # המודל נח 5 דקות - לא עד איפוס המכסה
+    assert 50 < rest["t:m1#1"] <= 60 and "t:m1" not in rest
+
+
+def test_four_fast_503s_in_a_row_rest_the_model_on_all_keys(monkeypatch):
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    called = []
+    busy = FakeApiError(503, "This model is currently experiencing high demand.")
+
+    def make(name, error=None):
+        def call(*args):
+            called.append(name)
+            if error:
+                raise error
+            return name
+        return call
+    providers = ([fallback.Provider(f"t:m1#{k}", make(f"m1#{k}", busy), group="t:m1", key=f"t#{k}") for k in range(1, 6)]
+                 + [fallback.Provider("t:m2#1", make("m2#1"), group="t:m2", key="t#1")])
+    assert fallback.run_chain("test", providers, retries=0)[1] == "t:m2#1"
+    assert called == ["m1#1", "m1#2", "m1#3", "m1#4", "m2#1"]  # המפתח החמישי לא נוסה: המודל עמוס
+    assert 50 < fallback.resting()["t:m1"] <= 60
+
+
+def test_a_504_rests_the_model_five_minutes_on_all_keys(monkeypatch):
+    """עומס איטי (504 אחרי 15-20 שניות): כמו קודם - המודל נח 5 דקות בכל המפתחות, ועוברים מיד למודל הבא."""
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    called = []
+    providers = chain_providers({"m1#1": FakeApiError(504, "504 DEADLINE_EXCEEDED. Deadline expired.")}, called)
+    assert fallback.run_chain("test", providers, retries=1, max_wait=10)[1] == "t:m2#1"
+    assert called == ["m1#1", "m2#1"]
+    assert 290 < fallback.resting()["t:m1"] <= 300
     called.clear()
     fallback.run_chain("test", providers, retries=0)
     assert called == ["m2#1"]               # ב-5 הדקות הבאות - המודל מדולג בכל המפתחות
@@ -461,8 +492,12 @@ def test_eval_scripts_retry_overload_on_the_same_model(monkeypatch):
     assert 25 < rest["t:m1#1"] <= 30 and "t:m1" not in rest
 
 
-def test_llm_chat_keeps_model_and_key_groups(monkeypatch):
-    """דרך llm.chat (לא רק run_chain): עומס במודל 1 - המודל מדולג בכל המפתחות."""
+@pytest.mark.parametrize("error, expected, tried", [
+    (FakeApiError(503, "overloaded"), "gemini:m1#2", ["m1#1", "m1#2"]),          # עומס מהיר: אותו מודל, המפתח הבא
+    (FakeApiError(504, "DEADLINE_EXCEEDED"), "gemini:m2#1", ["m1#1", "m2#1"]),   # עומס איטי: המודל מדולג בכל המפתחות
+])
+def test_llm_chat_keeps_model_and_key_groups(monkeypatch, error, expected, tried):
+    """דרך llm.chat (לא רק run_chain): הקבוצות של מודל ומפתח נשמרות."""
     monkeypatch.setattr(fallback, "_resting_until", {})
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
     called = []
@@ -475,13 +510,12 @@ def test_llm_chat_keeps_model_and_key_groups(monkeypatch):
             return '{"ok": true}'
         return call
 
-    fake = [fallback.Provider("gemini:m1#1", make("m1#1", FakeApiError(503, "overloaded")), group="gemini:m1",
-                              key="gemini#1"),
+    fake = [fallback.Provider("gemini:m1#1", make("m1#1", error), group="gemini:m1", key="gemini#1"),
             fallback.Provider("gemini:m1#2", make("m1#2"), group="gemini:m1", key="gemini#2"),
             fallback.Provider("gemini:m2#1", make("m2#1"), group="gemini:m2", key="gemini#1")]
     monkeypatch.setattr(llm, "PROVIDERS", fake)
-    assert REAL_CHAT([{"role": "user", "content": "x"}]).provider == "gemini:m2#1"
-    assert called == ["m1#1", "m2#1"]  # m1 במפתח 2 לא נוסה: עומס הוא של המודל
+    assert REAL_CHAT([{"role": "user", "content": "x"}]).provider == expected
+    assert called == tried
 
 
 # ---------------------------------------------------------------- בקשות במקביל בצ'אט (מודל מזויף, בלי API)
@@ -1035,6 +1069,20 @@ def test_race_pair_prefers_the_configured_models_and_fills_in(monkeypatch):
     monkeypatch.setitem(fallback._resting_until, "gemini:gemini-3.8-flash", time.time() + 60)
     pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
     assert pair[0][0].startswith("gemini:gemini-3.6-flash#") and pair[1][0].startswith("gemini:gemini-3.7-flash#")
+
+
+def test_race_pair_with_one_model_left_sends_it_on_two_keys(monkeypatch):
+    """3.7 ו-3.8 נחים (עומס): אותה שאלה ל-3.6 בשני מפתחות שונים במקביל. מפתח אחד בלבד - בלי מירוץ."""
+    fake_providers(monkeypatch)
+    for model in ("gemini-3.7-flash", "gemini-3.8-flash"):
+        monkeypatch.setitem(fallback._resting_until, f"gemini:{model}", time.time() + 60)
+    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
+    assert len(pair) == 2 and all(names[0].startswith("gemini:gemini-3.6-flash#") for names in pair)
+    assert pair[0][0] != pair[1][0] and sorted(pair[0]) == sorted(pair[1])
+    keys = [p for p in llm.PROVIDERS if p.group == "gemini:gemini-3.6-flash"]
+    for p in keys[1:]:
+        monkeypatch.setitem(fallback._resting_until, p.name, time.time() + 60)
+    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == []
 
 
 @pytest.mark.parametrize("asked, standalone, same", [

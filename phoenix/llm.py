@@ -228,12 +228,16 @@ def remember(messages: list[dict], system: str, temperature: float, json_mode: b
 
 def race_pair(models: list[str] | None = None, service: str = "gemini") -> list[list[str]]:
     """שני מודלים שונים שאליהם נשלחת אותה שאלה במקביל: לכל אחד - כל המפתחות שלו לפי הסדר, ובמודל השני
-    מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". פחות משני מודלים זמינים - רשימה ריקה.
+    מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". רק מודל אחד זמין (השאר נחים בגלל עומס) - אותו
+    מודל בשני מפתחות שונים במקביל, כך ש-503 בודד או תשובה איטית במפתח אחד לא מעכבים. אין אף מפתח פנוי שני - רשימה ריקה.
     models: המודלים המועדפים, לפי הסדר (config.RACE_LLMS); מודל מהם לא זמין - הבא בתור מהשרשרת."""
     groups: dict[str, list[Provider]] = {}
     for p in PROVIDERS:
         if p.name.startswith(service + ":") and p.enabled and not is_resting(p):
             groups.setdefault(p.group or p.name, []).append(p)
+    if len(groups) == 1:
+        keys = next(iter(groups.values()))
+        return [[p.name for p in keys], [p.name for p in keys[1:] + keys[:1]]] if len(keys) > 1 else []
     if len(groups) < 2:
         return []
     preferred = [g for g in (f"{service}:{m}" for m in models or []) if g in groups]
