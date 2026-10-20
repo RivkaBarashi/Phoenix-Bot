@@ -141,9 +141,11 @@ def understand(question: str, history: list[dict] = (), models: list[str] | None
     והקוד עובר לכללים (שנבדקו על כל קובץ השאלות), ולא למודל גיבוי חלש: איכות לפני מהירות.
     models: רק המודלים האלה (בקשת הגיבוי בצ'אט - _hedged)."""
     names = [p.name for name in models or config.UNDERSTAND_LLMS for p in llm.PROVIDERS if p.group == f"gemini:{name}"]
+    hedge = models == [config.UNDERSTAND_HEDGE]  # בקשת הגיבוי בצ'אט (3.6) - הגדרת חשיבה משלה
+    low = config.UNDERSTAND_HEDGE_LOW_THINKING if hedge else config.UNDERSTAND_LOW_THINKING
     reply = llm.chat([{"role": "user", "content": _message(question, list(history))}], system=UNDERSTAND_PROMPT,
                      temperature=0, json_mode=True, parse=parse_understanding, names=names,
-                     low_thinking=not config.LEGACY.get())  # מדידת "לפני" - חשיבה רגילה, כמו לפני סעיף 6ג
+                     low_thinking=low and not config.LEGACY.get())  # מדידת "לפני" - חשיבה רגילה, כמו לפני סעיף 6ג
     return Understanding(**reply.data, source="model", llm=reply.provider)
 
 
