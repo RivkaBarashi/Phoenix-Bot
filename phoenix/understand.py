@@ -9,12 +9,16 @@
 האימות אחרי התשובה (ציטוט, מספרים, דליפה) - הקוד ממשיך לאמת כל תשובה. אם הקריאה נכשלת (אין מודל, JSON לא
 תקין) - הכללים הישנים בקוד, כגיבוי (rules_fallback).
 """
+import contextvars
 import json
 import logging
+import queue
+import threading
+import time
 from dataclasses import dataclass, field
 
 from . import config, llm
-from .fallback import AllProvidersFailed, time_budget, time_left
+from .fallback import AllProvidersFailed, OutOfTime, time_budget, time_left
 
 log = logging.getLogger("phoenix")
 
@@ -132,14 +136,56 @@ def _message(question: str, history: list[dict]) -> str:
     return (f"השיחה עד עכשיו:\n{convo}\n\n" if convo else "") + f"ההודעה האחרונה של הלקוח:\n{question}"
 
 
-def understand(question: str, history: list[dict] = ()) -> Understanding:
+def understand(question: str, history: list[dict] = (), models: list[str] | None = None) -> Understanding:
     """הבנת השאלה - רק במודלים החזקים (config.UNDERSTAND_LLMS לפי הסדר, בכל המפתחות). כולם לא זמינים - חריגה,
-    והקוד עובר לכללים (שנבדקו על כל קובץ השאלות), ולא למודל גיבוי חלש: איכות לפני מהירות."""
-    names = [p.name for name in config.UNDERSTAND_LLMS for p in llm.PROVIDERS if p.group == f"gemini:{name}"]
+    והקוד עובר לכללים (שנבדקו על כל קובץ השאלות), ולא למודל גיבוי חלש: איכות לפני מהירות.
+    models: רק המודלים האלה (בקשת הגיבוי בצ'אט - _hedged)."""
+    names = [p.name for name in models or config.UNDERSTAND_LLMS for p in llm.PROVIDERS if p.group == f"gemini:{name}"]
     reply = llm.chat([{"role": "user", "content": _message(question, list(history))}], system=UNDERSTAND_PROMPT,
                      temperature=0, json_mode=True, parse=parse_understanding, names=names,
                      low_thinking=not config.LEGACY.get())  # מדידת "לפני" - חשיבה רגילה, כמו לפני סעיף 6ג
     return Understanding(**reply.data, source="model", llm=reply.provider)
+
+
+def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
+    """בצ'אט: המודלים החזקים (UNDERSTAND_LLMS בלי מודל הגיבוי) קודם. אין תשובה תוך UNDERSTAND_HEDGE_AFTER שניות,
+    או שהם נכשלו מהר - אותה בקשה גם למודל הגיבוי (3.6), והתשובה התקינה הראשונה קובעת. בדרך כלל 3.8 עונה תוך
+    ~2.6 שניות, ואין בקשה שנייה; בעומס - הבנה אמיתית תוך ~6 שניות, במקום 8 שניות המתנה וכללי הקוד."""
+    first = [m for m in config.UNDERSTAND_LLMS if m != config.UNDERSTAND_HEDGE]
+    results: queue.Queue = queue.Queue()
+
+    def worker(models):
+        try:
+            results.put((understand(question, history, models), None))
+        except Exception as exc:  # noqa: BLE001 - כשל בצד אחד לא מפיל את השני
+            results.put((None, exc))
+
+    def start(models):  # עם הזמן של השאלה (contextvars לא עוברים ל-thread חדש לבד)
+        threading.Thread(target=contextvars.copy_context().run, args=(worker, models), daemon=True).start()
+
+    with time_budget(limit):
+        start(first)
+        running, hedged, errors = 1, False, []
+        hedge_at = time.perf_counter() + config.UNDERSTAND_HEDGE_AFTER
+        while running:
+            left = time_left() or 0.0
+            wait = left if hedged else min(left, max(hedge_at - time.perf_counter(), 0.0))
+            try:
+                got, exc = results.get(timeout=max(wait, 0.01))
+            except queue.Empty:
+                if not hedged and (time_left() or 0) > 0.5:  # החזק לא ענה בזמן - גם מודל הגיבוי
+                    start([config.UNDERSTAND_HEDGE])
+                    running, hedged = running + 1, True
+                    continue
+                raise OutOfTime("understand", errors + ["no understanding in time"]) from None
+            running -= 1
+            if got:
+                return got
+            errors.append(str(exc)[:150])
+            if not hedged:  # החזק נכשל מהר (למשל 503) - הגיבוי מיד, בלי לחכות
+                start([config.UNDERSTAND_HEDGE])
+                running, hedged = running + 1, True
+    raise AllProvidersFailed("understand", errors)
 
 
 def try_understand(question: str, history: list[dict] = ()) -> Understanding | None:
@@ -151,6 +197,8 @@ def try_understand(question: str, history: list[dict] = ()) -> Understanding | N
     try:
         if limit is None:
             return understand(question, history)
+        if config.UNDERSTAND_HEDGE and not config.LEGACY.get():  # מדידת "לפני" - בלי בקשת הגיבוי
+            return _hedged(question, history, limit)
         with time_budget(limit):
             return understand(question, history)
     except AllProvidersFailed as exc:  # כולל OutOfTime

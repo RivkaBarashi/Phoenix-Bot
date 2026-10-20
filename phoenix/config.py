@@ -81,6 +81,11 @@ LLM_CHAIN = [
 # שלב הבנת השאלה (understand.py): המודל הכי איכותי שיש לנו קודם (Pro לא זמין בחינמי), ואחריו השרשרת הרגילה
 UNDERSTAND_TIMEOUT: float | None = float(os.getenv("UNDERSTAND_TIMEOUT", "8"))  # בצ'אט; הבדיקות - בלי מגבלה
 UNDERSTAND_LLMS = [m.strip() for m in os.getenv("UNDERSTAND_LLMS", "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash").split(",")]
+# בצ'אט - בקשת גיבוי להבנה: המודלים החזקים קודם; אין תשובה תוך UNDERSTAND_HEDGE_AFTER שניות (או כשל מהיר) - אותה
+# בקשה גם ל-UNDERSTAND_HEDGE, והתשובה התקינה הראשונה קובעת. נבדק 20/10 בעומס אצל Google: 3.8 ו-3.7 - 504 אחרי 30
+# שניות, 3.6 - 2.7 שניות. בלי הגיבוי כל שאלה חיכתה 8 שניות ועברה לכללי הקוד. ריק - בלי גיבוי.
+UNDERSTAND_HEDGE = os.getenv("UNDERSTAND_HEDGE", "gemini-3.6-flash").strip()
+UNDERSTAND_HEDGE_AFTER = float(os.getenv("UNDERSTAND_HEDGE_AFTER", "3"))
 
 # אמבדינגים: לכל ספק אינדקס משלו (וקטורים של מודלים שונים לא ניתנים להשוואה).
 EMBED_CHAIN = [

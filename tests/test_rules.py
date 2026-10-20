@@ -1254,3 +1254,52 @@ def test_browser_smoke_asks_the_same_questions_as_smoke_test():
     e2e = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(e2e)
     assert e2e.SMOKE == smoke_test.CASES and e2e.LIMIT_SECONDS == A.config.QUESTION_TIMEOUT
+
+
+# ---------------------------------------------------------------- הבנה בצ'אט: בקשת גיבוי ל-3.6 כשהחזק לא עונה
+def hedge_world(monkeypatch, plan: dict):
+    """plan: המודל הראשון בקבוצה -> (השהיה, תוצאה או חריגה). מחזיר את רשימת הקבוצות שנשאלו."""
+    from phoenix import config, understand
+    from phoenix.understand import Understanding
+    monkeypatch.setattr(config, "UNDERSTAND_HEDGE_AFTER", 0.3)
+    monkeypatch.setattr(config, "UNDERSTAND_TIMEOUT", 8.0)  # כמו בצ'אט (בדיקה אחרת יכולה להפעיל את config.patient)
+    asked = []
+
+    def fake(question, history=(), models=None):
+        asked.append(models[0])
+        delay, result = plan[models[0]]
+        time.sleep(delay)
+        if isinstance(result, Exception):
+            raise result
+        return Understanding(question, "info", llm=result)
+    monkeypatch.setattr(understand, "understand", fake)
+    return asked
+
+
+def test_understanding_from_the_strong_model_when_it_answers_in_time(monkeypatch):
+    from phoenix import understand
+    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, "3.8"), "gemini-3.6-flash": (0.0, "3.6")})
+    assert understand.try_understand("שאלה").llm == "3.8" and asked == ["gemini-3.8-flash"]  # בלי בקשה שנייה
+
+
+def test_understanding_hedges_to_3_6_when_the_strong_model_hangs(monkeypatch):
+    from phoenix import understand
+    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (5.0, "3.8"), "gemini-3.6-flash": (0.1, "3.6")})
+    start = time.perf_counter()
+    assert understand.try_understand("שאלה").llm == "3.6" and asked == ["gemini-3.8-flash", "gemini-3.6-flash"]
+    assert time.perf_counter() - start < 1.5  # לא מחכים ל-3.8 התקוע
+
+
+def test_understanding_hedges_at_once_when_the_strong_model_fails(monkeypatch):
+    from phoenix import understand
+    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, fallback.AllProvidersFailed("llm", ["503"])),
+                                      "gemini-3.6-flash": (0.0, "3.6")})
+    start = time.perf_counter()
+    assert understand.try_understand("שאלה").llm == "3.6" and time.perf_counter() - start < 0.25
+
+
+def test_understanding_falls_back_to_the_rules_when_both_fail(monkeypatch):
+    from phoenix import understand
+    down = fallback.AllProvidersFailed("llm", ["down"])
+    hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, down), "gemini-3.6-flash": (0.0, down)})
+    assert understand.try_understand("שאלה") is None
