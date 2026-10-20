@@ -314,7 +314,8 @@ def save_conversation(cid: str, messages: list[dict]):
 def loaded_line(loaded: dict) -> str:
     """"נטען: 1,302 קטעים · וקטורים gemini 1,302 · מפתחות Gemini 1-20" - השורה של מצב מפתחת מעל השיחה."""
     keys = sorted({int(name.rsplit("#", 1)[1]) for name in loaded["llms"] if name.startswith("gemini:") and "#" in name})
-    vectors = " · ".join(f"וקטורים {name.split(':')[0]} {count:,}" for name, count in loaded["vectors"].items() if count)
+    by_index = {name.split(":")[0]: count for name, count in loaded["vectors"].items() if count}  # מפתח לכל ספק - אינדקס אחד
+    vectors = " · ".join(f"וקטורים {name} {count:,}" for name, count in by_index.items())
     return f"נטען: {loaded['chunks']:,} קטעים · {vectors} · מפתחות Gemini: {', '.join(map(str, keys)) or '-'}"
 
 
