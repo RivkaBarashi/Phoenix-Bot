@@ -1345,19 +1345,59 @@ def test_both_personal_for_an_info_question_gets_one_repair(monkeypatch):
     assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "personal_but_general") and "repair" in a.timings
 
 
-def test_both_personal_and_the_repair_is_personal_too_shows_the_personal_message(monkeypatch):
-    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.0, PERSONAL_REPLY),
+PERSONAL_NO_EVIDENCE = {"kind": "personal", "answer": "אין לי גישה למידע האישי שלכם.", "referral": "", "evidence": [],
+                        "sources": []}
+QUESTION_4 = "אני עוברת דירה בשבוע הבא. ביטוח התכולה מכסה את הרהיטים בזמן ההובלה?"
+
+
+def test_both_personal_and_the_repair_is_personal_with_a_verified_quote_is_a_regular_answer(monkeypatch):
+    """ההבנה אמרה info וההחלטה שלה קובעת: גם "אישי" של המודל אחרי הבקשה המפורשת נבדק כתשובה רגילה. ציטוט מאומת - מוצג."""
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_NO_EVIDENCE), "gemini:b#2": (0.0, PERSONAL_NO_EVIDENCE),
                             "chain": (0.0, PERSONAL_REPLY)})
     with fallback.time_budget(20):
-        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=with_intent("info"))
-    assert a.kind == "personal" and not a.repaired
+        a = A.respond(QUESTION_4, RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "personal_but_general")
+
+
+def test_both_personal_and_the_repair_is_still_unverified_shows_unverified_not_personal(monkeypatch):
+    """גם כשהמודל עדיין אומר "אישי" בלי ציטוט: לא ההודעה האישית אלא "מצאתי מידע קרוב ולא הצלחתי לאמת"."""
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_NO_EVIDENCE), "gemini:b#2": (0.0, PERSONAL_NO_EVIDENCE),
+                            "chain": (0.0, PERSONAL_NO_EVIDENCE)})
+    with fallback.time_budget(20):
+        a = A.respond(QUESTION_4, RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert a.kind == "unverified" and a.text.startswith(A.UNVERIFIED_TEXT) and "repair" in a.timings
+
+
+def test_question_4_info_but_the_model_says_personal_gets_one_explicit_request(monkeypatch):
+    """שאלה 4 (20/10): ההבנה info, 3.6 ענה "אישי". בקשה אחת עם ההנחיה שזו שאלת מידע, ומה שחוזר מוצג כתשובה."""
+    asked = []
+
+    def chat(messages, names=None, **kwargs):
+        asked.append(messages[-1]["content"])
+        data = PERSONAL_NO_EVIDENCE if len(messages) == 1 else VALID
+        return llm.ChatResult(json.dumps(data, ensure_ascii=False), "gemini:a#1", data)
+    monkeypatch.setattr(llm, "chat", chat)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: [])  # בלי מירוץ
+    with fallback.time_budget(20):
+        a = A.respond(QUESTION_4, RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert (a.kind, a.repaired) == ("answer", "personal_but_general")
+    assert len(asked) == 2 and asked[-1] == A.GENERAL_NOTE and "שאלה כללית" in A.GENERAL_NOTE
+
+
+def test_info_without_time_for_a_request_checks_the_models_own_reply_as_a_regular_answer(monkeypatch):
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.0, PERSONAL_REPLY)})
+    with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
+        a = A.respond(QUESTION_4, RACE_HIT, parallel=True, understanding=with_intent("info"))
+    assert (a.kind, a.repaired) == ("answer", "personal_but_general") and "repair" not in a.timings
 
 
 def test_no_repair_when_too_little_time_is_left(monkeypatch):
-    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_REPLY), "gemini:b#2": (0.0, PERSONAL_REPLY),
+    """בלי ציטוט ובלי זמן לבקשה: ההודעה האישית (אין מה להציג כתשובה)."""
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, PERSONAL_NO_EVIDENCE), "gemini:b#2": (0.0, PERSONAL_NO_EVIDENCE),
                             "chain": (0.0, VALID)})
     with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
-        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=with_intent("info"))
+        a = A.respond(QUESTION_4, RACE_HIT, parallel=True, understanding=with_intent("info"))
     assert a.kind == "personal" and "repair" not in a.timings
 
 

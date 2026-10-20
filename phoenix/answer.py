@@ -722,9 +722,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             return terms_not_on_site(understanding.key_term) if understanding.key_term else []
         return own_terms_not_on_site(standalone, question, history)
 
-    def finish(reply: llm.ChatResult) -> Answer:
+    def finish(reply: llm.ChatResult, as_info: bool = False) -> Answer:
         """הבדיקות על תשובת מודל (ציטוט, מספרים, מילים באתר, דליפה) -> מה שמוצג. בבקשות במקביל - לכל
-        אחת מהתשובות בנפרד."""
+        אחת מהתשובות בנפרד. as_info: שלב ההבנה קבע שזו שאלת מידע - "אישי" של המודל נבדק כתשובה רגילה."""
         data, extra = reply.data, dict(llm=reply.provider + (" (cache)" if reply.cached else ""), raw=reply.data)
         texts = [h.text for h in hits] + [contact_text()]
         cited = _cited(data.get("sources"), hits)
@@ -737,6 +737,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         kind = data["kind"]
         if personal:
             kind = "personal"  # שאלה על הכיסוי/היתרה של הלקוח - תמיד תשובה אישית, לא answer ולא "לא מופיע באתר"
+        elif as_info and kind == "personal":
+            kind = "answer"  # ההבנה קבעה info וההחלטה שלה קובעת: אותן בדיקות בדיוק, בלי הקלות
 
         if kind == "off_topic":
             return Answer(OFF_TOPIC_TEXT, "off_topic", "off_topic", [], **base, **extra)
@@ -818,15 +820,27 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
 
     general = understanding is not None and understanding.intent == "info"
 
+    def own_reply_as_info(outcome: Answer) -> Answer:
+        """אין זמן (או שהבקשה נכשלה): התשובה של המודל עצמה נבדקת כתשובה רגילה. עוברת - מוצגת; אחרת - ההודעה האישית."""
+        again = finish(llm.ChatResult(json.dumps(outcome.raw, ensure_ascii=False), outcome.llm or "", outcome.raw),
+                       as_info=True)
+        if (again.kind, again.reason) == ("answer", "verified"):
+            again.repaired, again.race = "personal_but_general", outcome.race
+            return again
+        return outcome
+
     def general_question(outcome: Answer) -> Answer:
-        """שלב ההבנה אמר info וכל מודל שענה אמר "אישי": ניסיון תיקון אחד עם GENERAL_NOTE (אם נשארו 6 שניות).
-        עוברת את כל הבדיקות - מוצגת; אחרת - ההודעה האישית, כמו קודם."""
+        """שלב ההבנה אמר info והמודל (או כל המודלים שענו) אמר "אישי": ההחלטה של שלב ההבנה קובעת. בקשה אחת עם הנחיה
+        מפורשת (GENERAL_NOTE, אם נשארו 6 שניות), והתשובה נבדקת כתשובה רגילה. עוברת - מוצגת; המודל אמר "לא מופיע
+        באתר" - זה מוצג; אחרת - "מצאתי מידע קרוב ולא הצלחתי לאמת" (unverified), לא ההודעה האישית."""
         if not (general and outcome.kind == "personal" and outcome.personal_votes == outcome.answered > 0):
             return outcome
         left = time_left()
         min_repair = 5 if config.LEGACY.get() else MIN_REPAIR_SECONDS
-        if outcome.raw is None or (left is not None and left < min_repair):
+        if outcome.raw is None:
             return outcome
+        if left is not None and left < min_repair:
+            return own_reply_as_info(outcome)
         if on_stage:
             on_stage("compose")
         repair_start = time.perf_counter()
@@ -837,16 +851,19 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
                              only=FULL_CONTEXT_LLMS, low_thinking=config.ANSWER_LOW_THINKING)
         except AllProvidersFailed:
-            return outcome
+            return own_reply_as_info(outcome)
         finally:
             timings["repair"] = time.perf_counter() - repair_start
         if on_stage:
             on_stage("verify")
-        again = finish(fixed)
+        again = finish(fixed, as_info=True)
         if (again.kind, again.reason) == ("answer", "verified"):
             again.repaired, again.race = "personal_but_general", outcome.race
             return again
-        return outcome
+        if (again.kind, again.reason) == ("not_on_site", "model_not_found"):  # המודל עצמו: אין תשובה באתר
+            again.repaired = "personal_but_general"
+            return again
+        return unverified(again)
 
     def hold(outcome: Answer) -> bool:
         return general and outcome.kind == "personal"
