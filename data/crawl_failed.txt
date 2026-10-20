@@ -1,35 +1,34 @@
-https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/בקשה-לקצבת-זקנה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/משיכת-כספים-מחשבון-עמית-שנפטר-עם-יתרה-נמוכה-מ-9-624/	gone
-https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/תביעה-במקרה-של-פנסיית-נכות/	gone
-https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/תביעה-במקרה-של-פנסיית-שאירים/	gone
-https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/תביעה-לתשלום-קצבה-לשאירי-פנסיונר/	gone
-https://www.fnx.co.il/claims-customer-service/claims-car-insurance-third-party/תביעה-במקרה-שרכב-שמבוטח-בפניקס-פגע-בי/	gone
-https://www.fnx.co.il/claims-customer-service/claims-car-insurance/claims-vehicle-third-party-property/	gone
-https://www.fnx.co.il/claims-customer-service/claims-car-insurance/בקשה-לאישור-אי-הגשה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-car-insurance/בקשה-למוסך-הסדר-מבוטח-הפניקס/	gone
-https://www.fnx.co.il/claims-customer-service/claims-car-insurance/תביעה-במקרה-של-תאונה-ברכב-פרטי/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/אישור-לניתוח-עתידי/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-הוצאות-רפואיות-שאינן-באשפוז/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-התייעצות-עם-רופא-מומחה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-טיפולי-פיזיותרפיה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-טיפולים-אלטרנטיביים/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-ניתוח/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-תרופה-שאינה-כלולה-בסל-הבריאות/	gone
-https://www.fnx.co.il/claims-customer-service/claims-health-insurance/תביעה-בביטוח-מחלות-קשות/	gone
-https://www.fnx.co.il/claims-customer-service/claims-life-insurance/בקשה-למשיכת-כספים-מפוליסת-מבוטח-שנפטר-עם-יתרה-נמוכה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-life-insurance/תביעה-במקרה-פטירה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-life-insurance/תביעה-במקרה-של-אובדן-כושר-עבודה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-life-insurance/תביעה-במקרה-של-נכות-מתאונה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-supportive-insurance/הגשת-תביעת-ביטוח-סיעודי-דרך-מכבי/	gone
-https://www.fnx.co.il/claims-customer-service/claims-supportive-insurance/הגשת-תביעת-ביטוח-סיעודי-פרטי-בהפניקס/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/בקשה-לפיצוי-במקרה-של-אובדן-או-גניבת-מזוודה-בחול/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/בקשה-לפיצוי-במקרה-של-איחור-מזוודה/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/בקשה-לפיצוי-במקרה-של-ביטול-או-קיצור-נסיעה-בגלל-אירוע-רפואי/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/טיפול-חירום-בשיניים/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/נושאים-אחרים/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/קבלת-החזר-על-הוצאות-רפואיות-בזמן-אשפוז/	gone
-https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/קבלת-החזר-על-הוצאות-רפואיות-לא-בזמן-אשפוז/	gone
-https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-זקנה-לאחר-גיל-פרישה-פנסיה-ותיקה-עמית-יסוד/	gone
-https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-זקנה-לאחר-גיל-פרישה-פנסיה-מקיפה-ומשלימה/	gone
-https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-שאירים-לאחר-פטירת-הפנסיונר-פנסיה-ותיקה-עמית-יסוד/	gone
-https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-שאירים-לאחר-פטירת-הפנסיונר-פנסיה-מקיפה-ומשלימה/	gone
+https://www.fnx.co.il/career/open-positions/open-position/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/בקשה-לקצבת-זקנה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/משיכת-כספים-מחשבון-עמית-שנפטר-עם-יתרה-נמוכה-מ-9-624/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/תביעה-במקרה-של-פנסיית-נכות/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/תביעה-במקרה-של-פנסיית-שאירים/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-all-embracing-pension/תביעה-לתשלום-קצבה-לשאירי-פנסיונר/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-car-insurance-third-party/תביעה-במקרה-שרכב-שמבוטח-בפניקס-פגע-בי/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-car-insurance/בקשה-לאישור-אי-הגשה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-car-insurance/בקשה-למוסך-הסדר-מבוטח-הפניקס/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-car-insurance/תביעה-במקרה-של-תאונה-ברכב-פרטי/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/אישור-לניתוח-עתידי/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-הוצאות-רפואיות-שאינן-באשפוז/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-התייעצות-עם-רופא-מומחה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-טיפולי-פיזיותרפיה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-טיפולים-אלטרנטיביים/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-ניתוח/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/קבלת-החזר-על-תרופה-שאינה-כלולה-בסל-הבריאות/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-health-insurance/תביעה-בביטוח-מחלות-קשות/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-life-insurance/בקשה-למשיכת-כספים-מפוליסת-מבוטח-שנפטר-עם-יתרה-נמוכה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-life-insurance/תביעה-במקרה-פטירה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-life-insurance/תביעה-במקרה-של-אובדן-כושר-עבודה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-supportive-insurance/הגשת-תביעת-ביטוח-סיעודי-פרטי-בהפניקס/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/בקשה-לפיצוי-במקרה-של-אובדן-או-גניבת-מזוודה-בחול/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/בקשה-לפיצוי-במקרה-של-איחור-מזוודה/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/בקשה-לפיצוי-במקרה-של-ביטול-או-קיצור-נסיעה-בגלל-אירוע-רפואי/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/טיפול-חירום-בשיניים/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/נושאים-אחרים/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/קבלת-החזר-על-הוצאות-רפואיות-בזמן-אשפוז/	404	gone
+https://www.fnx.co.il/claims-customer-service/claims-travel-abroad/קבלת-החזר-על-הוצאות-רפואיות-לא-בזמן-אשפוז/	404	gone
+https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-זקנה-לאחר-גיל-פרישה-פנסיה-ותיקה-עמית-יסוד/	404	gone
+https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-זקנה-לאחר-גיל-פרישה-פנסיה-מקיפה-ומשלימה/	404	gone
+https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-שאירים-לאחר-פטירת-הפנסיונר-פנסיה-ותיקה-עמית-יסוד/	404	gone
+https://www.fnx.co.il/claims-customer-service/pension-benefits/בקשה-לקצבת-שאירים-לאחר-פטירת-הפנסיונר-פנסיה-מקיפה-ומשלימה/	404	gone
+https://www.fnx.co.il/travel-insurance/travel_information/advanced-travel-insurance-app/	404	gone

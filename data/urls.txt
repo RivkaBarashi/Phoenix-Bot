@@ -61,6 +61,7 @@ https://www.fnx.co.il/apartment-insurance/apartment-information/rent-insurance/
 https://www.fnx.co.il/apartment-insurance/apartment-information/rent-loss-insurance/
 https://www.fnx.co.il/apartment-insurance/apartment-information/rental-home-insurance/
 https://www.fnx.co.il/apartment-insurance/apartment-information/rental-third-insurance/
+https://www.fnx.co.il/apartment-insurance/apartment-information/repairing-defects-rented-apartment/
 https://www.fnx.co.il/apartment-insurance/apartment-information/safe-house/
 https://www.fnx.co.il/apartment-insurance/apartment-information/six-good-reasons-for-apartment-insurance/
 https://www.fnx.co.il/apartment-insurance/apartment-information/suprising-things-in-your-apartment-insurance/
@@ -1393,9 +1394,6 @@ https://www.fnx.co.il/pension-savings/iec-pension/iec-takanonim/
 https://www.fnx.co.il/pension-savings/iec-pension/iec-zdadim/
 https://www.fnx.co.il/pension-savings/immediate-pension/
 https://www.fnx.co.il/pension-savings/investment-tracks/
-https://www.fnx.co.il/pension-savings/investment-tracks/invest-managers-freelance/
-https://www.fnx.co.il/pension-savings/investment-tracks/investment-tracks-mashlima/
-https://www.fnx.co.il/pension-savings/investment-tracks/investment-tracks-mekifa/
 https://www.fnx.co.il/pension-savings/managers-insurance/
 https://www.fnx.co.il/pension-savings/menalim-direct-expenses-statement/
 https://www.fnx.co.il/pension-savings/pension-savings-information/
