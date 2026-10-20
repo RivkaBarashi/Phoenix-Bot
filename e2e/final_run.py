@@ -2,8 +2,9 @@
 
   1. waits for the owner's approval - the file logs/APPROVE_FINAL_RUN (created when she says "approved"); no file, no run
   2. opens the chat in a real browser (Streamlit first, Render if it does not come up)
-  3. the smoke gate: 5 real questions, 5/5 and p90 of the bot <= 20 s - up to --smoke-attempts attempts, --smoke-gap-min minutes
-     apart, alternating between the two sites; if none passes: BLOCKED (nothing else runs, the holdout is not touched)
+  3. the smoke gate: 5 real questions, 5/5 and p90 of the bot <= 20 s - up to --smoke-attempts attempts, alternating between
+     the two sites, --smoke-gap-min minutes after a failed smoke (a site that does not come up within 4 minutes: the next site
+     right away, no wait); if none passes: BLOCKED (nothing else runs, the holdout is not touched)
   4. the main file, then the holdout, each question in a new chat on the public link (e2e_cloud.py)
   5. the scoring of both, like eval_answers (judge_cloud.py)
 Everything goes to --out-dir: status.txt (one line per step), run.log, *_answers.csv, *_judged.csv, *_summary.txt.
@@ -76,7 +77,8 @@ def main():
     for attempt in range(args.smoke_attempts):
         site = sites[attempt % len(sites)]
         if run("e2e/e2e_cloud.py", "--url", site, "--wake", "--browser", args.browser) != 0:
-            status(f"smoke attempt {attempt + 1}: {site} did not come up")
+            status(f"smoke attempt {attempt + 1}: {site} did not come up - the next site right away")
+            continue  # a site that did not come up is not a smoke failure: no 10-minute wait
         else:
             smoke_csv = ["--smoke-csv", args.smoke_csv] if args.smoke_csv else []
             code = run("e2e/e2e_cloud.py", "--url", site, "--smoke", "--browser", args.browser, *smoke_csv,
