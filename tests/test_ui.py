@@ -164,3 +164,5 @@ def test_developer_mode_shows_what_this_server_loaded(app, dev):
         assert lines == []
     else:
         assert len(lines) == 1 and "קטעים" in lines[0] and "מפתחות Gemini:" in lines[0] and "AIza" not in lines[0]
+        from phoenix import answer_cache
+        assert f"קוד {answer_cache.code_version()}" in lines[0] and f"אינדקס {answer_cache.index_version()}" in lines[0]

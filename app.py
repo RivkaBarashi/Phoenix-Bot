@@ -42,6 +42,7 @@ from urllib.parse import quote, urlencode
 import streamlit as st
 
 from phoenix import answer as bot
+from phoenix import answer_cache
 from phoenix import bm25, config, conversation_log, embeddings, index, llm, store
 from phoenix import chat_design as design
 
@@ -316,7 +317,8 @@ def loaded_line(loaded: dict) -> str:
     keys = sorted({int(name.rsplit("#", 1)[1]) for name in loaded["llms"] if name.startswith("gemini:") and "#" in name})
     by_index = {name.split(":")[0]: count for name, count in loaded["vectors"].items() if count}  # מפתח לכל ספק - אינדקס אחד
     vectors = " · ".join(f"וקטורים {name} {count:,}" for name, count in by_index.items())
-    return f"נטען: {loaded['chunks']:,} קטעים · {vectors} · מפתחות Gemini: {', '.join(map(str, keys)) or '-'}"
+    return (f"נטען: {loaded['chunks']:,} קטעים · {vectors} · מפתחות Gemini: {', '.join(map(str, keys)) or '-'} · "
+            f"קוד {answer_cache.code_version()} · אינדקס {answer_cache.index_version()}")  # טביעות: אותן מקומית ובענן
 
 
 def dev_mode() -> bool:
