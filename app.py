@@ -430,7 +430,7 @@ def main():
     st.markdown(design.hero_html(), unsafe_allow_html=True)
     if not st.session_state.messages and not question:  # בהתחלה: טקסט הפתיחה ודוגמאות לשאלה
         st.markdown(design.bot_html(to_html(WELCOME)), unsafe_allow_html=True)
-        with st.container(horizontal=True, wrap=True, gap="small"):
+        with st.container(horizontal=True, wrap=True, gap="small", key="px_examples"):  # בצד של הלקוחה (ימין)
             for i, example in enumerate(EXAMPLES):
                 st.button(example, key=f"example-{i}", on_click=ask, args=(example,))
     for i, message in enumerate(st.session_state.messages):  # כפתורי סוג ביטוח - רק בהודעה האחרונה שעוד מחכה

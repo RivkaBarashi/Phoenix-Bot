@@ -123,6 +123,8 @@ body.px-closed #root {{ display:none !important; }}  /* all of Streamlit; the la
 .stMainBlockContainer [data-testid="stHorizontalBlock"] {{ width:100%; box-sizing:border-box; padding:0 14px 16px 78px; display:flex;
   justify-content:flex-end; }}
 .stMainBlockContainer [data-testid="stHorizontalBlock"] {{ flex-wrap:wrap; gap:8px; }}
+/* the example questions (before the first question): on the customer's side - the right, like her bubbles */
+.stMainBlockContainer .st-key-px_examples {{ justify-content:flex-start !important; padding:0 14px 16px 78px !important; }}
 
 /* 👍/👎 under the bot's bubble (at its left edge): small, grey, the chosen one navy. The icons are a Material Symbols font. */
 .stMainBlockContainer [data-testid="stElementContainer"]:has([data-testid="stFeedback"]) {{ width:100%; box-sizing:border-box;
