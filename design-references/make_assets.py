@@ -42,8 +42,8 @@ robot.putalpha(mask)
 robot.save(OUT / "robot.png", optimize=True)
 
 # --- the icon: the head and the top of the chest, in a circle (a square cut, then a round mask) ---
-SIDE = 300
-cx, cy = 612, 300
+SIDE = 278  # the head (with the ears) fills about 90% of the circle, as in the small icons of the reference
+cx, cy = 612, 288
 icon = im.crop((cx - SIDE // 2, cy - SIDE // 2, cx + SIDE // 2, cy + SIDE // 2)).convert("RGBA")
 icon = icon.resize((256, 256), Image.LANCZOS)
 circle = Image.new("L", (256 * 4, 256 * 4), 0)
