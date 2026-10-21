@@ -45,7 +45,7 @@ import streamlit as st
 
 from phoenix import answer as bot
 from phoenix import answer_cache
-from phoenix import bm25, config, conversation_log, embeddings, index, llm, store
+from phoenix import bm25, config, conversation_log, embeddings, hours, index, llm, store
 from phoenix import chat_design as design
 
 if not hasattr(design, "script_html"):  # Streamlit Cloud: אחרי git pull app.py נטען מחדש, אבל מודול שכבר יובא - לא
@@ -212,13 +212,22 @@ def checked_html(message: dict) -> str:
     return f'<div class="px-checked">נבדק מול {meta["pages"]} עמודים באתר · {seconds:.1f} שניות</div>'
 
 
+def hours_html(message: dict) -> str:
+    """"🟢 פתוח עכשיו, עד 16:00" - ליד הפניה למוקד או לוואטסאפ שבתשובה (השעות מעמוד "צור קשר", שעון ישראל)."""
+    try:
+        lines = hours.statuses_for(message.get("content") or "")
+    except Exception:  # noqa: BLE001 - תוספת לממשק: תקלה כאן לא פוגעת בתשובה
+        return ""
+    return "".join(f'<div class="px-hours">{html.escape(line)}</div>' for line in lines[:2])
+
+
 def bubble(message: dict, text: str | None = None, with_sources: bool = True) -> str:
     """ההודעה כבועה: של הלקוחה (מימין, כחולה) או של הבוט (משמאל, לבנה עם מסגרת). text - רק חלק מהטקסט (בהקלדה)."""
     content = to_html(message["content"] if text is None else text)
     if message["role"] == "user":
         return design.user_html(content, message.get("time", ""))
-    return design.bot_html(content, (sources_html(message) + checked_html(message)) if with_sources else "",
-                           message.get("time", ""))
+    return design.bot_html(content, (hours_html(message) + sources_html(message) + checked_html(message))
+                           if with_sources else "", message.get("time", ""))
 
 
 def render_type_buttons(message: dict):
@@ -259,6 +268,8 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
         if handoff["streak"]:
             st.markdown(bubble({"role": "assistant", "content": STREAK_NOTICE}), unsafe_allow_html=True)
         st.link_button(HANDOFF_LABEL, handoff["url"], type="primary" if handoff["streak"] else "secondary")
+        if not hours_html(message) and (whatsapp := handoff_hours()):  # מתי הנציגים בוואטסאפ זמינים (אם לא בבועה)
+            st.markdown(f'<div class="px-hours" dir="rtl">{html.escape(whatsapp)}</div>', unsafe_allow_html=True)
     if message.get("id"):  # 👍/👎 - נשמר ביומן, מקושר לתשובה
         st.feedback("thumbs", key=f"feedback-{message['id']}", on_change=save_feedback, args=(message["id"],))
     if meta and dev_mode():  # "פרטים טכניים" - רק במצב מפתחת
@@ -348,6 +359,14 @@ def show_stage(slot, stage: str, **info):
 def save_feedback(entry_id: str):
     value = st.session_state.get(f"feedback-{entry_id}")  # 1 = 👍, 0 = 👎, None = בוטל
     conversation_log.log_feedback(entry_id, {1: "up", 0: "down"}.get(value))
+
+
+def handoff_hours() -> str:
+    try:
+        schedule = hours.schedule_for(hours.WHATSAPP)
+        return hours.status(schedule, datetime.now(hours.ISRAEL)) if schedule else ""
+    except Exception:  # noqa: BLE001 - תוספת לממשק
+        return ""
 
 
 def handoff_for(reply: dict, earlier: list[dict]) -> dict | None:

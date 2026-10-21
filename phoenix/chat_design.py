@@ -99,6 +99,7 @@ body.px-closed #root {{ display:none !important; }}  /* all of Streamlit; the la
 .px-bubble .answer bdi {{ white-space:nowrap; }}  /* a phone does not break after the dash ("073-" and "2076100") */
 .px-sources {{ margin-top:8px; font-size:14px; line-height:1.5; }}
 .px-checked {{ margin-top:4px; font-size:12px; line-height:1.4; color:var(--grey); }}
+.px-hours {{ margin-top:6px; font-size:13px; line-height:1.4; color:var(--navy); font-weight:500; }}
 .px-meta {{ direction:ltr; display:flex; align-items:center; gap:4px; font-size:12px; line-height:1; color:var(--grey);
   white-space:nowrap; padding-bottom:3px; }}
 .px-side {{ display:flex; flex-direction:column; align-items:center; gap:4px; flex:none; width:56px; }}

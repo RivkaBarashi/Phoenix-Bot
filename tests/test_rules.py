@@ -1973,3 +1973,42 @@ def test_no_model_gives_the_page_and_a_referral_never_a_site_sentence_by_default
     a = A.respond(q, QUOTE_HIT, understanding=model_understood(q))  # גם אחרי הבנה של מודל
     assert (a.kind, a.reason) == ("unverified", "no_model:unavailable") and "«" not in a.text
     assert a.sources == [QUOTE_PAGE, A.CONTACT_URL] and A.GENERIC_REFERRAL in a.text
+
+
+# ---------------------------------------------------------------- "פתוח עכשיו" ליד הפניה למוקד (22/10)
+def test_opening_hours_are_read_from_the_contact_page():
+    from phoenix import hours
+    centers = hours.parse_centers(A.contact_text())
+    assert len(centers) >= 8 and all("3016" not in c.numbers for c in centers)  # "8:30-16:00" הוא לא מספר
+    sun_thu = {d: [(510, 960)] for d in (6, 0, 1, 2, 3)}  # א'-ה' 8:30-16:00
+    assert hours.schedule_for(hours.WHATSAPP, centers) == sun_thu
+    assert hours.schedule_for("0502241953", centers) == hours.ALWAYS  # מוקד חירום לשוהים בחו"ל
+
+
+@pytest.mark.parametrize("when, expected", [
+    ((2026, 10, 21, 10, 0), "🟢 פתוח עכשיו, עד 16:00"),            # רביעי בבוקר
+    ((2026, 10, 21, 17, 0), "🔴 סגור כרגע, ייפתח מחר ב-8:30"),      # רביעי בערב
+    ((2026, 10, 22, 17, 0), "🔴 סגור כרגע, ייפתח ביום א' ב-8:30"),  # חמישי בערב - שישי ושבת סגור
+    ((2026, 10, 24, 21, 0), "🔴 סגור כרגע, ייפתח מחר ב-8:30"),      # מוצאי שבת
+    ((2026, 10, 25, 7, 0), "🔴 סגור כרגע, ייפתח היום ב-8:30"),      # ראשון לפני הפתיחה
+])
+def test_open_now_status_by_israel_time(when, expected):
+    from datetime import datetime
+    from phoenix import hours
+    centers = hours.parse_centers(A.contact_text())
+    assert hours.statuses_for(A.GENERIC_REFERRAL, datetime(*when), centers) == [expected]
+
+
+def test_open_now_only_for_known_center_numbers():
+    from datetime import datetime
+    from phoenix import hours
+    centers, now = hours.parse_centers(A.contact_text()), datetime(2026, 10, 21, 10, 0)
+    assert hours.statuses_for("ההשתתפות העצמית 190 ש\"ח, תוך 30 יום", now, centers) == []  # לא טלפון
+    assert hours.statuses_for("שעות פעילות 8:30-16:00", now, centers) == []  # שעות בתשובה - לא מספר
+    assert hours.statuses_for("חירום בחו\"ל: 050-224-1953", now, centers) == ["🟢 פתוח 24 שעות ביממה"]
+
+
+def test_the_chat_bubble_shows_open_now_next_to_a_referral():
+    import app
+    assert 'class="px-hours"' in app.hours_html({"role": "assistant", "content": A.GENERIC_REFERRAL})
+    assert app.hours_html({"role": "assistant", "content": "שלום! במה אפשר לעזור?"}) == ""
