@@ -220,14 +220,16 @@ def test_no_attempt_when_almost_no_time_left():
     assert called == []
 
 
-def test_out_of_time_gives_the_friendly_message(monkeypatch):
+def test_out_of_time_gives_the_page_not_a_wait_message(monkeypatch):
     def out_of_time(*args, **kwargs):
         raise fallback.OutOfTime("llm", ["test: out of time"])
     monkeypatch.setattr(llm, "chat", out_of_time)
     high = SearchResult([Hit("x", A.CONTACT_URL, "צור קשר", "", "כל הדרכים ליצור איתנו קשר", score=0.95)],
                         "gemini:x", "cohere:rerank-v4.0-pro")
     a = A.respond("איך מגישים תביעה?", high)
-    assert (a.kind, a.reason) == ("error", "timeout") and a.text.startswith(A.TIMEOUT_TEXT)
+    # 21/10 (החלטת הבעלים): אין "לוקח יותר זמן" / "תקלה זמנית" - העמוד הרלוונטי והפניה לשירות הלקוחות
+    assert (a.kind, a.reason) == ("unverified", "no_model:timeout") and a.text.startswith(A.UNVERIFIED_TEXT)
+    assert A.GENERIC_REFERRAL in a.text and a.sources == [A.CONTACT_URL]
 
 
 # ---------------------------------------------------------------- שכבת הגנה מפני דליפה
@@ -339,11 +341,13 @@ def test_personal_question_without_a_model(monkeypatch, error):
     assert a.text.startswith(A.PERSONAL_GENERIC) and A.GENERIC_REFERRAL in a.text
 
 
-def test_regular_question_without_a_model_is_still_an_error(monkeypatch):
+def test_regular_question_without_a_model_gets_the_page_never_not_available(monkeypatch):
     def unavailable(*args, **kwargs):
         raise fallback.AllProvidersFailed("llm", ["all models: quota"])
     monkeypatch.setattr(llm, "chat", unavailable)
-    assert A.respond("מה המספר של מוקד תביעות רכב?", HIGH_HIT).reason == "llm_unavailable"
+    a = A.respond("מה המספר של מוקד תביעות רכב?", HIGH_HIT)
+    assert (a.kind, a.reason) == ("unverified", "no_model:unavailable") and a.kind != "error"
+    assert a.sources and A.GENERIC_REFERRAL in a.text
 
 
 # ---------------------------------------------------------------- מאגר מפתחות Gemini (ספקים מדומים, בלי API)
@@ -428,7 +432,7 @@ def test_a_fast_503_moves_at_once_to_the_next_key_of_the_same_model(monkeypatch)
     assert 50 < rest["t:m1#1"] <= 60 and "t:m1" not in rest
 
 
-def test_four_fast_503s_in_a_row_rest_the_model_on_all_keys(monkeypatch):
+def test_two_fast_503s_in_a_row_rest_the_model_on_all_keys(monkeypatch):
     monkeypatch.setattr(fallback, "_resting_until", {})
     called = []
     busy = FakeApiError(503, "This model is currently experiencing high demand.")
@@ -443,7 +447,8 @@ def test_four_fast_503s_in_a_row_rest_the_model_on_all_keys(monkeypatch):
     providers = ([fallback.Provider(f"t:m1#{k}", make(f"m1#{k}", busy), group="t:m1", key=f"t#{k}") for k in range(1, 6)]
                  + [fallback.Provider("t:m2#1", make("m2#1"), group="t:m2", key="t#1")])
     assert fallback.run_chain("test", providers, retries=0)[1] == "t:m2#1"
-    assert called == ["m1#1", "m1#2", "m1#3", "m1#4", "m2#1"]  # המפתח החמישי לא נוסה: המודל עמוס
+    # 21/10: שני 503 ברצף (היה 4) - המודל עמוס; כל 503 נספר במכסה, ומודל הגיבוי עונה במקום לשרוף עוד מפתחות
+    assert called == ["m1#1", "m1#2", "m2#1"]
     assert 50 < fallback.resting()["t:m1"] <= 60
 
 
@@ -575,6 +580,7 @@ def fake_race(monkeypatch, plan: dict):
     """plan: הספק הראשון של כל צד (או "chain" לשרשרת הרגילה) -> (השהיה בשניות, תשובה או חריגה)."""
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
     monkeypatch.setattr(llm, "race_pair", lambda service="gemini": [["gemini:a#1"], ["gemini:b#2"]])
+    monkeypatch.setattr(A.config, "GEMINI_RACE", True)  # שני צדי Gemini (הבדיקות הישנות); בצ'אט - כבוי
 
     def chat(messages, names=None, **kwargs):
         delay, data = plan[names[0] if names else "chain"]
@@ -1157,6 +1163,7 @@ def test_understanding_runs_only_on_the_strong_models(monkeypatch):
 def test_race_is_on_in_the_chat_with_3_6_and_3_8():
     from phoenix import config
     assert config.PARALLEL_LLM and config.RACE_LLMS == ["gemini-3.6-flash", "gemini-3.8-flash"]
+    assert not config.GEMINI_RACE  # 21/10: קריאת Gemini אחת, והמתחרה מחברה אחרת (Cohere)
     assert A.MIN_REPAIR_SECONDS == 6
 
 
@@ -1716,7 +1723,6 @@ def test_no_model_answer_in_time_gives_the_sentence_from_the_site_not_a_wait_mes
     a = A.respond("תוך כמה זמן מקבלים תשובה על תביעה?", QUOTE_HIT)
     assert (a.kind, a.reason, a.sources) == ("answer", "site_quote", [QUOTE_PAGE])
     assert "«תשובה על התביעה תינתן תוך 30 יום ממועד קבלת כל המסמכים.»" in a.text
-    assert A.TIMEOUT_TEXT not in a.text and A.ERROR_TEXT not in a.text
 
 
 
@@ -1813,3 +1819,62 @@ def test_cohere_thinking_budget_is_sent_for_the_plus_model(monkeypatch):
     assert sent[0]["thinking"] == {"type": "enabled", "token_budget": config.COHERE_THINKING_BUDGET}
     llm._cohere("command-a-03-2025")([{"role": "user", "content": "x"}], "", 0)
     assert "thinking" not in sent[1]
+
+
+
+# ---------------------------------------------------------------- 21/10 ערב: פתרון לכל הבעיות
+def test_one_gemini_call_per_answer_with_the_backup_as_the_parallel_partner(monkeypatch):
+    """בלי מירוץ 3.6+3.8: צד Gemini אחד (כל המפתחות לפי הסדר) ומודל הגיבוי. חצי מכסה בשלב התשובה."""
+    failed = fallback.AllProvidersFailed("llm", ["503"])
+    asked = backup_race(monkeypatch, {"gemini:a#1": (0.3, VALID), "cohere:x": (0.0, VALID)}, after=0.0, preferred=1.0)
+    monkeypatch.setattr(A.config, "GEMINI_RACE", False)
+    monkeypatch.setattr(llm, "free_keys", lambda *args, **kwargs: ["gemini:a#1", "gemini:a#2", "gemini:b#1"])
+    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בלי מירוץ Gemini כשהוא כבוי"))
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "gemini:a#1"
+    assert sorted(asked) == ["cohere:x", "gemini:a#1"]  # קריאה אחת ל-Gemini (הצד מתחיל ב-a#1) + הגיבוי
+    del failed
+
+
+def test_quota_exhaustion_is_shared_with_every_process(monkeypatch):
+    """מכסה יומית שנגמרה נכתבת למאגר המשותף - כל תהליך ושני האתרים לא מנסים את המפתח שוב עד האיפוס."""
+    shared = []
+    monkeypatch.setattr(fallback, "QUOTA_HOOK", lambda name, until: shared.append((name, until)))
+    monkeypatch.setattr(fallback, "_resting_until", {})
+
+    def exhausted(*args):
+        raise FakeApiError(429, "You exceeded your current quota. quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'"
+                                ", retryDelay': '3600s'")  # כמו ההודעה האמיתית של Gemini
+    with pytest.raises(fallback.AllProvidersFailed):
+        fallback.run_chain("llm", [fallback.Provider("gemini:m#3", exhausted, group="gemini:m", key="gemini#3")],
+                           retries=0)
+    assert [name for name, _ in shared] == ["gemini:m#3"] and shared[0][1] > time.time() + 3000
+
+
+def test_shared_exhausted_keys_are_loaded_and_skipped(monkeypatch):
+    from phoenix import store
+    until = time.time() + 600
+    monkeypatch.setattr(fallback, "_resting_until", {})
+    monkeypatch.setattr(store, "read", lambda *cmd: ["gemini:gemini-3.6-flash#4", f"{until:.0f}",
+                                                     "gemini:gemini-3.8-flash#1", "123"])  # השני כבר עבר - לא נטען
+    assert llm.load_shared_rests() == 1
+    assert fallback.resting().get("gemini:gemini-3.6-flash#4", 0) > 500
+    assert "gemini:gemini-3.8-flash#1" not in fallback.resting()
+
+
+def test_any_number_of_gemini_keys_is_read(monkeypatch):
+    from phoenix import config
+    monkeypatch.setenv("GEMINI_API_KEY_27", "key-27")
+    monkeypatch.setenv("GEMINI_API_KEY_16.1", "not-a-key")  # שם לא תקין - לא נקרא
+    numbers = [n for n, _ in config._gemini_keys()]
+    assert 27 in numbers and numbers == sorted(numbers)
+
+
+
+def test_site_quote_is_never_a_heading_or_a_one_word_match():
+    """21/10, Google ו-Cohere למטה: הציטוט היה "## מוקד תביעות רכב ורכוש" - כותרת, לא תשובה."""
+    page = "https://www.fnx.co.il/customer-service/contact-us/"
+    hit = Hit("c", page, "צור קשר", "", "## מוקד תביעות רכב ורכוש ופתוח" + chr(10)
+              + "לכל שאלה אפשר לפנות אלינו בכל ערוץ שנוח לכם היום.")
+    assert A.site_quote("מה המספר של מוקד תביעות רכב ורכוש, ומתי הוא פתוח?", [hit]) is None
+    one = Hit("d", page, "x", "", "אפשר לבדוק את מצב התביעה באזור האישי באתר בכל שעה.")
+    assert A.site_quote("איך מגישים תביעה בביטוח בריאות?", [one]) is None  # רק "תביעה" משותפת

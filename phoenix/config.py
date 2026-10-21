@@ -5,6 +5,7 @@
 import contextlib
 import contextvars
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -56,11 +57,17 @@ API_KEYS = {
 COHERE_CHAT_KEY = (os.getenv("COHERE_CHAT_API_KEY", "") or os.getenv("COHERE_API_KEY2", "")).strip()  # שני השמות - אותו חשבון
 # מאגר מפתחות Gemini: כל מפתח מחשבון ומפרויקט נפרד, ולכן עם מכסה יומית משלו לכל מודל.
 # המספר הוא המספר בשם המשתנה (GEMINI_API_KEY = 1, GEMINI_API_KEY_2 = 2 ...) - כך הוא מופיע בדוחות, בלי הערך.
-GEMINI_KEYS: list[tuple[int, str]] = [
-    (number, key) for number, key in
-    [(1, API_KEYS["gemini"].strip())] + [(n, os.getenv(f"GEMINI_API_KEY_{n}", "").strip()) for n in range(2, 21)]
-    if key
-]
+# כל מספר שהוא (21/10: נוספו 21-28; קודם נקראו רק 2-20).
+def _gemini_keys() -> list[tuple[int, str]]:
+    numbered = []
+    for name, value in os.environ.items():
+        match = re.fullmatch(r"GEMINI_API_KEY_(\d+)", name)
+        if match and int(match.group(1)) >= 2:
+            numbered.append((int(match.group(1)), value.strip()))
+    return [(number, key) for number, key in [(1, API_KEYS["gemini"].strip())] + sorted(numbered) if key]
+
+
+GEMINI_KEYS: list[tuple[int, str]] = _gemini_keys()
 
 # מודל שפה לתשובות, לפי סדר. בחינמי של Gemini לכל מודל מכסה יומית נפרדת, ולמודלי Flash
 # היא רק 20 בקשות ביום (נבדק 16/10, מתאפסת בחצות שעון פסיפיק) - לכן כמה דגמי Flash ברצף,
@@ -165,6 +172,10 @@ QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
 BACKUP_AFTER_SECONDS = float(os.getenv("BACKUP_AFTER_SECONDS", "3"))
 GEMINI_PREFERRED_SECONDS = float(os.getenv("GEMINI_PREFERRED_SECONDS", "12"))
 PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true", "yes", "on")
+# 21/10 (פתרון לכל הבעיות): בלי שני מודלי Gemini במקביל. שניהם של Google - כש-Google נפל שניהם נכשלו יחד, והמכסה
+# נגמרה פי שניים. במקום זה קריאת Gemini אחת (כל המפתחות, 3.6 -> 3.7 -> 3.8), ובמקביל מודל הגיבוי מחברה אחרת לפי כלל
+# המעבר. זו גם התצורה שנמדדה באיכות (ה-eval: 3.6 לבד). true - שני מודלי Gemini כמו קודם (RACE_LLMS).
+GEMINI_RACE = os.getenv("GEMINI_RACE", "false").strip().lower() in ("1", "true", "yes", "on")
 RACE_LLMS = [m.strip() for m in os.getenv("RACE_LLMS", "gemini-3.6-flash,gemini-3.8-flash").split(",") if m.strip()]
 # בצ'אט: החיפוש על השאלה כמו שנכתבה מתחיל במקביל להבנת השאלה. ניסוח עצמאי שונה מהותית (פחות מ-70% מילים
 # משותפות, סוג ביטוח אחר, שאלה מפוצלת, תרגום) - מחפשים שוב עליו. שאלת המשך שתלויה בשיחה - בלי חיפוש מוקדם.

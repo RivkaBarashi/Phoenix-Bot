@@ -128,31 +128,33 @@ DOMAIN_WORD = re.compile("|".join(f"(?P<t{i}>{pattern})" for i, pattern in enume
 GENERIC_AFTER_INSURANCE = {"שלי", "שלך", "שלכם", "שלנו", "שלו", "שלה", "שלהם", "אצלכם", "אצלי", "הזה", "הזו",
                            "הזאת", "זה", "זו", "את", "על", "של", "עם", "אצל", "אם", "או", "אחר", "אחרת", "נוסף",
                            "נוספת", "חדש", "חדשה", "זול", "טוב", "כלשהו", "כלשהי", "בהפניקס", "בפניקס", "מהפניקס"}
-ERROR_TEXT = ("יש כרגע תקלה זמנית ולא הצלחתי לבדוק את התשובה באתר. אפשר לנסות שוב בעוד רגע, "
-              "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
-TIMEOUT_TEXT = ("בדיקת התשובה באתר לוקחת כרגע יותר זמן מהרגיל, ולא רציתי להשאיר אתכם לחכות. אפשר לנסות שוב "
-                "בעוד רגע, או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 # כשמודל השפה לא החזיר תשובה מאומתת בזמן (עומס, מכסה) אבל החיפוש מצא עמוד מעל הסף: המשפט מהעמוד שהכי קרוב לשאלה,
 # מילה במילה ובלי מודל - נכון בהגדרה, ובמקום "לוקח יותר זמן" (בקשת הבעלים, 21/10).
 SITE_QUOTE_INTRO = "לפי האתר:"
 SITE_QUOTE_MORE = "לפרטים המלאים - בעמוד המקור."
 SITE_QUOTE_WORDS = (5, 45)  # משפט קצר מזה הוא כותרת או שבר; ארוך מזה - פסקה, לא משפט
+# 21/10: ב"כולם למטה" הציטוט היה כותרת ("## מוקד תביעות רכב ורכוש") או משפט קשור רק במילה אחת. לכן בלי כותרות, ולפחות
+# SITE_QUOTE_MIN_TERMS מילים משותפות עם השאלה (בשאלה של עד 2 מילות תוכן - אחת). אחרת - העמוד והפניה (respond).
+SITE_QUOTE_MIN_TERMS = 2
 
 
 def site_quote(question: str, hits: list[Hit]) -> tuple[str, str, str] | None:
     """(טקסט, כתובת, הציטוט): המשפט משני הקטעים הראשונים (הכי רלוונטיים לפי ה-Rerank) שחולק הכי הרבה מילים עם השאלה
-    (אותו פירוק מילים כמו בחיפוש, עם תחיליות), ואחריו המשפט הבא אם גם הוא קשור לשאלה. אין משפט עם מילה משותפת - None
-    (ההודעה הרגילה): קטע רלוונטי בלי משפט שקשור לשאלה לא מוצג כתשובה."""
+    (אותו פירוק מילים כמו בחיפוש, עם תחיליות), ואחריו המשפט הבא אם גם הוא קשור לשאלה. אין משפט (לא כותרת) עם לפחות
+    SITE_QUOTE_MIN_TERMS מילים משותפות - None (העמוד והפניה): קטע רלוונטי בלי משפט שקשור לשאלה לא מוצג כתשובה."""
     terms = set(bm25.tokenize(question))
+    words = [variants for word in question.split() if (variants := set(bm25.tokenize(word)))]  # מילות התוכן
+    needed = 1 if len(words) <= 2 else SITE_QUOTE_MIN_TERMS  # שאלה קצרה ("איך מגישים תביעה?" - "להגיש" לא נספר) - מילה אחת
     best = None
     for rank, hit in enumerate(hits[:2]):
         lines = [line for part in hit.text.splitlines() for line in SENTENCE_END.split(part)]
-        sentences = [" ".join(s.split()) for s in lines]
+        sentences = [" ".join(s.split()) for s in lines if not s.lstrip().startswith("#")]  # בלי כותרות
         sentences = [s for s in sentences if SITE_QUOTE_WORDS[0] <= len(s.split()) <= SITE_QUOTE_WORDS[1]]
         for i, sentence in enumerate(sentences):
-            overlap = len(terms & set(bm25.tokenize(sentence)))
+            tokens = set(bm25.tokenize(sentence))
+            overlap = sum(1 for variants in words if variants & tokens)  # מילים של השאלה, לא צורות (מגישים / גישים)
             key = (overlap, -rank, -i)
-            if overlap and (best is None or key > best[0]):
+            if overlap and overlap >= needed and (best is None or key > best[0]):
                 best = (key, sentences, i, hit.url)
     if not best:
         return None
@@ -717,8 +719,8 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
                    low_thinking=config.ANSWER_LOW_THINKING)
     if cached := llm.lookup(messages, parse=parse_reply, **request):  # כבר נענתה - בלי שום בקשה
         return finish(cached)
-    pair = llm.race_pair(config.RACE_LLMS)
-    sides = pair or ([free] if (free := llm.free_keys()) else [])
+    pair = llm.race_pair(config.RACE_LLMS) if config.GEMINI_RACE else []
+    sides = pair or ([free] if (free := llm.free_keys()) else [])  # קריאת Gemini אחת: כל המפתחות, 3.6 -> 3.7 -> 3.8
     backup = config.BACKUP_LLM if config.BACKUP_LLM and llm.ready(config.BACKUP_LLM) else ""
     if len(sides) < 2 and not backup:
         return None
@@ -1020,11 +1022,13 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             log.warning("no model answer (%s) - the sentence from the site instead: %s", type(exc).__name__, question[:60])
             return Answer(quote[0], "answer", "site_quote", [quote[1]], **base,
                           links={quote[1]: fragment_link(quote[1], quote[2])})
-        if isinstance(exc, OutOfTime):  # נגמר הזמן הכולל לשאלה - הודעה ידידותית, בלי ניסיון נוסף
-            return Answer(f"{TIMEOUT_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "timeout",
-                          [CONTACT_URL], **base)
-        return Answer(f"{ERROR_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "llm_unavailable",
-                      [CONTACT_URL], **base)
+        # 21/10 (החלטת הבעלים): בלי "תקלה זמנית" ובלי "לוקח יותר זמן". אין מודל ואין משפט מתאים - העמוד הכי רלוונטי
+        # מהחיפוש (מעל הסף) והפניה לשירות הלקוחות, כמו "לא הצלחתי לאמת": תמיד תשובה עם מקור, ובלי להמציא.
+        page = next((h.url for h in hits if h.url != CONTACT_URL), CONTACT_URL)
+        urls = list(dict.fromkeys([page, CONTACT_URL]))
+        log.warning("no model answer (%s) and no sentence - the page instead: %s", type(exc).__name__, question[:60])
+        return Answer(f"{UNVERIFIED_TEXT} {GENERIC_REFERRAL}\n\n{format_sources(urls)}", "unverified",
+                      f"no_model:{'timeout' if isinstance(exc, OutOfTime) else 'unavailable'}", urls, **base)
     timings["llm"] = time.perf_counter() - start
     if on_stage and not reply.cached:
         on_stage("verify")
@@ -1113,6 +1117,7 @@ def answer(question: str, history: list[dict] = (), on_stage=None, cache: bool =
         greeting.timings["total"] = time.perf_counter() - start
         return greeting
     history = list(history)
+    llm.sync_shared_rests()  # מפתחות שהמכסה שלהם נגמרה בתהליך אחר או באתר השני - לא מנסים אותם שוב
     with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
         if on_stage:
             on_stage("understand")

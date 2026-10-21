@@ -24,7 +24,7 @@ from typing import Any, Callable
 import httpx
 from google.genai import types
 
-from . import config
+from . import config, fallback
 from .fallback import EmptyResult, Provider, is_resting, run_chain
 
 OPENAI_COMPATIBLE_URLS = {
@@ -195,6 +195,49 @@ def _providers() -> list[Provider]:
 
 PROVIDERS = _providers()
 ALL_NAMES = [p.name for p in PROVIDERS]  # לפני כל סינון (ממשק בדיקות, smoke --providers) - לדוחות
+
+
+# זיכרון משותף של מפתחות שהמכסה היומית שלהם נגמרה (21/10): hash ב-Upstash, ספק -> עד מתי. נכתב מיד כשמכסה נגמרת
+# (fallback.QUOTA_HOOK), ונקרא בכל שאלה בצ'אט - בפעם הראשונה בתהליך מיד (עד 1.5 ש'), אחר כך ברקע פעם בדקה.
+SHARED_RESTS = "rest:quota"
+SHARED_RESTS_SYNC = 60.0
+_rests_synced = 0.0
+
+
+def share_quota_rest(name: str, until: float) -> None:
+    from . import store
+    store.write(["HSET", SHARED_RESTS, name, f"{until:.0f}"], ["EXPIRE", SHARED_RESTS, 30 * 3600])
+
+
+def load_shared_rests() -> int:
+    """המפתחות שנגמרה להם המכסה (מכל תהליך ומכל אתר) נחים כאן עד האיפוס. מחזיר כמה נטענו."""
+    from . import store
+    flat = store.read("HGETALL", SHARED_RESTS) or []
+    loaded, now = 0, time.time()
+    for name, until in zip(flat[::2], flat[1::2]):
+        try:
+            until = float(until)
+        except (TypeError, ValueError):
+            continue
+        if until > now and fallback._resting_until.get(name, 0) < until:
+            fallback._resting_until[name] = until
+            loaded += 1
+    return loaded
+
+
+def sync_shared_rests() -> None:
+    global _rests_synced
+    now = time.time()
+    if now - _rests_synced < SHARED_RESTS_SYNC:
+        return
+    first, _rests_synced = _rests_synced == 0.0, now
+    if first:
+        load_shared_rests()
+    else:
+        threading.Thread(target=load_shared_rests, daemon=True).start()
+
+
+fallback.QUOTA_HOOK = share_quota_rest
 
 
 def describe(name: str | None) -> str:

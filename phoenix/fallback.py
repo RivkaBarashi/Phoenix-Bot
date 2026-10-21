@@ -44,8 +44,11 @@ PATIENT_OVERLOAD_REST = 30
 # מודל ממשיך מיד במפתח הבא. FAST_OVERLOAD_LIMIT תשובות כאלה ברצף באותה בקשה - עומס על המודל: הוא נח בכל המפתחות
 # FAST_OVERLOAD_GROUP_REST שניות. עומס איטי (timeout, 504 אחרי 15-20 שניות) - כמו קודם: המודל נח OVERLOAD_REST בכל המפתחות.
 FAST_OVERLOAD_REST = 60
-FAST_OVERLOAD_LIMIT = 4
+FAST_OVERLOAD_LIMIT = 2  # 21/10: היה 4 - כל 503 נספר במכסה, ועם מודל הגיבוי אין סיבה לשרוף עוד מפתחות
 FAST_OVERLOAD_GROUP_REST = 60
+# מכסה יומית שנגמרה (QUOTA): נקרא עם (שם, עד מתי) - llm שומר ב-Upstash, וכל התהליכים ושני האתרים לא מנסים שוב את
+# המפתח הזה עד האיפוס (21/10: כל הפעלה מחדש עברה על 20 מפתחות ריקים, אחד אחרי השני, ולא נשאר זמן לתשובה).
+QUOTA_HOOK: "Callable[[str, float], None] | None" = None
 COOLDOWN_SECONDS = {
     RATE_LIMIT: 60,
     QUOTA: 3600,
@@ -270,6 +273,8 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                             rest = FAST_OVERLOAD_GROUP_REST  # עומס על המודל: נח בכל המפתחות
                     if rest > 0:
                         _resting_until[target] = time.time() + rest
+                        if kind == QUOTA and QUOTA_HOOK:
+                            QUOTA_HOOK(target, _resting_until[target])
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])
                 break
