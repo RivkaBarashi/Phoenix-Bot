@@ -321,7 +321,8 @@ def main():
           f"מטמון: {'בלי (--fresh)' if args.fresh else 'בלי, לתשובות (מודל קבוע)' if pins.get('answer') else 'כן'}")
     for stage, model in (("הבנת השאלה", understand_model), ("תשובה", answer_model)):
         if model:
-            keys = ", ".join(name.split("#")[1] for name in pins["understand" if stage == "הבנת השאלה" else "answer"])
+            keys = ", ".join(name.split("#")[1] if "#" in name else "1"  # ספק שאינו Gemini - מפתח אחד
+                             for name in pins["understand" if stage == "הבנת השאלה" else "answer"])
             print(f"מודל קבוע ל{stage}: {model}, מפתחות {keys} - בלי גיבוי למודל אחר")
 
     records = []

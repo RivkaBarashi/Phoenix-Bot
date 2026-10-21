@@ -82,8 +82,9 @@ LLM_CHAIN = [
 # מודל הגיבוי מחוץ ל-Google (21/10: gemini-3.8-flash החזיר 504 בכל 20 המפתחות, ו-38/81 שאלות בריצה הסופית נשארו בלי
 # תשובה). מקבל את ההקשר המלא (5 קטעים) ואת אותן בדיקות. בצ'אט הוא המתחרה השני במירוץ התשובה (מול 3.6) ונכנס לגיבוי
 # של הבנת השאלה; Google לא עונה - הוא עונה. נמדד 21/10 על פרומפט התשובה האמיתי: command-a-03-2025 - 10.6 ש',
-# command-a-plus - 9.9 ש', command-r-plus - 46 ש'. Groq לא מתאים (8K טוקנים לדקה, ההקשר ~11K). ריק - בלי גיבוי.
-BACKUP_LLM = os.getenv("BACKUP_LLM", "cohere:command-a-03-2025").strip()
+# command-a-plus - 9.9 ש', command-r-plus - 46 ש'; שעה אחר כך command-a - 37-43 ש' (Trial בעומס) ו-command-a-plus - 8.6 ש'.
+# לכן command-a-plus. Groq לא מתאים (8K טוקנים לדקה, ההקשר ~11K). ריק - בלי גיבוי.
+BACKUP_LLM = os.getenv("BACKUP_LLM", "cohere:command-a-plus-05-2026").strip()
 if BACKUP_LLM:
     LLM_CHAIN.append(tuple(BACKUP_LLM.split(":", 1)))
 

@@ -644,6 +644,9 @@ def _cited(raw_sources, hits: list[Hit]) -> list[tuple[str, str]]:
 
 
 # תשובה שהבדיקות פסלו (או החליפו בטקסט האישי הקבוע): בבקשות במקביל מחכים לתשובה של המודל השני
+# המירוץ מול מודל הגיבוי (config.BACKUP_LLM): התשובה שלו מוצגת רק אם Gemini לא ענה תשובה תקינה עד כמה שניות לפני סוף
+# הזמן. נבדק 21/10 על 45 שאלות: Cohere לבד - 2 שגויות (Gemini - 0), ולפעמים יותר מ-60 ש'. כש-Google עובד - איכות Gemini.
+BACKUP_WAIT_MARGIN = 1.5
 REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not_on_site", "empty_answer",
             "leak_guard", "personal_generic")
 
@@ -677,11 +680,17 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
         threading.Thread(target=contextvars.copy_context().run, args=(worker, names), daemon=True).start()
     racers = " מול ".join(llm.describe(names[0]) for names in pair)
     rejected, errors, held, votes, answered = None, [], None, 0, 0
-    for _ in pair:
+    backup = None  # תשובה תקינה של מודל הגיבוי (לא Google) בזמן ש-Gemini עוד עובד - מחכים קודם ל-Gemini
+    for i in range(len(pair)):
         left = time_left()
+        if backup and left is not None:  # עד BACKUP_WAIT_MARGIN לפני סוף הזמן; אז - התשובה של הגיבוי
+            left -= BACKUP_WAIT_MARGIN
         try:
             reply, error = results.get(timeout=None if left is None else max(left, 0.1))
         except queue.Empty:
+            if backup:
+                llm.remember(messages, result=backup[0], **request)
+                return backup[1]
             raise OutOfTime("llm", [f"parallel ({racers}): out of time"]) from None
         if reply is None:
             errors.append(error)
@@ -696,9 +705,15 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
             held = held or (reply, outcome)
             continue
         if not outcome.reason.startswith(REJECTED):
+            if not reply.provider.startswith("gemini:") and i + 1 < len(pair):  # Gemini קודם (איכות), הגיבוי - רשת ביטחון
+                backup = (reply, outcome)
+                continue
             llm.remember(messages, result=reply, **request)  # רק המנצח נשמר במטמון
             return outcome
         rejected = rejected or (reply, outcome)
+    if backup:  # Gemini נכשל, נפסל או ענה "אישי" לשאלת מידע - התשובה התקינה של הגיבוי
+        llm.remember(messages, result=backup[0], **request)
+        return backup[1]
     if held:  # כל המודלים שענו אמרו "אישי" (או שהשני נכשל/נפסל) - התשובה האישית, ו-respond מחליט על תיקון
         held[1].personal_votes, held[1].answered = votes, answered
         return held[1]

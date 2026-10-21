@@ -606,6 +606,31 @@ def test_race_both_fail_continues_with_the_chain(monkeypatch):
     assert (a.kind, a.llm) == ("answer", "gemini:chain#1")
 
 
+def backup_race(monkeypatch, plan):
+    fake_race(monkeypatch, plan)
+    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: [["gemini:a#1"], ["cohere:x"]])
+
+
+def test_race_prefers_gemini_even_when_the_backup_answers_first(monkeypatch):
+    """21/10: Cohere לבד - 2 תשובות שגויות ב-45 שאלות, Gemini - 0. התשובה של הגיבוי לא מנצחת כל עוד Gemini עובד."""
+    backup_race(monkeypatch, {"cohere:x": (0.0, VALID), "gemini:a#1": (0.3, VALID)})
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "gemini:a#1"
+
+
+def test_race_backup_answers_when_gemini_fails(monkeypatch):
+    backup_race(monkeypatch, {"cohere:x": (0.0, VALID), "gemini:a#1": (0.1, fallback.AllProvidersFailed("llm", ["504"]))})
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "cohere:x"
+
+
+def test_race_backup_answers_before_the_time_runs_out_when_gemini_hangs(monkeypatch):
+    backup_race(monkeypatch, {"cohere:x": (0.0, VALID), "gemini:a#1": (30.0, VALID)})
+    monkeypatch.setattr(A, "BACKUP_WAIT_MARGIN", 0.5)
+    start = time.perf_counter()
+    with fallback.time_budget(1.5):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert a.llm == "cohere:x" and time.perf_counter() - start < 1.4  # לפני סוף הזמן, לא אחריו
+
+
 def test_eval_is_never_parallel(monkeypatch):
     fake_race(monkeypatch, {"chain": (0.0, VALID)})
     monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בבדיקות אין בקשות במקביל"))
@@ -744,7 +769,7 @@ def test_cohere_is_the_backup_language_model_outside_google():
     """21/10 (החלטת הבעלים: לא להישען רק על Google): Cohere הוא מודל הגיבוי - אחרון בשרשרת, עם ההקשר המלא (לא
     בקיצור של Groq), וה-Rerank נשאר Cohere קודם."""
     from phoenix import config
-    assert config.BACKUP_LLM == "cohere:command-a-03-2025" and config.LLM_CHAIN[-1] == ("cohere", "command-a-03-2025")
+    assert config.BACKUP_LLM == "cohere:command-a-plus-05-2026" and config.LLM_CHAIN[-1] == ("cohere", "command-a-plus-05-2026")
     assert [p for p, _ in config.LLM_CHAIN].count("cohere") == 1 and "cohere" not in A.COMPACT_LLMS
     # Voyage לפני המדרג המקומי: מהיר, ונכנס ב-20 השניות גם בענן (המקומי ~10 שניות על המעבד)
     assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "voyage", "local"]
@@ -1092,9 +1117,9 @@ def test_race_pair_with_one_model_left_sends_it_on_two_keys(monkeypatch):
 def with_backup(monkeypatch):
     from phoenix import config
     from phoenix.fallback import Provider
-    providers = fake_providers(monkeypatch) + [Provider("cohere:command-a-03-2025", lambda *a, **k: "")]
+    providers = fake_providers(monkeypatch) + [Provider("cohere:command-a-plus-05-2026", lambda *a, **k: "")]
     monkeypatch.setattr(llm, "PROVIDERS", providers)
-    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-03-2025")
+    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-plus-05-2026")
 
 
 def test_race_pair_puts_the_backup_outside_google_first_on_the_second_side(monkeypatch):
@@ -1102,8 +1127,8 @@ def test_race_pair_puts_the_backup_outside_google_first_on_the_second_side(monke
     with_backup(monkeypatch)
     pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
     assert pair[0][0].startswith("gemini:gemini-3.6-flash#")
-    assert pair[1][0] == "cohere:command-a-03-2025" and pair[1][1].startswith("gemini:gemini-3.8-flash#")
-    monkeypatch.setitem(fallback._resting_until, "cohere:command-a-03-2025", time.time() + 60)
+    assert pair[1][0] == "cohere:command-a-plus-05-2026" and pair[1][1].startswith("gemini:gemini-3.8-flash#")
+    monkeypatch.setitem(fallback._resting_until, "cohere:command-a-plus-05-2026", time.time() + 60)
     assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])[1][0].startswith("gemini:gemini-3.8-flash#")
 
 
@@ -1112,7 +1137,7 @@ def test_race_pair_one_gemini_key_left_races_the_backup(monkeypatch):
     gemini = [p for p in llm.PROVIDERS if p.name.startswith("gemini:")]
     for p in gemini[1:]:
         monkeypatch.setitem(fallback._resting_until, p.name, time.time() + 60)
-    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == [[gemini[0].name], ["cohere:command-a-03-2025"]]
+    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == [[gemini[0].name], ["cohere:command-a-plus-05-2026"]]
     monkeypatch.setitem(fallback._resting_until, gemini[0].name, time.time() + 60)
     assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == []  # אין Gemini - השרשרת, ובה Cohere
 
@@ -1372,10 +1397,10 @@ def test_understanding_backup_outside_google_answers_when_all_of_google_hangs(mo
     """21/10: 3.8 ו-3.6 תקועים (Google) - Cohere, שהתחיל יחד עם בקשת הגיבוי, עונה, ולא כללי הקוד."""
     from phoenix import understand
     asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (5.0, "3.8"), "gemini-3.6-flash": (5.0, "3.6"),
-                                      "cohere:command-a-03-2025": (0.1, "cohere")})
+                                      "cohere:command-a-plus-05-2026": (0.1, "cohere")})
     start = time.perf_counter()
     assert understand.try_understand("שאלה").llm == "cohere"
-    assert asked == ["gemini-3.8-flash", "gemini-3.6-flash", "cohere:command-a-03-2025"]
+    assert asked == ["gemini-3.8-flash", "gemini-3.6-flash", "cohere:command-a-plus-05-2026"]
     assert time.perf_counter() - start < 1.5
 
 
