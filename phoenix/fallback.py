@@ -119,6 +119,7 @@ class Provider:
     group: str = ""           # המודל בכל המפתחות ("gemini:gemini-3.8-flash"): עומס (503/504) מנוחה לכולם
     key: str = ""             # המפתח בכל המודלים ("gemini#2"): מפתח לא תקין - מנוחה לכולם
     overload_rest: float | None = None  # עומס/timeout: כמה שניות לנוח במקום OVERLOAD_REST (0 - בלי מנוחה; מודל הגיבוי)
+    rate_limit_rest: float | None = None  # מגבלה לדקה (429): לכל היותר כמה שניות לנוח (מודל הגיבוי - 10, לא דקה)
 
 
 def is_resting(p: Provider) -> bool:
@@ -258,6 +259,8 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     rest = PATIENT_OVERLOAD_REST if overload and not OVERLOAD_MEMORY else COOLDOWN_SECONDS[kind]
                     if overload and p.overload_rest is not None:  # מודל הגיבוי: תשובה איטית אחת לא מוציאה אותו מהמשחק
                         rest = p.overload_rest
+                    if kind == RATE_LIMIT and p.rate_limit_rest is not None:  # מגבלה לדקה: חוזרים אחרי כמה שניות
+                        rest = min(rest, p.rate_limit_rest)
                     reset = retry_after(exc)
                     if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
                         rest = min(max(reset, 1), 86400)

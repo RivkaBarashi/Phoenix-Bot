@@ -109,13 +109,18 @@ def run_conversations(url: str, conversations: list[list[str]], browser_name: st
     return out
 
 
-def run(url: str, questions: list[str], legacy: bool, browser_name: str) -> list[dict]:
+def run(url: str, questions: list[str], legacy: bool, browser_name: str, min_gap: float = 0.0) -> list[dict]:
+    """min_gap: שאלה מתחילה לפחות min_gap שניות אחרי הקודמת (קצב של אדם; בלי - מהר ככל האפשר)."""
     from playwright.sync_api import sync_playwright
     out = []
     with sync_playwright() as p:
         browser = p.chromium.launch(channel=browser_name, headless=True) if browser_name else p.chromium.launch()
         page = browser.new_page()
+        started = 0.0
         for n, question in enumerate(questions, 1):
+            if min_gap and (wait := started + min_gap - time.time()) > 0:
+                time.sleep(wait)
+            started = time.time()
             try:
                 frame = open_chat(page, url, legacy)  # כל שאלה בשיחה חדשה
                 row = ask(frame, question)
@@ -164,6 +169,8 @@ def main():
                                             "הקבועות - לבדיקת התהליך בלי קריאות למודלים")
     parser.add_argument("--legacy", action="store_true", help="בלי שיפורי הזמנים - מדידת \"לפני\"")
     parser.add_argument("--browser", default="", help="msedge / chrome - דפדפן מותקן (ברירת מחדל: Chromium של Playwright)")
+    parser.add_argument("--min-gap", type=float, default=0.0,
+                        help="שניות לפחות בין תחילת שאלה לשאלה (קצב של אדם; 21/10: מכסת Cohere Trial - 20 קריאות לדקה)")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
@@ -186,7 +193,7 @@ def main():
                 print(f"   ✗ {label}: ציפינו ל-{expected}, התקבל {row['kind']} - {row['answer'][:150]}")
     else:
         rows = run(args.url, [r["question"] for r in csv.DictReader(open(args.questions, encoding="utf-8-sig"))],
-                   args.legacy, args.browser)
+                   args.legacy, args.browser, args.min_gap)
     print("\n" + summary(rows))
     if args.out:
         fields = list(dict.fromkeys(k for row in rows for k in row))

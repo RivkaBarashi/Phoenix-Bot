@@ -188,11 +188,15 @@ def _providers() -> list[Provider]:
         else:
             key = config.COHERE_CHAT_KEY if p == "cohere" else config.API_KEYS[p]
             # מודל הגיבוי (Cohere): timeout או 5xx לא מוציאים אותו ל-5 דקות - הוא רשת הביטחון כש-Google לא עונה (21/10)
-            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key),
-                                      overload_rest=0 if f"{p}:{m}" == config.BACKUP_LLM else None))
+            backup = f"{p}:{m}" == config.BACKUP_LLM
+            # 21/10 ערב: Cohere Trial - 20 קריאות לדקה. כש-Google בעומס הוא היחיד שעונה, ו-429 שהשבית אותו לדקה שלמה
+            # הפך כל שאלה באותה דקה לציטוט מהאתר. עכשיו - 10 שניות.
+            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key), overload_rest=0 if backup else None,
+                                      rate_limit_rest=BACKUP_RATE_LIMIT_REST if backup else None))
     return providers
 
 
+BACKUP_RATE_LIMIT_REST = 10.0
 PROVIDERS = _providers()
 ALL_NAMES = [p.name for p in PROVIDERS]  # לפני כל סינון (ממשק בדיקות, smoke --providers) - לדוחות
 
@@ -335,8 +339,8 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
     if names is not None:
         by_name = {p.name: p for p in PROVIDERS}
         providers = [by_name[n] for n in names if n in by_name]
-    else:
-        providers = [p for p in PROVIDERS if not only or p.name.split(":")[0] in only]
+    else:  # קריאה כללית (בדיקת נושא, השלמת שאלת המשך) - בלי מודל הגיבוי: הקריאות שלו שמורות לתשובות ולהבנה
+        providers = [p for p in PROVIDERS if (p.name.split(":")[0] in only if only else p.name != config.BACKUP_LLM)]
 
     def checked(p: Provider) -> Provider:
         def call(messages, system, temperature):

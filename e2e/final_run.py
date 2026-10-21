@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--smoke-csv", help="לבדיקת התהליך: שאלות smoke אחרות (question, expected), בלי קריאות למודלים")
     ap.add_argument("--sites", default="streamlit,render", help="לפי הסדר; או כתובת מלאה (לבדיקה מקומית)")
     ap.add_argument("--browser", default="msedge")
+    ap.add_argument("--min-gap", default="8", help="שניות לפחות בין שאלה לשאלה בקובץ הראשי ובסט הנסתר (קצב של אדם)")
     args = ap.parse_args()
 
     out = Path(args.out_dir)
@@ -97,7 +98,8 @@ def main():
     # 4. main file, then the holdout
     for name, path in (("main", args.main), ("holdout", args.holdout)):
         answers = out / f"{name}_answers.csv"
-        code = run("e2e/e2e_cloud.py", "--url", chosen, "--questions", path, "--out", str(answers), "--browser", args.browser)
+        code = run("e2e/e2e_cloud.py", "--url", chosen, "--questions", path, "--out", str(answers), "--browser", args.browser,
+                   "--min-gap", args.min_gap)
         status(f"{name} done (exit {code}): {last_line(log_file)}")
 
     # 5. the scoring

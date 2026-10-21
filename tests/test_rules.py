@@ -1878,3 +1878,34 @@ def test_site_quote_is_never_a_heading_or_a_one_word_match():
     assert A.site_quote("מה המספר של מוקד תביעות רכב ורכוש, ומתי הוא פתוח?", [hit]) is None
     one = Hit("d", page, "x", "", "אפשר לבדוק את מצב התביעה באזור האישי באתר בכל שעה.")
     assert A.site_quote("איך מגישים תביעה בביטוח בריאות?", [one]) is None  # רק "תביעה" משותפת
+
+
+def test_the_backup_rests_seconds_not_a_minute_on_a_per_minute_limit():
+    """21/10 ערב: Cohere Trial (20 לדקה) נח דקה שלמה אחרי 429, וכל שאלה באותה דקה קיבלה ציטוט מהאתר."""
+    from phoenix.fallback import Provider
+
+    def limited(*args):
+        raise FakeApiError(429, "You are using a Trial key, which is limited to 20 API calls / minute.")
+    backup = Provider("cohere:x", limited, overload_rest=0, rate_limit_rest=10)
+    with pytest.raises(fallback.AllProvidersFailed):
+        fallback.run_chain("llm", [backup], retries=0)
+    assert 0 < fallback.resting()["cohere:x"] <= 10
+    fallback._resting_until.pop("cohere:x", None)
+
+
+def test_generic_calls_never_use_the_backup_model(monkeypatch):
+    """בדיקת נושא והשלמת שאלת המשך (בלי only/names) - בלי Cohere: הקריאות שלו שמורות לתשובות ולהבנה."""
+    from phoenix import config
+    from phoenix.fallback import Provider
+    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:x")
+    asked = []
+
+    def provider(name):
+        def call(*args, **kwargs):
+            asked.append(name)
+            raise RuntimeError("down")
+        return Provider(name, call)
+    monkeypatch.setattr(llm, "PROVIDERS", [provider("gemini:a#1"), provider("groq:y"), provider("cohere:x")])
+    with pytest.raises(fallback.AllProvidersFailed):
+        REAL_CHAT([{"role": "user", "content": "x"}], cache=False)
+    assert asked == ["gemini:a#1", "groq:y"]
