@@ -830,7 +830,7 @@ def test_cohere_is_the_backup_language_model_outside_google():
     """21/10 (החלטת הבעלים: לא להישען רק על Google): Cohere הוא מודל הגיבוי - אחרון בשרשרת, עם ההקשר המלא (לא
     בקיצור של Groq), וה-Rerank נשאר Cohere קודם."""
     from phoenix import config
-    assert config.BACKUP_LLM == "cohere:command-a-plus-05-2026" and config.LLM_CHAIN[-1] == ("cohere", "command-a-plus-05-2026")
+    assert config.LLM_CHAIN[-1] == ("cohere", "command-a-plus-05-2026")  # BACKUP_LLM עצמו כבוי בבדיקות (conftest)
     assert [p for p, _ in config.LLM_CHAIN].count("cohere") == 1 and "cohere" not in A.COMPACT_LLMS
     # Voyage לפני המדרג המקומי: מהיר, ונכנס ב-20 השניות גם בענן (המקומי ~10 שניות על המעבד)
     assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "voyage", "local"]
@@ -1108,6 +1108,7 @@ def test_answers_come_only_from_strong_models(monkeypatch):
     וכשגם הוא לא זמין - המשפט מהאתר (בלי מודל). לא Groq/OpenRouter."""
     from phoenix import config
     assert not any("lite" in m or "gemma" in m for p, m in config.LLM_CHAIN if p == "gemini")
+    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-plus-05-2026")
     asked = []
 
     def chat(messages, only=None, **kwargs):
@@ -1689,7 +1690,7 @@ QUOTE_HIT = SearchResult([Hit("q", QUOTE_PAGE, "תביעות דירה", "", (
 
 
 def test_site_quote_is_the_sentence_closest_to_the_question_word_for_word():
-    text, url = A.site_quote("איך מגישים תביעה על נזקי מים?", QUOTE_HIT.hits)
+    text, url, quote = A.site_quote("איך מגישים תביעה על נזקי מים?", QUOTE_HIT.hits)
     assert url == QUOTE_PAGE
     assert "«את התביעה בגין נזקי מים מגישים באתר או באפליקציה, ומצרפים צילומים של הנזק." in text
     assert "תשובה על התביעה תינתן תוך 30 יום" in text  # המשפט הבא קשור לשאלה (תביעה) - נוסף
@@ -1742,3 +1743,30 @@ def test_cohere_answers_use_only_the_chat_key_never_the_rerank_key(monkeypatch):
     assert sent == ["Bearer chat-key"]
     monkeypatch.setattr(config, "COHERE_CHAT_KEY", "")
     assert not llm._providers()[-1].enabled  # בלי מפתח לתשובות - בלי גיבוי, ולא נופלים למפתח של ה-Rerank
+
+
+# ---------------------------------------------------------------- Text Fragments: הקישור נפתח על הציטוט ומדגיש אותו
+def test_text_fragment_short_quote_is_one_term_long_quote_is_start_and_end():
+    from urllib.parse import unquote
+    short = A.text_fragment("תשובה על התביעה תינתן תוך 30 יום.")
+    assert unquote(short) == ":~:text=תשובה על התביעה תינתן תוך 30 יום"  # בלי הנקודה בסוף
+    long = A.text_fragment("את התביעה בגין נזקי מים מגישים באתר או באפליקציה, ומצרפים צילומים של הנזק ושל החשבוניות.")
+    assert unquote(long) == ":~:text=את התביעה בגין נזקי מים,צילומים של הנזק ושל החשבוניות"
+    assert "%2D" in A.text_fragment("מוקד חירום 24/7 בטלפון 073-2076100 לכל שאלה")  # "-" מקודד (תו מיוחד בתחביר)
+    assert "," not in A.text_fragment("ראשון, שני ושלישי").split("=", 1)[1]  # פסיק בתוך הציטוט - מקודד
+
+
+def test_source_link_only_for_a_word_for_word_quote_and_never_for_a_pdf():
+    page, text = "https://www.fnx.co.il/claims/", "את התביעה בגין נזקי מים מגישים באתר או באפליקציה."
+    assert A.source_links([(page, text)], ["את התביעה בגין נזקי מים מגישים באתר"])[page].startswith(page + "#:~:text=")
+    assert A.source_links([(page, text)], ["את התביעה על נזקי מים מגישים באתר"])[page] == page  # לא מילה במילה
+    pdf = "https://www.fnx.co.il/media/a.pdf#page=3"
+    assert A.source_links([(pdf, text)], ["את התביעה בגין נזקי מים מגישים באתר"])[pdf] == pdf  # נשאר #page=N
+
+
+def test_the_chat_links_open_on_the_quote_and_the_dev_line_keeps_the_clean_url(monkeypatch):
+    import app
+    page = "https://www.fnx.co.il/claims/"
+    a = A.Answer("תשובה\n\nהמקור: " + page, "answer", "verified", [page], 0.9, "cohere",
+                 links={page: page + "#:~:text=abc"})
+    assert app.message_from_answer(a)["sources"][0][1] == page + "#:~:text=abc"

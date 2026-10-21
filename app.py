@@ -166,7 +166,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
             "understanding": a.understanding, "more_questions": a.more_questions,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
-            "sources": [(titles.get(url, url), url) for url in a.sources], "meta": meta}
+            "sources": [(titles.get(url, url), a.links.get(url, url)) for url in a.sources], "meta": meta}
 
 
 def error_message(reason: str, question: str = "") -> dict:
@@ -286,7 +286,7 @@ def render_body(message: dict, stream: bool = False, last: bool = False):
                 st.caption("זמנים: " + " · ".join(f"{STAGE_NAMES.get(k, k)} {v:.1f} ש'"
                                                   for k, v in meta["timings"].items()))
             # שורה אחת לקריאה במכונה - הבדיקה בדפדפן (e2e_cloud.py) קוראת ממנה החלטה, מודל וזמנים
-            sources = [url for _, url in message.get("sources") or []]
+            sources = [url.split("#:~:")[0] for _, url in message.get("sources") or []]  # בלי הדגשת הציטוט
             st.caption("META " + json.dumps({k: meta.get(k) for k in DEV_META} | {"sources": sources}, ensure_ascii=False))
 
 

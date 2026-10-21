@@ -139,8 +139,8 @@ SITE_QUOTE_MORE = "לפרטים המלאים - בעמוד המקור."
 SITE_QUOTE_WORDS = (5, 45)  # משפט קצר מזה הוא כותרת או שבר; ארוך מזה - פסקה, לא משפט
 
 
-def site_quote(question: str, hits: list[Hit]) -> tuple[str, str] | None:
-    """(טקסט, כתובת): המשפט משני הקטעים הראשונים (הכי רלוונטיים לפי ה-Rerank) שחולק הכי הרבה מילים עם השאלה
+def site_quote(question: str, hits: list[Hit]) -> tuple[str, str, str] | None:
+    """(טקסט, כתובת, הציטוט): המשפט משני הקטעים הראשונים (הכי רלוונטיים לפי ה-Rerank) שחולק הכי הרבה מילים עם השאלה
     (אותו פירוק מילים כמו בחיפוש, עם תחיליות), ואחריו המשפט הבא אם גם הוא קשור לשאלה. אין משפט עם מילה משותפת - None
     (ההודעה הרגילה): קטע רלוונטי בלי משפט שקשור לשאלה לא מוצג כתשובה."""
     terms = set(bm25.tokenize(question))
@@ -161,7 +161,7 @@ def site_quote(question: str, hits: list[Hit]) -> tuple[str, str] | None:
     if i + 1 < len(sentences) and terms & set(bm25.tokenize(sentences[i + 1])):
         chosen.append(sentences[i + 1])
     quote = " ".join(chosen)
-    return f"{SITE_QUOTE_INTRO} «{quote}»\n\n{SITE_QUOTE_MORE}\n\n{format_sources([url])}", url
+    return f"{SITE_QUOTE_INTRO} «{quote}»\n\n{SITE_QUOTE_MORE}\n\n{format_sources([url])}", url, quote
 
 SYSTEM_PROMPT = """אתה העוזר הדיגיטלי של אתר הפניקס (fnx.co.il). אתה עונה ללקוחות בעברית, אך ורק לפי קטעי האתר שמופיעים בהודעה.
 
@@ -280,6 +280,7 @@ class Answer:
     repaired: str = ""         # התשובה עברה רק אחרי ניסיון תיקון - הסיבה לפסילה הראשונה (ליומן ולבדיקות)
     understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
     more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
+    links: dict[str, str] = field(default_factory=dict)  # כתובת מקור -> קישור שנפתח על הציטוט ומדגיש אותו (Text Fragment)
 
 
 @lru_cache
@@ -465,6 +466,56 @@ def parse_reply(text: str) -> dict:
     if data.get("kind") not in KINDS:
         raise ValueError(f"bad kind: {data.get('kind')!r}")
     return data
+
+
+# Text Fragments (21/10): הקישור למקור נפתח במקום המדויק בעמוד ומדגיש את הציטוט - #:~:text=תחילת,סוף. הדפדפן מחפש את
+# הטקסט בעמוד כמו שהוא מוצג; לא נמצא בדיוק - העמוד פשוט נפתח רגיל (בלי שגיאה). רק ציטוט שמופיע בקטע מילה במילה
+# (לא ההתאמה של 90% שבבדיקה), ובכל צד עד FRAGMENT_WORDS מילים מאותה שורה - כדי לא לחצות גבול בין פסקאות.
+# PDF (#page=N) - בלי שינוי: הקישור נשאר על העמוד במסמך.
+FRAGMENT_WORDS = 5
+FRAGMENT_EDGES = "«»\"'“”„‘’.,;:!?()[]-–—•*"
+
+
+def exact_quote(quote: str, text: str) -> bool:
+    """הציטוט מופיע בטקסט מילה במילה (בלי ההתאמה החלקית של quote_found)."""
+    q, t = WORD.findall(quote.lower()), WORD.findall(text.lower())
+    return len(q) >= 2 and f" {' '.join(q)} " in f" {' '.join(t)} "
+
+
+def text_fragment(quote: str) -> str:
+    """ציטוט -> ":~:text=..." (מקודד), או "" כשאין מספיק מילים."""
+    from urllib.parse import quote as encode
+    lines = [line.split() for line in quote.splitlines() if line.split()]
+    if not lines:
+        return ""
+    first, last = lines[0], lines[-1]
+    terms = [first] if len(lines) == 1 and len(first) <= 2 * FRAGMENT_WORDS else [first[:FRAGMENT_WORDS],
+                                                                                 last[-FRAGMENT_WORDS:]]
+    clean = []
+    for words in terms:
+        words = list(words)
+        words[0], words[-1] = words[0].lstrip(FRAGMENT_EDGES), words[-1].rstrip(FRAGMENT_EDGES)
+        term = " ".join(w for w in words if w)
+        if len(WORD.findall(term)) < 2:
+            return ""
+        clean.append(encode(term, safe="").replace("-", "%2D"))  # "-" ו-"," הם תווים מיוחדים בתחביר
+    return ":~:text=" + ",".join(clean)
+
+
+def fragment_link(url: str, quote: str | None) -> str:
+    if not quote or "#" in url:  # PDF: נשאר עם #page=N
+        return url
+    fragment = text_fragment(quote)
+    return f"{url}#{fragment}" if fragment else url
+
+
+def source_links(cited: list[tuple[str, str]], evidence: list[str]) -> dict[str, str]:
+    """לכל עמוד שצוטט: הקישור עם הציטוט המאומת הראשון שמופיע בקטע שלו מילה במילה. אין כזה - הכתובת עצמה."""
+    links = {}
+    for url, text in cited:
+        if url not in links or links[url] == url:
+            links[url] = fragment_link(url, next((e for e in evidence if exact_quote(e, text)), None))
+    return links
 
 
 def quote_found(quote: str, texts: list[str]) -> bool:
@@ -843,7 +894,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             if leaked(answer_text):  # שכבת הגנה אחרונה: ההוראות או ה-JSON דלפו לתשובה - לא מציגים
                 return not_on_site("leak_guard", **extra)
             urls = list(dict.fromkeys(url for url, _ in cited))  # שני קטעים מאותו עמוד - מקור אחד
-            return Answer(f"{answer_text}\n\n{format_sources(urls)}", "answer", "verified", urls, **base, **extra)
+            return Answer(f"{answer_text}\n\n{format_sources(urls)}", "answer", "verified", urls, **base, **extra,
+                          links=source_links(cited, evidence))
 
         if kind == "personal":
             # הטקסט של המודל מוצג רק עם ציטוט מאומת מקטע שהוא ציין. בלי מקור - הטקסט הקבוע: כך "זו שאלה על
@@ -860,7 +912,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             urls = [url for url, _ in cited] + [CONTACT_URL]
             reason = "personal_generic" if generic else f"personal:{fixed}" if fixed else "personal"
             return Answer(f"{text}\n\n{format_sources(urls)}", "personal", reason, list(dict.fromkeys(urls)),
-                          **base, **extra)
+                          **base, **extra, links=source_links(cited, evidence))
 
         return not_on_site("model_not_found", referral, **extra)
 
@@ -966,7 +1018,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                           "personal_no_model", [CONTACT_URL], **base)
         if quote := site_quote(standalone, hits):  # המשפט מהאתר במקום "לוקח יותר זמן" / "תקלה זמנית"
             log.warning("no model answer (%s) - the sentence from the site instead: %s", type(exc).__name__, question[:60])
-            return Answer(quote[0], "answer", "site_quote", [quote[1]], **base)
+            return Answer(quote[0], "answer", "site_quote", [quote[1]], **base,
+                          links={quote[1]: fragment_link(quote[1], quote[2])})
         if isinstance(exc, OutOfTime):  # נגמר הזמן הכולל לשאלה - הודעה ידידותית, בלי ניסיון נוסף
             return Answer(f"{TIMEOUT_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "timeout",
                           [CONTACT_URL], **base)
@@ -1033,14 +1086,14 @@ def searched(query: str, early: EarlySearch | None, on_stage=None) -> tuple[Sear
 def _cache_record(a: Answer) -> dict:
     return {"text": a.text, "kind": a.kind, "reason": a.reason, "sources": a.sources, "top_score": a.top_score,
             "reranker": a.reranker, "llm": a.llm, "question": a.question, "pages": a.pages,
-            "titles": {h.url: h.title for h in a.hits}}
+            "titles": {h.url: h.title for h in a.hits}, "links": a.links}
 
 
 def _from_cache(record: dict, understanding: dict) -> Answer:
     hits = [Hit("", url, title, "", "") for url, title in record.get("titles", {}).items()]  # שמות העמודים לקישורים
     return Answer(record["text"], record["kind"], record["reason"], record["sources"], record["top_score"],
                   record["reranker"], record["llm"], record["question"], hits, pages=record.get("pages", 0),
-                  understanding=understanding, cached=True)
+                  understanding=understanding, cached=True, links=record.get("links") or {})
 
 
 def answer(question: str, history: list[dict] = (), on_stage=None, cache: bool = True) -> Answer:
