@@ -202,3 +202,19 @@ def test_the_script_has_no_tag_like_text_that_the_sanitizer_drops():
     body = chat_design.script_html()
     assert body.startswith("<script>") and body.endswith("</script>")
     assert not re.search(r"<[/A-Za-z!]", body[len("<script>"):-len("</script>")])
+
+
+def test_bubble_time_is_israel_time_even_on_a_utc_server(monkeypatch):
+    """בענן השרתים ב-UTC: השעה בבועות - שעון ישראל."""
+    import sys
+    import time as time_module
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    sys.path.insert(0, str(Path(APP).parent))
+    import app as app_module
+    monkeypatch.setenv("TZ", "UTC")
+    if hasattr(time_module, "tzset"):
+        time_module.tzset()
+    expected = {datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M")}
+    assert app_module.clock() in expected | {datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M")}
+

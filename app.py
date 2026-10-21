@@ -36,8 +36,10 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime
 from functools import partial
 from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -183,7 +185,11 @@ def _isolated(kind: str | None, value: str) -> str:
 
 
 def clock() -> str:
-    return time.strftime("%H:%M")
+    """השעה בבועה - שעון ישראל (השרתים בענן עובדים ב-UTC: בלי זה הבועות הראו 00:21 במקום 03:21)."""
+    try:
+        return datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M")
+    except Exception:  # noqa: BLE001 - בלי נתוני אזורי זמן: שעון השרת
+        return time.strftime("%H:%M")
 
 
 def sources_html(message: dict) -> str:
