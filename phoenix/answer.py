@@ -132,6 +132,36 @@ ERROR_TEXT = ("יש כרגע תקלה זמנית ולא הצלחתי לבדוק 
               "או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
 TIMEOUT_TEXT = ("בדיקת התשובה באתר לוקחת כרגע יותר זמן מהרגיל, ולא רציתי להשאיר אתכם לחכות. אפשר לנסות שוב "
                 "בעוד רגע, או לפנות לשירות הלקוחות של הפניקס בוואטסאפ 054-9893455.")
+# כשמודל השפה לא החזיר תשובה מאומתת בזמן (עומס, מכסה) אבל החיפוש מצא עמוד מעל הסף: המשפט מהעמוד שהכי קרוב לשאלה,
+# מילה במילה ובלי מודל - נכון בהגדרה, ובמקום "לוקח יותר זמן" (בקשת הבעלים, 21/10).
+SITE_QUOTE_INTRO = "לפי האתר:"
+SITE_QUOTE_MORE = "לפרטים המלאים - בעמוד המקור."
+SITE_QUOTE_WORDS = (5, 45)  # משפט קצר מזה הוא כותרת או שבר; ארוך מזה - פסקה, לא משפט
+
+
+def site_quote(question: str, hits: list[Hit]) -> tuple[str, str] | None:
+    """(טקסט, כתובת): המשפט משני הקטעים הראשונים (הכי רלוונטיים לפי ה-Rerank) שחולק הכי הרבה מילים עם השאלה
+    (אותו פירוק מילים כמו בחיפוש, עם תחיליות), ואחריו המשפט הבא אם גם הוא קשור לשאלה. אין משפט עם מילה משותפת - None
+    (ההודעה הרגילה): קטע רלוונטי בלי משפט שקשור לשאלה לא מוצג כתשובה."""
+    terms = set(bm25.tokenize(question))
+    best = None
+    for rank, hit in enumerate(hits[:2]):
+        lines = [line for part in hit.text.splitlines() for line in SENTENCE_END.split(part)]
+        sentences = [" ".join(s.split()) for s in lines]
+        sentences = [s for s in sentences if SITE_QUOTE_WORDS[0] <= len(s.split()) <= SITE_QUOTE_WORDS[1]]
+        for i, sentence in enumerate(sentences):
+            overlap = len(terms & set(bm25.tokenize(sentence)))
+            key = (overlap, -rank, -i)
+            if overlap and (best is None or key > best[0]):
+                best = (key, sentences, i, hit.url)
+    if not best:
+        return None
+    _, sentences, i, url = best
+    chosen = sentences[i:i + 1]
+    if i + 1 < len(sentences) and terms & set(bm25.tokenize(sentences[i + 1])):
+        chosen.append(sentences[i + 1])
+    quote = " ".join(chosen)
+    return f"{SITE_QUOTE_INTRO} «{quote}»\n\n{SITE_QUOTE_MORE}\n\n{format_sources([url])}", url
 
 SYSTEM_PROMPT = """אתה העוזר הדיגיטלי של אתר הפניקס (fnx.co.il). אתה עונה ללקוחות בעברית, אך ורק לפי קטעי האתר שמופיעים בהודעה.
 
@@ -878,6 +908,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         if personal:  # שאלה אישית לא צריכה מודל: הטקסט האישי הקבוע + הפניה, ולא "תקלה זמנית"
             return Answer(f"{PERSONAL_GENERIC} {GENERIC_REFERRAL}\n\n{format_sources([CONTACT_URL])}", "personal",
                           "personal_no_model", [CONTACT_URL], **base)
+        if quote := site_quote(standalone, hits):  # המשפט מהאתר במקום "לוקח יותר זמן" / "תקלה זמנית"
+            log.warning("no model answer (%s) - the sentence from the site instead: %s", type(exc).__name__, question[:60])
+            return Answer(quote[0], "answer", "site_quote", [quote[1]], **base)
         if isinstance(exc, OutOfTime):  # נגמר הזמן הכולל לשאלה - הודעה ידידותית, בלי ניסיון נוסף
             return Answer(f"{TIMEOUT_TEXT}\n\n{format_sources([CONTACT_URL])}", "error", "timeout",
                           [CONTACT_URL], **base)

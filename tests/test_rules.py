@@ -1015,7 +1015,7 @@ def test_personal_wording_fits_any_personal_question():
 
 # ---------------------------------------------------------------- איכות לפני מהירות: תשובות רק ממודל חזק
 def test_answers_come_only_from_strong_models(monkeypatch):
-    """בלי Flash-Lite ו-Gemma בשרשרת; כש-Gemini Flash לא זמין - הודעת התקלה עם ההפניה, לא מודל גיבוי."""
+    """בלי Flash-Lite ו-Gemma בשרשרת; כש-Gemini Flash לא זמין - המשפט מהאתר (בלי מודל), לא מודל גיבוי."""
     from phoenix import config
     assert not any("lite" in m or "gemma" in m for p, m in config.LLM_CHAIN if p == "gemini")
     asked = []
@@ -1026,7 +1026,7 @@ def test_answers_come_only_from_strong_models(monkeypatch):
     monkeypatch.setattr(llm, "chat", chat)
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
     a = A.respond("איך מגישים תביעה?", RACE_HIT)
-    assert (a.kind, a.reason) == ("error", "llm_unavailable") and "054-9893455" in a.text
+    assert (a.kind, a.reason) == ("answer", "site_quote") and f"«{SENTENCE}»" in a.text
     assert asked == [["gemini"]]  # רק Gemini - שום ניסיון אצל Groq/OpenRouter
 
 
@@ -1536,3 +1536,36 @@ def test_the_strong_model_becomes_primary_again_after_a_fast_answer(monkeypatch,
     assert understand.strong_is_slow()
     understand._note_strong(0.05, True)  # בדיקה חוזרת: ענה מהר
     assert not understand.strong_is_slow()
+
+
+# ---------------------------------------------------------------- המשפט מהאתר כשאין תשובה ממודל בזמן (21/10)
+QUOTE_PAGE = "https://www.fnx.co.il/claims-customer-service/claims-apartment/"
+QUOTE_HIT = SearchResult([Hit("q", QUOTE_PAGE, "תביעות דירה", "", (
+    "תביעות ביטוח דירה\n"
+    "אנחנו כאן כדי לעזור לכם בכל שלב ובכל שאלה שעולה בדרך הארוכה. "
+    "את התביעה בגין נזקי מים מגישים באתר או באפליקציה, ומצרפים צילומים של הנזק. "
+    "תשובה על התביעה תינתן תוך 30 יום ממועד קבלת כל המסמכים. "
+    "לשירותכם מוקד שירות הלקוחות פועל בימים א-ה בין השעות 8:00 ל-17:00."), score=0.93)],
+                         "gemini:x", "cohere:rerank-v4.0-pro")
+
+
+def test_site_quote_is_the_sentence_closest_to_the_question_word_for_word():
+    text, url = A.site_quote("איך מגישים תביעה על נזקי מים?", QUOTE_HIT.hits)
+    assert url == QUOTE_PAGE
+    assert "«את התביעה בגין נזקי מים מגישים באתר או באפליקציה, ומצרפים צילומים של הנזק." in text
+    assert "תשובה על התביעה תינתן תוך 30 יום" in text  # המשפט הבא קשור לשאלה (תביעה) - נוסף
+    assert "מוקד שירות הלקוחות" not in text and text.startswith(A.SITE_QUOTE_INTRO) and A.SITE_QUOTE_MORE in text
+    assert A.site_quote("מה מזג האוויר בירושלים?", QUOTE_HIT.hits) is None  # בלי מילה משותפת - אין ציטוט
+
+
+@pytest.mark.parametrize("error", [fallback.AllProvidersFailed, fallback.OutOfTime])
+def test_no_model_answer_in_time_gives_the_sentence_from_the_site_not_a_wait_message(monkeypatch, error):
+    def fails(*args, **kwargs):
+        raise error("llm", ["gemini: overloaded / out of time"])
+    monkeypatch.setattr(llm, "chat", fails)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    a = A.respond("תוך כמה זמן מקבלים תשובה על תביעה?", QUOTE_HIT)
+    assert (a.kind, a.reason, a.sources) == ("answer", "site_quote", [QUOTE_PAGE])
+    assert "«תשובה על התביעה תינתן תוך 30 יום ממועד קבלת כל המסמכים.»" in a.text
+    assert A.TIMEOUT_TEXT not in a.text and A.ERROR_TEXT not in a.text
+
