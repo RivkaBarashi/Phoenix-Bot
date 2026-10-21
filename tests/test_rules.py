@@ -740,9 +740,12 @@ def ranked(reranker: str, score: float) -> SearchResult:
                         "gemini:x", reranker)
 
 
-def test_cohere_is_a_reranker_only_not_a_language_model():
+def test_cohere_is_the_backup_language_model_outside_google():
+    """21/10 (החלטת הבעלים: לא להישען רק על Google): Cohere הוא מודל הגיבוי - אחרון בשרשרת, עם ההקשר המלא (לא
+    בקיצור של Groq), וה-Rerank נשאר Cohere קודם."""
     from phoenix import config
-    assert all(p != "cohere" for p, _ in config.LLM_CHAIN) and "cohere" not in A.COMPACT_LLMS
+    assert config.BACKUP_LLM == "cohere:command-a-03-2025" and config.LLM_CHAIN[-1] == ("cohere", "command-a-03-2025")
+    assert [p for p, _ in config.LLM_CHAIN].count("cohere") == 1 and "cohere" not in A.COMPACT_LLMS
     # Voyage לפני המדרג המקומי: מהיר, ונכנס ב-20 השניות גם בענן (המקומי ~10 שניות על המעבד)
     assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "voyage", "local"]
 
@@ -1015,7 +1018,8 @@ def test_personal_wording_fits_any_personal_question():
 
 # ---------------------------------------------------------------- איכות לפני מהירות: תשובות רק ממודל חזק
 def test_answers_come_only_from_strong_models(monkeypatch):
-    """בלי Flash-Lite ו-Gemma בשרשרת; כש-Gemini Flash לא זמין - המשפט מהאתר (בלי מודל), לא מודל גיבוי."""
+    """בלי Flash-Lite ו-Gemma בשרשרת; כש-Gemini Flash לא זמין - מודל הגיבוי החזק מחוץ ל-Google (Cohere, ההקשר המלא),
+    וכשגם הוא לא זמין - המשפט מהאתר (בלי מודל). לא Groq/OpenRouter."""
     from phoenix import config
     assert not any("lite" in m or "gemma" in m for p, m in config.LLM_CHAIN if p == "gemini")
     asked = []
@@ -1027,7 +1031,7 @@ def test_answers_come_only_from_strong_models(monkeypatch):
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
     a = A.respond("איך מגישים תביעה?", RACE_HIT)
     assert (a.kind, a.reason) == ("answer", "site_quote") and f"«{SENTENCE}»" in a.text
-    assert asked == [["gemini"]]  # רק Gemini - שום ניסיון אצל Groq/OpenRouter
+    assert asked == [["gemini"], ["cohere"]]  # Gemini, ואז Cohere - שום ניסיון אצל Groq/OpenRouter
 
 
 def fake_providers(monkeypatch, models=("gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"), keys=2):
@@ -1083,6 +1087,34 @@ def test_race_pair_with_one_model_left_sends_it_on_two_keys(monkeypatch):
     for p in keys[1:]:
         monkeypatch.setitem(fallback._resting_until, p.name, time.time() + 60)
     assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == []
+
+
+def with_backup(monkeypatch):
+    from phoenix import config
+    from phoenix.fallback import Provider
+    providers = fake_providers(monkeypatch) + [Provider("cohere:command-a-03-2025", lambda *a, **k: "")]
+    monkeypatch.setattr(llm, "PROVIDERS", providers)
+    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-03-2025")
+
+
+def test_race_pair_puts_the_backup_outside_google_first_on_the_second_side(monkeypatch):
+    """21/10: המתחרה השני הוא Cohere, ואחריו באותו צד 3.8 - Google תקוע לא תוקע את התשובה, Cohere שנכשל - 3.8."""
+    with_backup(monkeypatch)
+    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
+    assert pair[0][0].startswith("gemini:gemini-3.6-flash#")
+    assert pair[1][0] == "cohere:command-a-03-2025" and pair[1][1].startswith("gemini:gemini-3.8-flash#")
+    monkeypatch.setitem(fallback._resting_until, "cohere:command-a-03-2025", time.time() + 60)
+    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])[1][0].startswith("gemini:gemini-3.8-flash#")
+
+
+def test_race_pair_one_gemini_key_left_races_the_backup(monkeypatch):
+    with_backup(monkeypatch)
+    gemini = [p for p in llm.PROVIDERS if p.name.startswith("gemini:")]
+    for p in gemini[1:]:
+        monkeypatch.setitem(fallback._resting_until, p.name, time.time() + 60)
+    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == [[gemini[0].name], ["cohere:command-a-03-2025"]]
+    monkeypatch.setitem(fallback._resting_until, gemini[0].name, time.time() + 60)
+    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == []  # אין Gemini - השרשרת, ובה Cohere
 
 
 @pytest.mark.parametrize("asked, standalone, same", [
@@ -1148,6 +1180,7 @@ def test_understanding_thinking_strong_model_normal_backup_low(monkeypatch):
         seen.append(kwargs["low_thinking"])
         raise fallback.AllProvidersFailed("llm", ["down"])
     monkeypatch.setattr(understand.llm, "chat", chat)
+    monkeypatch.setattr(understand.config, "UNDERSTAND_TIMEOUT", None)  # בלי בקשת הגיבוי - לא תלוי בסדר הבדיקות
     understand.try_understand("שאלה")                                      # המודלים החזקים
     with pytest.raises(fallback.AllProvidersFailed):
         understand.understand("שאלה", models=[understand.config.UNDERSTAND_HEDGE])  # בקשת הגיבוי
@@ -1314,6 +1347,8 @@ def hedge_world(monkeypatch, plan: dict):
     from phoenix.understand import Understanding
     monkeypatch.setattr(config, "UNDERSTAND_HEDGE_AFTER", 0.3)
     monkeypatch.setattr(config, "UNDERSTAND_TIMEOUT", 8.0)  # כמו בצ'אט (בדיקה אחרת יכולה להפעיל את config.patient)
+    # מודל הגיבוי מחוץ ל-Google - רק כשהתוכנית כוללת אותו (הבדיקות הישנות בודקות את כלל 3.8/3.6 לבדו)
+    monkeypatch.setattr(config, "UNDERSTAND_BACKUP", next((m for m in plan if ":" in m), ""))
     asked = []
 
     def fake(question, history=(), models=None):
@@ -1331,6 +1366,17 @@ def test_understanding_from_the_strong_model_when_it_answers_in_time(monkeypatch
     from phoenix import understand
     asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, "3.8"), "gemini-3.6-flash": (0.0, "3.6")})
     assert understand.try_understand("שאלה").llm == "3.8" and asked == ["gemini-3.8-flash"]  # בלי בקשה שנייה
+
+
+def test_understanding_backup_outside_google_answers_when_all_of_google_hangs(monkeypatch):
+    """21/10: 3.8 ו-3.6 תקועים (Google) - Cohere, שהתחיל יחד עם בקשת הגיבוי, עונה, ולא כללי הקוד."""
+    from phoenix import understand
+    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (5.0, "3.8"), "gemini-3.6-flash": (5.0, "3.6"),
+                                      "cohere:command-a-03-2025": (0.1, "cohere")})
+    start = time.perf_counter()
+    assert understand.try_understand("שאלה").llm == "cohere"
+    assert asked == ["gemini-3.8-flash", "gemini-3.6-flash", "cohere:command-a-03-2025"]
+    assert time.perf_counter() - start < 1.5
 
 
 def test_understanding_hedges_to_3_6_when_the_strong_model_hangs(monkeypatch):

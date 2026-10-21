@@ -84,8 +84,9 @@ def pin_models(understand: str | None, answer: str | None) -> dict[str, list[str
     התיקון ולניסוח מחדש). בכל המפתחות של המודל לפי הסדר, ובלי גיבוי למודל אחר: נגמרה המכסה בכל המפתחות - 3 כישלונות
     ברצף והריצה נעצרת. השופט לא מושפע (מזוהה לפי ההוראות שלו). תשובות - בלי מטמון (יש בו תשובות של מודלים אחרים);
     הבנת השאלה - מותר מהמטמון: אותו סיווג, וכך השוואה בין מודלי תשובה לא שורפת פעמיים את מכסת ההבנה."""
-    def keys_of(model: str) -> list[str]:
-        found = [p.name for p in llm.PROVIDERS if p.group == f"gemini:{model}" and p.enabled]
+    def keys_of(model: str) -> list[str]:  # "cohere:command-a-03-2025" - ספק שאינו Gemini, בשמו המלא
+        found = [p.name for p in llm.PROVIDERS if (p.name == model if model.startswith(tuple(f"{s}:" for s in (
+            "cohere", "groq", "openrouter"))) else p.group == f"gemini:{model}") and p.enabled]
         if not found:
             sys.exit(f"{model}: אין מודל Gemini כזה בשרשרת (config.LLM_CHAIN), או שאין לו מפתח")
         return found

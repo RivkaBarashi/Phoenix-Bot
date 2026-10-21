@@ -51,6 +51,9 @@ API_KEYS = {
     "voyage": os.getenv("VOYAGE_API_KEY", ""),
     "firecrawl": os.getenv("FIRECRAWL_API_KEY", ""),
 }
+# Cohere כמודל שפה (גיבוי מחוץ ל-Google): חשבון Trial נפרד ב-COHERE_CHAT_API_KEY, כדי שהתשובות לא יגמרו את המכסה
+# החודשית של ה-Rerank (1,000 לחשבון). בלי - אותו מפתח של ה-Rerank (מכסה משותפת, נספרת ב-Upstash).
+COHERE_CHAT_KEY = os.getenv("COHERE_CHAT_API_KEY", "").strip() or API_KEYS["cohere"]
 # מאגר מפתחות Gemini: כל מפתח מחשבון ומפרויקט נפרד, ולכן עם מכסה יומית משלו לכל מודל.
 # המספר הוא המספר בשם המשתנה (GEMINI_API_KEY = 1, GEMINI_API_KEY_2 = 2 ...) - כך הוא מופיע בדוחות, בלי הערך.
 GEMINI_KEYS: list[tuple[int, str]] = [
@@ -75,8 +78,14 @@ LLM_CHAIN = [
     # OpenRouter: 50 בקשות ביום לכל המודלים החינמיים יחד
     ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
     ("openrouter", "google/gemma-4-31b-it:free"),
-    # בלי Cohere כמודל שפה: הוא חולק את מכסת ה-Trial (1,000 בחודש) עם ה-Rerank, ואם היא נגמרת - הסף נכבה
 ]
+# מודל הגיבוי מחוץ ל-Google (21/10: gemini-3.8-flash החזיר 504 בכל 20 המפתחות, ו-38/81 שאלות בריצה הסופית נשארו בלי
+# תשובה). מקבל את ההקשר המלא (5 קטעים) ואת אותן בדיקות. בצ'אט הוא המתחרה השני במירוץ התשובה (מול 3.6) ונכנס לגיבוי
+# של הבנת השאלה; Google לא עונה - הוא עונה. נמדד 21/10 על פרומפט התשובה האמיתי: command-a-03-2025 - 10.6 ש',
+# command-a-plus - 9.9 ש', command-r-plus - 46 ש'. Groq לא מתאים (8K טוקנים לדקה, ההקשר ~11K). ריק - בלי גיבוי.
+BACKUP_LLM = os.getenv("BACKUP_LLM", "cohere:command-a-03-2025").strip()
+if BACKUP_LLM:
+    LLM_CHAIN.append(tuple(BACKUP_LLM.split(":", 1)))
 
 # שלב הבנת השאלה (understand.py): המודל הכי איכותי שיש לנו קודם (Pro לא זמין בחינמי), ואחריו השרשרת הרגילה
 UNDERSTAND_TIMEOUT: float | None = float(os.getenv("UNDERSTAND_TIMEOUT", "8"))  # בצ'אט; הבדיקות - בלי מגבלה
@@ -86,6 +95,8 @@ UNDERSTAND_LLMS = [m.strip() for m in os.getenv("UNDERSTAND_LLMS", "gemini-3.8-f
 # שניות, 3.6 - 2.7 שניות. בלי הגיבוי כל שאלה חיכתה 8 שניות ועברה לכללי הקוד. ריק - בלי גיבוי.
 UNDERSTAND_HEDGE = os.getenv("UNDERSTAND_HEDGE", "gemini-3.6-flash").strip()
 UNDERSTAND_HEDGE_AFTER = float(os.getenv("UNDERSTAND_HEDGE_AFTER", "3"))
+# יחד עם בקשת הגיבוי - גם למודל שמחוץ ל-Google (BACKUP_LLM), כך ש-Google שלא עונה לא משאיר את השאלה לכללי הקוד
+UNDERSTAND_BACKUP = BACKUP_LLM
 
 # אמבדינגים: לכל ספק אינדקס משלו (וקטורים של מודלים שונים לא ניתנים להשוואה).
 EMBED_CHAIN = [
@@ -137,6 +148,7 @@ QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
 # 20 השניות הן מגבלה קשיחה. בצ'אט כל שאלה נשלחת במקביל לשני מודלי Flash חזקים (RACE_LLMS, כל אחד במפתח אחר),
 # והתשובה הראשונה שעוברת את כל הבדיקות מוצגת - מודל עמוס או איטי לא מעכב את התשובה. שורף כפול מכסה בשלב
 # התשובה. מודל מהזוג לא זמין - הבא בתור מ-LLM_CHAIN. הבדיקות (eval) תמיד מודל אחד.
+# 21/10: המתחרה השני הוא BACKUP_LLM (חברה אחרת), ואחריו באותו צד מודל ה-Gemini השני - Google תקוע לא תוקע את התשובה.
 PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true", "yes", "on")
 RACE_LLMS = [m.strip() for m in os.getenv("RACE_LLMS", "gemini-3.6-flash,gemini-3.8-flash").split(",") if m.strip()]
 # בצ'אט: החיפוש על השאלה כמו שנכתבה מתחיל במקביל להבנת השאלה. ניסוח עצמאי שונה מהותית (פחות מ-70% מילים

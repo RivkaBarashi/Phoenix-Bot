@@ -600,7 +600,8 @@ def _user_message(question: str, standalone: str, history: list[dict], hits: lis
 
 def _ask_model(question: str, standalone: str, history: list[dict], hits: list[Hit],
                on_stage=None) -> llm.ChatResult:
-    """קודם Gemini עם 5 קטעים מלאים; אם אף מודל של Gemini לא זמין - הגיבויים, עם 3 קטעים מקוצרים."""
+    """קודם Gemini עם 5 קטעים מלאים; אם אף מודל של Gemini לא זמין - מודל הגיבוי מחוץ ל-Google (config.BACKUP_LLM)
+    עם אותם 5 קטעים מלאים; ואחריו (אם הוגדרו) הגיבויים החלשים, עם 3 קטעים מקוצרים."""
     def ask(context: list[Hit], providers: list[str]) -> llm.ChatResult:
         messages = [{"role": "user", "content": _user_message(question, standalone, history, context)}]
         request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=providers,
@@ -611,6 +612,12 @@ def _ask_model(question: str, standalone: str, history: list[dict], hits: list[H
     try:
         return ask(hits, FULL_CONTEXT_LLMS)
     except AllProvidersFailed:
+        if config.BACKUP_LLM:
+            try:
+                return ask(hits, [config.BACKUP_LLM.split(":")[0]])
+            except AllProvidersFailed:
+                if not COMPACT_LLMS:
+                    raise
         if not COMPACT_LLMS:  # בלי גיבויים - הודעת התקלה הקיימת (respond)
             raise
         compact = [replace(h, text=focus(h.text, standalone, COMPACT_CHARS)) for h in hits[:COMPACT_CHUNKS]]

@@ -149,11 +149,14 @@ def _openai_compatible(provider, model):
 
 
 def _cohere(model):
-    def call(messages, system, temperature, json_mode=False, timeout=None):  # JSON: לפי ההוראות בפרומפט
+    def call(messages, system, temperature, json_mode=False, timeout=None):
+        from . import store  # כאן ולא למעלה: store לא נדרש לשאר הספקים
+        store.count_call("cohere_chat" if config.COHERE_CHAT_KEY != config.API_KEYS["cohere"] else "cohere")
         r = httpx.post(
             "https://api.cohere.com/v2/chat",
-            headers={"Authorization": f"Bearer {config.API_KEYS['cohere']}"},
-            json={"model": model, "temperature": temperature, "messages": _with_system(messages, system)},
+            headers={"Authorization": f"Bearer {config.COHERE_CHAT_KEY}"},
+            json={"model": model, "temperature": temperature, "messages": _with_system(messages, system)}
+            | ({"response_format": {"type": "json_object"}} if json_mode else {}),
             timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
@@ -181,7 +184,8 @@ def _providers() -> list[Provider]:
             providers += [Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
                           for n, _ in config.GEMINI_KEYS]
         else:
-            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(config.API_KEYS[p])))
+            key = config.COHERE_CHAT_KEY if p == "cohere" else config.API_KEYS[p]
+            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key)))
     return providers
 
 
@@ -230,7 +234,22 @@ def race_pair(models: list[str] | None = None, service: str = "gemini") -> list[
     """שני מודלים שונים שאליהם נשלחת אותה שאלה במקביל: לכל אחד - כל המפתחות שלו לפי הסדר, ובמודל השני
     מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". רק מודל אחד זמין (השאר נחים בגלל עומס) - אותו
     מודל בשני מפתחות שונים במקביל, כך ש-503 בודד או תשובה איטית במפתח אחד לא מעכבים. אין אף מפתח פנוי שני - רשימה ריקה.
-    models: המודלים המועדפים, לפי הסדר (config.RACE_LLMS); מודל מהם לא זמין - הבא בתור מהשרשרת."""
+    models: המודלים המועדפים, לפי הסדר (config.RACE_LLMS); מודל מהם לא זמין - הבא בתור מהשרשרת.
+    config.BACKUP_LLM (חברה אחרת, 21/10): הוא פותח את הצד השני, ואחריו באותו צד מה שהיה שם בלעדיו - Google תקוע לא
+    תוקע את התשובה, והגיבוי שנכשל מהר (429, תקלה) ממשיך ל-Gemini. אין אף Gemini פנוי - רשימה ריקה (השרשרת הרגילה)."""
+    pair = _gemini_pair(models, service)
+    backup = next((p for p in PROVIDERS if p.name == config.BACKUP_LLM and p.enabled and not is_resting(p)), None)
+    if not backup:
+        return pair
+    first = [p.name for p in PROVIDERS if p.name.startswith(service + ":") and p.enabled and not is_resting(p)]
+    if not first:
+        return []
+    if not pair:  # מפתח Gemini אחד פנוי: הוא מול הגיבוי
+        return [first, [backup.name]]
+    return [pair[0], [backup.name] + pair[1]]
+
+
+def _gemini_pair(models: list[str] | None, service: str) -> list[list[str]]:
     groups: dict[str, list[Provider]] = {}
     for p in PROVIDERS:
         if p.name.startswith(service + ":") and p.enabled and not is_resting(p):

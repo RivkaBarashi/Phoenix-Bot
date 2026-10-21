@@ -142,8 +142,9 @@ def _message(question: str, history: list[dict]) -> str:
 def understand(question: str, history: list[dict] = (), models: list[str] | None = None) -> Understanding:
     """הבנת השאלה - רק במודלים החזקים (config.UNDERSTAND_LLMS לפי הסדר, בכל המפתחות). כולם לא זמינים - חריגה,
     והקוד עובר לכללים (שנבדקו על כל קובץ השאלות), ולא למודל גיבוי חלש: איכות לפני מהירות.
-    models: רק המודלים האלה (בקשת הגיבוי בצ'אט - _hedged)."""
-    names = [p.name for name in models or config.UNDERSTAND_LLMS for p in llm.PROVIDERS if p.group == f"gemini:{name}"]
+    models: רק המודלים האלה (בקשת הגיבוי בצ'אט - _hedged). שם עם ספק ("cohere:command-a-03-2025") - הספק הזה בלבד."""
+    names = [p.name for name in models or config.UNDERSTAND_LLMS for p in llm.PROVIDERS
+             if (p.name == name if ":" in name else p.group == f"gemini:{name}")]
     hedge = models == [config.UNDERSTAND_HEDGE]  # בקשת הגיבוי בצ'אט (3.6) - הגדרת חשיבה משלה
     low = config.UNDERSTAND_HEDGE_LOW_THINKING if hedge else config.UNDERSTAND_LOW_THINKING
     reply = llm.chat([{"role": "user", "content": _message(question, list(history))}], system=UNDERSTAND_PROMPT,
@@ -199,13 +200,22 @@ def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
     def start(models):  # עם הזמן של השאלה (contextvars לא עוברים ל-thread חדש לבד)
         threading.Thread(target=contextvars.copy_context().run, args=(worker, models), daemon=True).start()
 
+    # בקשת הגיבוי: 3.6, ויחד איתו המודל שמחוץ ל-Google (21/10: כש-Google תקוע, גם 3.6 לא עונה)
+    backups = [[config.UNDERSTAND_HEDGE]] + ([[config.UNDERSTAND_BACKUP]] if config.UNDERSTAND_BACKUP else [])
+
     with time_budget(limit):
         start(first)
         running, hedged, errors = 1, False, []
+
+        def hedge():
+            nonlocal running, hedged
+            for models in backups:
+                start(models)
+            running, hedged = running + len(backups), True
+
         delay = 0.0 if strong_is_slow() else config.UNDERSTAND_HEDGE_AFTER
         if delay <= 0:  # המודל החזק איטי: הגיבוי מתחיל יחד איתו, והראשון שתקין קובע
-            start([config.UNDERSTAND_HEDGE])
-            running, hedged = running + 1, True
+            hedge()
         hedge_at = time.perf_counter() + delay
         while running:
             left = time_left() or 0.0
@@ -213,9 +223,8 @@ def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
             try:
                 got, exc = results.get(timeout=max(wait, 0.01))
             except queue.Empty:
-                if not hedged and (time_left() or 0) > 0.5:  # החזק לא ענה בזמן - גם מודל הגיבוי
-                    start([config.UNDERSTAND_HEDGE])
-                    running, hedged = running + 1, True
+                if not hedged and (time_left() or 0) > 0.5:  # החזק לא ענה בזמן - גם מודלי הגיבוי
+                    hedge()
                     continue
                 raise OutOfTime("understand", errors + ["no understanding in time"]) from None
             running -= 1
@@ -223,8 +232,7 @@ def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
                 return got
             errors.append(str(exc)[:150])
             if not hedged:  # החזק נכשל מהר (למשל 503) - הגיבוי מיד, בלי לחכות
-                start([config.UNDERSTAND_HEDGE])
-                running, hedged = running + 1, True
+                hedge()
     raise AllProvidersFailed("understand", errors)
 
 
