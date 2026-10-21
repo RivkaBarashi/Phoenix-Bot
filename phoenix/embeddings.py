@@ -88,7 +88,7 @@ def embed_query(text: str, providers: list[str] | None = None) -> tuple[list[flo
     """וקטור לשאלה מהספק הראשון שעובד. providers: שמות ספקים לפי סדר עדיפות (ברירת מחדל: כולם)."""
     order = providers or [p.name for p in PROVIDERS]
     providers = sorted((p for p in PROVIDERS if p.name in order), key=lambda p: order.index(p.name))
-    vectors, provider = run_chain("embed_query", providers, [text], True, timeout=config.QUERY_TIMEOUT,
+    vectors, provider = run_chain("embed_query", providers, [text], True, timeout=config.QUERY_TIMEOUT,  # Gemini: >= 10 ש'
                                   retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
-                                  deadline=config.QUERY_TIMEOUT)
+                                  deadline=config.EMBED_QUERY_TIMEOUT)
     return vectors[0], provider

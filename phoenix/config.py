@@ -85,6 +85,10 @@ LLM_CHAIN = [
 # command-a-plus - 9.9 ש', command-r-plus - 46 ש'; שעה אחר כך command-a - 37-43 ש' (Trial בעומס) ו-command-a-plus - 8.6 ש'.
 # לכן command-a-plus. Groq לא מתאים (8K טוקנים לדקה, ההקשר ~11K). ריק - בלי גיבוי.
 BACKUP_LLM = os.getenv("BACKUP_LLM", "cohere:command-a-plus-05-2026").strip()
+# command-a-plus "חושב" לפני התשובה: נמדד 21/10 - 4,082 טוקני חשיבה מול ~470 של התשובה, 12-25 ש' ולפעמים יותר מ-90.
+# עם תקציב חשיבה של 300 טוקנים - 4-5 ש' ברוב השאלות, אותן תשובות. "disabled" שובר את ה-JSON (נבדק).
+COHERE_THINKING_BUDGET = int(os.getenv("COHERE_THINKING_BUDGET", "300"))
+COHERE_THINKING_MODELS = ("command-a-plus", "command-a-reasoning")
 if BACKUP_LLM:
     LLM_CHAIN.append(tuple(BACKUP_LLM.split(":", 1)))
 
@@ -143,6 +147,10 @@ HTTP_TIMEOUT = 30  # ספק שלא עונה תוך 30 שניות - עוברים 
 # ועל 429 או תקלה עוברים מיד לספק הבא, בלי לחכות. (Gemini לא מקבל פחות מ-10 שניות.)
 # סקריפטי הבדיקות קוראים ל-patient() ומחכים יותר, כדי לא לעבור לגיבוי בגלל עומס רגעי.
 QUERY_TIMEOUT = 15
+# הווקטור לשאלה (Gemini embeddings) - בדרך כלל 0.2-1 ש' (בשאלה הראשונה אחרי הפעלה - עד ~4.4). נבדק 21/10 עם Google תקוע:
+# הוא חיכה 16 ש' לפני המעבר לחיפוש מילות מפתח בלבד, ולא נשאר זמן לתשובה. בצ'אט - עד EMBED_QUERY_TIMEOUT שניות (שעון
+# קיר; ה-timeout של הבקשה נשאר QUERY_TIMEOUT, כי Gemini לא מקבל פחות מ-10), ואחריו מילות מפתח בלבד.
+EMBED_QUERY_TIMEOUT = float(os.getenv("EMBED_QUERY_TIMEOUT", "6"))
 QUERY_RETRIES = 0
 QUERY_MAX_WAIT = 0.0
 # זמן כולל לשאלה אחת בצ'אט - כל השלבים יחד (השלמת שאלת המשך, חיפוש, Rerank, מודל). כל ניסיון אצל ספק מקבל
@@ -189,8 +197,9 @@ def legacy_mode(on: bool):
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
     """לסקריפטים בלבד (eval_*.py): המתנה ארוכה יותר לכל ספק, ועל עומס (503) - ניסיון חוזר באותו מודל במקום
     לדלג עליו 5 דקות (זיכרון העומס הוא לצ'אט - fallback.OVERLOAD_MEMORY)."""
-    global QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT
+    global QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT, EMBED_QUERY_TIMEOUT
     QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT = timeout, retries, max_wait
+    EMBED_QUERY_TIMEOUT = timeout
     from . import fallback  # כאן ולא למעלה: fallback לא תלוי ב-config, וזה המקום היחיד שמשנה אותו
     fallback.OVERLOAD_MEMORY = False
     global UNDERSTAND_TIMEOUT

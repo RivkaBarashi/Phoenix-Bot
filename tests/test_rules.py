@@ -676,6 +676,15 @@ def test_race_backup_answers_before_the_time_runs_out_when_gemini_hangs(monkeypa
     assert a.llm == "cohere:x" and time.perf_counter() - start < 1.4  # לפני סוף הזמן, לא אחריו
 
 
+def test_race_out_of_time_after_a_failure_gives_the_site_sentence_not_a_crash(monkeypatch):
+    """21/10: נגמר הזמן אחרי שצד אחד כבר נכשל - OutOfTime קיבל את אובייקט החריגה במקום טקסט (TypeError, הבוט קרס)."""
+    failed = fallback.AllProvidersFailed("llm", ["503"])
+    backup_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (30.0, VALID), "cohere:x": (30.0, VALID)})
+    with fallback.time_budget(0.6):
+        a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert (a.kind, a.reason) == ("answer", "site_quote")
+
+
 def test_race_backup_answer_gets_the_same_checks(monkeypatch):
     """תשובה של Cohere שלא עוברת את הבדיקות לא מוצגת כמאומתת - אותן בדיקות בדיוק, בלי הקלות."""
     failed = fallback.AllProvidersFailed("llm", ["503"])
@@ -1770,3 +1779,37 @@ def test_the_chat_links_open_on_the_quote_and_the_dev_line_keeps_the_clean_url(m
     a = A.Answer("תשובה\n\nהמקור: " + page, "answer", "verified", [page], 0.9, "cohere",
                  links={page: page + "#:~:text=abc"})
     assert app.message_from_answer(a)["sources"][0][1] == page + "#:~:text=abc"
+
+
+def test_the_backup_model_does_not_rest_after_a_timeout():
+    """21/10: Cohere איטי פעם אחת (timeout) נח 5 דקות, והשאלות הבאות קיבלו את הציטוט מהאתר בלי לנסות אותו."""
+    from phoenix.fallback import Provider
+
+    def slow(*args, **kwargs):
+        raise TimeoutError("no answer within 15s")
+    backup, other = Provider("cohere:x", slow, overload_rest=0), Provider("groq:y", slow)
+    for p in (backup, other):
+        with pytest.raises(fallback.AllProvidersFailed):
+            fallback.run_chain("llm", [p], retries=0)
+    assert not fallback.is_resting(backup) and fallback.is_resting(other)
+    fallback._resting_until.pop("groq:y", None)
+
+
+def test_cohere_thinking_budget_is_sent_for_the_plus_model(monkeypatch):
+    """21/10: command-a-plus חשב 4,082 טוקנים (12-25 ש'); עם תקציב 300 - 4-5 ש'."""
+    from phoenix import config
+    sent = []
+
+    class Reply:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": [{"type": "thinking", "thinking": "..."}, {"type": "text", "text": "{}"}]},
+                    "usage": {}}
+    monkeypatch.setattr(config, "COHERE_CHAT_KEY", "chat-key")
+    monkeypatch.setattr(llm.httpx, "post", lambda url, headers, json, **kw: sent.append(json) or Reply())
+    assert llm._cohere("command-a-plus-05-2026")([{"role": "user", "content": "x"}], "", 0) == "{}"
+    assert sent[0]["thinking"] == {"type": "enabled", "token_budget": config.COHERE_THINKING_BUDGET}
+    llm._cohere("command-a-03-2025")([{"role": "user", "content": "x"}], "", 0)
+    assert "thinking" not in sent[1]

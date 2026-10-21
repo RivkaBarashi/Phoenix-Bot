@@ -115,6 +115,7 @@ class Provider:
     enabled: bool = True      # False כשאין מפתח ב-.env
     group: str = ""           # המודל בכל המפתחות ("gemini:gemini-3.8-flash"): עומס (503/504) מנוחה לכולם
     key: str = ""             # המפתח בכל המודלים ("gemini#2"): מפתח לא תקין - מנוחה לכולם
+    overload_rest: float | None = None  # עומס/timeout: כמה שניות לנוח במקום OVERLOAD_REST (0 - בלי מנוחה; מודל הגיבוי)
 
 
 def is_resting(p: Provider) -> bool:
@@ -252,6 +253,8 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     continue
                 if cooldown and kind in COOLDOWN_SECONDS:
                     rest = PATIENT_OVERLOAD_REST if overload and not OVERLOAD_MEMORY else COOLDOWN_SECONDS[kind]
+                    if overload and p.overload_rest is not None:  # מודל הגיבוי: תשובה איטית אחת לא מוציאה אותו מהמשחק
+                        rest = p.overload_rest
                     reset = retry_after(exc)
                     if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
                         rest = min(max(reset, 1), 86400)
@@ -265,7 +268,8 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                             target, rest = p.name, FAST_OVERLOAD_REST  # אותו מודל - מיד במפתח הבא
                         else:
                             rest = FAST_OVERLOAD_GROUP_REST  # עומס על המודל: נח בכל המפתחות
-                    _resting_until[target] = time.time() + rest
+                    if rest > 0:
+                        _resting_until[target] = time.time() + rest
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])
                 break

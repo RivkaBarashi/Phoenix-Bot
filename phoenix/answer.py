@@ -761,7 +761,7 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
                             or (left is not None and left <= BACKUP_WAIT_MARGIN)):
             return accept(held_backup)
         if left is not None and left <= 0.05:
-            raise OutOfTime("llm", errors + [f"parallel ({racers}): out of time"])
+            raise OutOfTime("llm", [str(e)[:150] for e in errors] + [f"parallel ({racers}): out of time"])
         waits = [left] if left is not None else []
         if backup and not backup_started:  # בודקים שוב כל 0.1 ש' אם Google החזיר תקלה
             waits.append(min(0.1, max(began + config.BACKUP_AFTER_SECONDS - now, 0.01)))

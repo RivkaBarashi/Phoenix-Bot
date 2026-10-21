@@ -156,7 +156,9 @@ def _cohere(model):
             "https://api.cohere.com/v2/chat",
             headers={"Authorization": f"Bearer {config.COHERE_CHAT_KEY}"},
             json={"model": model, "temperature": temperature, "messages": _with_system(messages, system)}
-            | ({"response_format": {"type": "json_object"}} if json_mode else {}),
+            | ({"response_format": {"type": "json_object"}} if json_mode else {})
+            | ({"thinking": {"type": "enabled", "token_budget": config.COHERE_THINKING_BUDGET}}
+               if model.startswith(config.COHERE_THINKING_MODELS) else {}),
             timeout=timeout or config.HTTP_TIMEOUT,
         )
         r.raise_for_status()
@@ -185,7 +187,9 @@ def _providers() -> list[Provider]:
                           for n, _ in config.GEMINI_KEYS]
         else:
             key = config.COHERE_CHAT_KEY if p == "cohere" else config.API_KEYS[p]
-            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key)))
+            # מודל הגיבוי (Cohere): timeout או 5xx לא מוציאים אותו ל-5 דקות - הוא רשת הביטחון כש-Google לא עונה (21/10)
+            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key),
+                                      overload_rest=0 if f"{p}:{m}" == config.BACKUP_LLM else None))
     return providers
 
 
