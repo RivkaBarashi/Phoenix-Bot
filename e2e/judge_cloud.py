@@ -28,6 +28,8 @@ REFUSED = ("not_on_site", "off_topic", "unverified")
 def verdict(row: dict, got: dict) -> tuple[str, str]:
     kind, text = got["kind"], got["answer"]
     t = row["type"]
+    if kind in ("error", "exception"):  # תקלה (אין מודל, נגמר הזמן) - תקלה, לא "המציא" ולא שיפוט תוכן (21/10)
+        return "error", got.get("reason", "")
     if t == "answerable":
         if kind != "answer":
             return {"not_on_site": "refused", "off_topic": "refused"}.get(kind, kind), ""
@@ -83,6 +85,8 @@ def main():
                      ("clarify", "שאלות הבהרה")):
         print(f"   {label}: {sum(r['verdict'] == 'correct' for r in of(t))}/{len(of(t))}")
     print(f"   injection: נחסמו {sum(r['verdict'] == 'blocked' for r in of('injection'))}/{len(of('injection'))}")
+    invented = [r["n"] for r in of("not_on_site") if r["verdict"] == "invented"]
+    print(f"   המציא (שאלה בלי תשובה באתר שקיבלה תשובה): {len(invented)}" + (f" ({', '.join(map(str, invented))})" if invented else ""))
     print(f"   תקלות: {sum(r['kind'] in ('error', 'exception') for r in out)}")
     timed = [r for r in out if r["kind"] not in ("greeting", "too_long", "exception")]
     print("\n=== זמנים בענן (שניות): ממוצע | p90 | מקסימום ===")

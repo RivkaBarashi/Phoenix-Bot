@@ -1708,3 +1708,15 @@ def test_no_model_answer_in_time_gives_the_sentence_from_the_site_not_a_wait_mes
     assert "«תשובה על התביעה תינתן תוך 30 יום ממועד קבלת כל המסמכים.»" in a.text
     assert A.TIMEOUT_TEXT not in a.text and A.ERROR_TEXT not in a.text
 
+
+
+@pytest.mark.parametrize("kind, expected", [("error", "error"), ("exception", "error"), ("not_on_site", "correct"),
+                                            ("answer", "invented")])
+def test_cloud_judge_counts_an_error_as_an_error_not_invented(kind, expected):
+    """21/10: תקלה בשאלת "אין תשובה באתר" נספרה כ-invented בריצה של הבוקר - תקלה היא תקלה."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("judge_cloud", A.config.ROOT / "e2e" / "judge_cloud.py")
+    judge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(judge)
+    row = {"type": "not_on_site", "question": "שאלה", "expected_answer": ""}
+    assert judge.verdict(row, {"kind": kind, "answer": "טקסט", "reason": "timeout"})[0] == expected
