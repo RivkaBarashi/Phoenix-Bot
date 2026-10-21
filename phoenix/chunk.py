@@ -45,6 +45,11 @@ DROP_SECTIONS = {"כל הדרכים לדבר איתנו", "עוד בנושא", "
 BOILERPLATE_MIN_PAGES = 14
 SHORT_LINE_WORDS, SHORT_LINE_MIN_PAGES = 4, 6
 REPEATED_SECTION_MIN_PAGES = 5
+PDF_HEADER_MIN_PAGES = 3  # שורה שחוזרת ב-3 עמודים ומעלה של אותו מסמך PDF - כותרת עליונה/תחתונה
+
+
+def is_pdf(url: str) -> bool:
+    return ".pdf#page=" in url
 MIN_PAGE_WORDS = 15
 
 MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
@@ -267,7 +272,13 @@ def main():
     pages.sort(key=lambda p: len(p["url"]))  # בכפילויות - הכתובת הקצרה נשמרת
 
     pre = {p["url"]: pre_clean(p["text"]) for p in pages}
-    df = collections.Counter(line for lines in pre.values() for line in set(lines))
+    # שורות תבנית - רק לפי עמודי האתר. עמוד PDF (תביעות, תקנון): עשר טבלאות המועדים כמעט זהות, ושורה כמו "30 ימים"
+    # חוזרת בהן - אבל היא העובדה עצמה, לא תבנית. ב-PDF נמחקות רק שורות שחוזרות בהרבה עמודים של אותו מסמך (כותרות).
+    df = collections.Counter(line for url, lines in pre.items() if not is_pdf(url) for line in set(lines))
+    doc_df = collections.defaultdict(collections.Counter)
+    for url, lines in pre.items():
+        if is_pdf(url):
+            doc_df[url.split("#")[0]].update(set(lines))
     contact = {p["url"]: "contact" in categories(p["url"]) for p in pages}
 
     removed, title_repeats = collections.Counter(), 0
@@ -276,9 +287,14 @@ def main():
         url, title = p["url"], clean_title(p["title"])
         keep = []
         for line in pre[url]:
-            if is_boilerplate(line, df[line], contact[url]):
+            if is_pdf(url):
+                if doc_df[url.split("#")[0]][line] >= PDF_HEADER_MIN_PAGES:
+                    removed[line] += 1
+                    continue
+            elif is_boilerplate(line, df[line], contact[url]):
                 removed[line] += 1
-            elif repeats_title(line, title):
+                continue
+            if repeats_title(line, title):
                 title_repeats += 1
             else:
                 keep.append(line)
@@ -292,14 +308,14 @@ def main():
             cleaned[url] = keep
 
     sections = {url: split_sections(lines) for url, lines in cleaned.items()}
-    section_pages = collections.Counter(
-        sig for secs in sections.values() for sig in {"\n".join(sec.lines) for sec in secs})
+    section_pages = collections.Counter(  # סעיפים חוזרים - רק בעמודי האתר (ב-PDF הטבלאות הדומות הן התוכן)
+        sig for url, secs in sections.items() if not is_pdf(url) for sig in {"\n".join(sec.lines) for sec in secs})
     repeated = collections.defaultdict(list)  # סעיף -> כל העמודים שבהם הופיע
     for url in sections:
         keep = []
         for sec in sections[url]:
             sig = "\n".join(sec.lines)
-            if section_pages[sig] >= REPEATED_SECTION_MIN_PAGES:
+            if not is_pdf(url) and section_pages[sig] >= REPEATED_SECTION_MIN_PAGES:
                 repeated[sig].append(url)
             else:
                 keep.append(sec)
