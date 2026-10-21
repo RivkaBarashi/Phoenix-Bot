@@ -96,8 +96,10 @@ UNDERSTAND_LLMS = [m.strip() for m in os.getenv("UNDERSTAND_LLMS", "gemini-3.8-f
 # שניות, 3.6 - 2.7 שניות. בלי הגיבוי כל שאלה חיכתה 8 שניות ועברה לכללי הקוד. ריק - בלי גיבוי.
 UNDERSTAND_HEDGE = os.getenv("UNDERSTAND_HEDGE", "gemini-3.6-flash").strip()
 UNDERSTAND_HEDGE_AFTER = float(os.getenv("UNDERSTAND_HEDGE_AFTER", "3"))
-# יחד עם בקשת הגיבוי - גם למודל שמחוץ ל-Google (BACKUP_LLM), כך ש-Google שלא עונה לא משאיר את השאלה לכללי הקוד
+# יחד עם בקשת הגיבוי - גם למודל שמחוץ ל-Google (BACKUP_LLM), כך ש-Google שלא עונה לא משאיר את השאלה לכללי הקוד.
+# הכלל (21/10): ההבנה שלו נבחרת רק אם 3.8 ו-3.6 נכשלו, או ש-3.6 לא ענה תוך UNDERSTAND_BACKUP_GRACE שניות מתחילת הגיבוי.
 UNDERSTAND_BACKUP = BACKUP_LLM
+UNDERSTAND_BACKUP_GRACE = float(os.getenv("UNDERSTAND_BACKUP_GRACE", "3"))
 
 # אמבדינגים: לכל ספק אינדקס משלו (וקטורים של מודלים שונים לא ניתנים להשוואה).
 EMBED_CHAIN = [
@@ -149,7 +151,11 @@ QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
 # 20 השניות הן מגבלה קשיחה. בצ'אט כל שאלה נשלחת במקביל לשני מודלי Flash חזקים (RACE_LLMS, כל אחד במפתח אחר),
 # והתשובה הראשונה שעוברת את כל הבדיקות מוצגת - מודל עמוס או איטי לא מעכב את התשובה. שורף כפול מכסה בשלב
 # התשובה. מודל מהזוג לא זמין - הבא בתור מ-LLM_CHAIN. הבדיקות (eval) תמיד מודל אחד.
-# 21/10: המתחרה השני הוא BACKUP_LLM (חברה אחרת), ואחריו באותו צד מודל ה-Gemini השני - Google תקוע לא תוקע את התשובה.
+# כלל המעבר ל-BACKUP_LLM בשלב התשובה (החלטת הבעלים, 21/10): Google החזיר תקלה (503, מכסה, 504/timeout) או שאין מפתח
+# Gemini פנוי - הגיבוי מתחיל מיד; Google רק איטי - הגיבוי מתחיל במקביל אחרי BACKUP_AFTER_SECONDS. Gemini קודם: תשובה תקינה
+# שלו עד GEMINI_PREFERRED_SECONDS (מתחילת שלב התשובה) - היא מוצגת; אחרי זה - התשובה התקינה הראשונה שיש.
+BACKUP_AFTER_SECONDS = float(os.getenv("BACKUP_AFTER_SECONDS", "3"))
+GEMINI_PREFERRED_SECONDS = float(os.getenv("GEMINI_PREFERRED_SECONDS", "12"))
 PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true", "yes", "on")
 RACE_LLMS = [m.strip() for m in os.getenv("RACE_LLMS", "gemini-3.6-flash,gemini-3.8-flash").split(",") if m.strip()]
 # בצ'אט: החיפוש על השאלה כמו שנכתבה מתחיל במקביל להבנת השאלה. ניסוח עצמאי שונה מהותית (פחות מ-70% מילים

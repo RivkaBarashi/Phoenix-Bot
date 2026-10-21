@@ -207,9 +207,10 @@ def with_deadline(fn: Callable[..., Any], seconds: float, *args, **kwargs):
 
 
 def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, max_wait: float = 10.0,
-              cooldown: bool = True, deadline: float | None = None, **kwargs):
+              cooldown: bool = True, deadline: float | None = None, on_error=None, **kwargs):
     """מחזיר (תוצאה, שם הספק שהצליח). זורק AllProvidersFailed אם כולם נכשלו.
-    deadline: מגבלת זמן לכל ניסיון אצל ספק (בשניות). ספק שלא עונה בזמן - עוברים לבא."""
+    deadline: מגבלת זמן לכל ניסיון אצל ספק (בשניות). ספק שלא עונה בזמן - עוברים לבא.
+    on_error(שם הספק, סוג התקלה): נקרא מיד על כל ניסיון שנכשל, לפני המעבר לספק הבא."""
     errors = []
     fast_overloads: collections.Counter = collections.Counter()  # עומס מהיר לכל מודל, בבקשה הזו
     for p in providers:
@@ -236,6 +237,8 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
             except Exception as exc:
                 FAILED[p.name] += 1
                 kind = classify(exc)
+                if on_error:
+                    on_error(p.name, kind)
                 if isinstance(exc, TimeoutError) and cut:
                     # הניסיון קוצר בגלל הזמן הכולל לשאלה - זו לא אשמת הספק, ולכן הוא לא "נח"
                     errors.append(f"{p.name}: cut short by the question time limit")

@@ -181,18 +181,21 @@ def strong_is_slow() -> bool:
 
 def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
     """בצ'אט: המודלים החזקים (UNDERSTAND_LLMS בלי מודל הגיבוי) קודם. אין תשובה תוך UNDERSTAND_HEDGE_AFTER שניות,
-    או שהם נכשלו מהר - אותה בקשה גם למודל הגיבוי (3.6), והתשובה התקינה הראשונה קובעת. בדרך כלל 3.8 עונה תוך
-    ~2.6 שניות, ואין בקשה שנייה; בעומס - הבנה אמיתית תוך ~6 שניות, במקום 8 שניות המתנה וכללי הקוד."""
+    או שהם נכשלו מהר - אותה בקשה גם למודל הגיבוי (3.6), והתשובה התקינה הראשונה של Gemini קובעת. בדרך כלל 3.8 עונה
+    תוך ~2.6 שניות, ואין בקשה שנייה; בעומס - הבנה אמיתית תוך ~6 שניות, במקום 8 שניות המתנה וכללי הקוד.
+    יחד עם 3.6 מתחיל גם המודל שמחוץ ל-Google (UNDERSTAND_BACKUP, 21/10). ההבנה שלו נבחרת רק אם 3.8 ו-3.6 נכשלו, או ש-Gemini
+    לא ענה תוך UNDERSTAND_BACKUP_GRACE שניות מתחילת בקשת הגיבוי (או עד חצי שנייה לפני סוף הזמן של ההבנה)."""
     first = [m for m in config.UNDERSTAND_LLMS if m != config.UNDERSTAND_HEDGE]
+    backup = config.UNDERSTAND_BACKUP if config.UNDERSTAND_BACKUP and llm.ready(config.UNDERSTAND_BACKUP) else ""
     results: queue.Queue = queue.Queue()
 
     def worker(models):
         began = time.perf_counter()
         try:
-            results.put((understand(question, history, models), None))
+            results.put((models, understand(question, history, models), None))
             ok = True
         except Exception as exc:  # noqa: BLE001 - כשל בצד אחד לא מפיל את השני
-            results.put((None, exc))
+            results.put((models, None, exc))
             ok = False
         if models == first:  # גם אם כבר ויתרנו עליו: כמה זמן לקח למודל החזק (כלל המודל הראשי, למטה)
             _note_strong(time.perf_counter() - began, ok)
@@ -200,39 +203,55 @@ def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
     def start(models):  # עם הזמן של השאלה (contextvars לא עוברים ל-thread חדש לבד)
         threading.Thread(target=contextvars.copy_context().run, args=(worker, models), daemon=True).start()
 
-    # בקשת הגיבוי: 3.6, ויחד איתו המודל שמחוץ ל-Google (21/10: כש-Google תקוע, גם 3.6 לא עונה)
-    backups = [[config.UNDERSTAND_HEDGE]] + ([[config.UNDERSTAND_BACKUP]] if config.UNDERSTAND_BACKUP else [])
-
     with time_budget(limit):
         start(first)
-        running, hedged, errors = 1, False, []
+        gemini_running, backup_running, hedged, hedged_at, held, errors = 1, False, False, 0.0, None, []
 
         def hedge():
-            nonlocal running, hedged
-            for models in backups:
-                start(models)
-            running, hedged = running + len(backups), True
+            nonlocal gemini_running, backup_running, hedged, hedged_at
+            start([config.UNDERSTAND_HEDGE])
+            if backup:
+                start([backup])
+            gemini_running, backup_running = gemini_running + 1, bool(backup)
+            hedged, hedged_at = True, time.perf_counter()
 
         delay = 0.0 if strong_is_slow() else config.UNDERSTAND_HEDGE_AFTER
         if delay <= 0:  # המודל החזק איטי: הגיבוי מתחיל יחד איתו, והראשון שתקין קובע
             hedge()
         hedge_at = time.perf_counter() + delay
-        while running:
-            left = time_left() or 0.0
-            wait = left if hedged else min(left, max(hedge_at - time.perf_counter(), 0.0))
+        while gemini_running or backup_running:
+            now, left = time.perf_counter(), time_left() or 0.0
+            if held and (not gemini_running or now - hedged_at >= config.UNDERSTAND_BACKUP_GRACE or left <= 0.5):
+                return held
+            waits = [left]
+            if not hedged:
+                waits.append(max(hedge_at - now, 0.0))
+            if held:
+                waits += [max(hedged_at + config.UNDERSTAND_BACKUP_GRACE - now, 0.01), max(left - 0.5, 0.01)]
             try:
-                got, exc = results.get(timeout=max(wait, 0.01))
+                models, got, exc = results.get(timeout=max(min(waits), 0.01))
             except queue.Empty:
                 if not hedged and (time_left() or 0) > 0.5:  # החזק לא ענה בזמן - גם מודלי הגיבוי
                     hedge()
                     continue
+                if held or (time_left() or 0) > 0.05:
+                    continue
                 raise OutOfTime("understand", errors + ["no understanding in time"]) from None
-            running -= 1
+            if models == [backup]:
+                backup_running = False
+                if got:
+                    held = got  # מחכים ל-Gemini לפי הכלל (בתחילת הלולאה)
+                else:
+                    errors.append(str(exc)[:150])
+                continue
+            gemini_running -= 1
             if got:
                 return got
             errors.append(str(exc)[:150])
             if not hedged:  # החזק נכשל מהר (למשל 503) - הגיבוי מיד, בלי לחכות
                 hedge()
+        if held:
+            return held
     raise AllProvidersFailed("understand", errors)
 
 

@@ -235,18 +235,18 @@ def race_pair(models: list[str] | None = None, service: str = "gemini") -> list[
     מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". רק מודל אחד זמין (השאר נחים בגלל עומס) - אותו
     מודל בשני מפתחות שונים במקביל, כך ש-503 בודד או תשובה איטית במפתח אחד לא מעכבים. אין אף מפתח פנוי שני - רשימה ריקה.
     models: המודלים המועדפים, לפי הסדר (config.RACE_LLMS); מודל מהם לא זמין - הבא בתור מהשרשרת.
-    config.BACKUP_LLM (חברה אחרת, 21/10): הוא פותח את הצד השני, ואחריו באותו צד מה שהיה שם בלעדיו - Google תקוע לא
-    תוקע את התשובה, והגיבוי שנכשל מהר (429, תקלה) ממשיך ל-Gemini. אין אף Gemini פנוי - רשימה ריקה (השרשרת הרגילה)."""
-    pair = _gemini_pair(models, service)
-    backup = next((p for p in PROVIDERS if p.name == config.BACKUP_LLM and p.enabled and not is_resting(p)), None)
-    if not backup:
-        return pair
-    first = [p.name for p in PROVIDERS if p.name.startswith(service + ":") and p.enabled and not is_resting(p)]
-    if not first:
-        return []
-    if not pair:  # מפתח Gemini אחד פנוי: הוא מול הגיבוי
-        return [first, [backup.name]]
-    return [pair[0], [backup.name] + pair[1]]
+    מודל הגיבוי מחוץ ל-Google (config.BACKUP_LLM) לא כאן - answer._race מפעיל אותו לפי כלל המעבר."""
+    return _gemini_pair(models, service)
+
+
+def free_keys(service: str = "gemini") -> list[str]:
+    """כל הצירופים מפתח+מודל של השירות שלא נחים, לפי סדר השרשרת (צד יחיד במירוץ כשאין זוג)."""
+    return [p.name for p in PROVIDERS if p.name.startswith(service + ":") and p.enabled and not is_resting(p)]
+
+
+def ready(name: str) -> bool:
+    """ספק מסוים (למשל config.BACKUP_LLM) קיים בשרשרת, יש לו מפתח, והוא לא נח."""
+    return any(p.name == name and p.enabled and not is_resting(p) for p in PROVIDERS)
 
 
 def _gemini_pair(models: list[str] | None, service: str) -> list[list[str]]:
@@ -268,7 +268,8 @@ def _gemini_pair(models: list[str] | None, service: str) -> list[list[str]]:
 
 def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_mode: bool = False,
          parse: Callable[[str], Any] | None = None, only: list[str] | None = None,
-         names: list[str] | None = None, cache: bool = True, low_thinking: bool = False) -> ChatResult:
+         names: list[str] | None = None, cache: bool = True, low_thinking: bool = False,
+         on_error: Callable[[str, str], None] | None = None) -> ChatResult:
     """messages: [{"role": "user" | "assistant", "content": "..."}]
 
     json_mode: לבקש JSON (ב-Gemini גם ברמת ה-API; אצל השאר לפי הפרומפט).
@@ -278,6 +279,7 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
     names: רק הספקים האלה, בסדר הזה (בקשה אחת מתוך שתיים במקביל).
     cache: False - בלי לקרוא מהמטמון ובלי לכתוב אליו (בבקשות במקביל רק המנצח נשמר, ב-remember).
     low_thinking: ב-Gemini - רמת החשיבה הנמוכה שהמודל מקבל (config.LOW_THINKING). לשאר הספקים אין משמעות.
+    on_error(ספק, סוג התקלה): נקרא מיד על כל ניסיון שנכשל (503, מכסה, timeout...) - כלל המעבר ל-Cohere בצ'אט.
     """
     key = cache_key(messages, system, temperature, json_mode, only, low_thinking)
     if cache and CACHE_MODE == "on" and (hit := _from_cache(key, parse)):
@@ -304,7 +306,7 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
     # הלקוחה מחכה לתשובה: מודל שלא עונה תוך QUERY_TIMEOUT או חסום - עוברים מיד לבא (config).
     (text, data), provider = run_chain("llm", [checked(p) for p in providers], messages, system, temperature,
                                        retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
-                                       deadline=config.QUERY_TIMEOUT)
+                                       deadline=config.QUERY_TIMEOUT, on_error=on_error)
     if cache and CACHE_MODE != "off":
         _cache_put(key, {"text": text, "provider": provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
     return ChatResult(text, provider, data)

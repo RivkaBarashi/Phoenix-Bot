@@ -644,8 +644,8 @@ def _cited(raw_sources, hits: list[Hit]) -> list[tuple[str, str]]:
 
 
 # תשובה שהבדיקות פסלו (או החליפו בטקסט האישי הקבוע): בבקשות במקביל מחכים לתשובה של המודל השני
-# המירוץ מול מודל הגיבוי (config.BACKUP_LLM): התשובה שלו מוצגת רק אם Gemini לא ענה תשובה תקינה עד כמה שניות לפני סוף
-# הזמן. נבדק 21/10 על 45 שאלות: Cohere לבד - 2 שגויות (Gemini - 0), ולפעמים יותר מ-60 ש'. כש-Google עובד - איכות Gemini.
+# המירוץ מול מודל הגיבוי: כמה שניות לפני סוף הזמן של השאלה תשובה תקינה של הגיבוי מוצגת, גם אם Gemini עוד עובד.
+# נבדק 21/10 על 45 שאלות: Cohere לבד - 2 שגויות (Gemini - 0), ולפעמים יותר מ-60 ש' - לכן Gemini קודם (כלל המעבר ב-config).
 BACKUP_WAIT_MARGIN = 1.5
 REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not_on_site", "empty_answer",
             "leak_guard", "personal_generic")
@@ -653,45 +653,79 @@ REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not
 
 def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], finish,
           on_stage=None, hold=None) -> "Answer | None":
-    """אותה שאלה לשני מודלי Gemini שונים במקביל, כל אחד במפתח אחר. התשובה הראשונה שעוברת את כל הבדיקות
-    מוצגת, והשנייה נזנחת (לא מחכים לה; הבקשה שכבר יצאה עדיין נספרת במכסה). אם הראשונה נפסלה - מחכים
-    לשנייה. None: אין שני מודלים זמינים, או ששניהם נכשלו - ממשיכים בשרשרת הרגילה, בזה אחר זה.
-    hold(outcome): תשובה שלא מנצחת כל עוד המודל השני עובד (תשובה "אישית" כששלב ההבנה אמר info) - מחכים לשני;
-    גם הוא כזה (או נכשל) - היא מוחזרת, עם personal_votes."""
+    """אותה שאלה לשני מודלי Gemini שונים במקביל, כל אחד במפתח אחר, ומודל הגיבוי מחוץ ל-Google (config.BACKUP_LLM) לפי
+    כלל המעבר: Google החזיר תקלה (503, מכסה, 504/timeout) או שאין מפתח Gemini פנוי - הגיבוי מתחיל מיד; Google רק איטי -
+    אחרי BACKUP_AFTER_SECONDS. תשובה תקינה של Gemini מוצגת מיד. תשובה תקינה של הגיבוי מחכה ל-Gemini עד
+    GEMINI_PREFERRED_SECONDS מתחילת השלב (או עד ש-Gemini נכשל, או עד BACKUP_WAIT_MARGIN לפני סוף הזמן); אחרי זה - התשובה
+    התקינה הראשונה שיש. כל התשובות עוברות את אותן בדיקות בדיוק (finish). תשובה שנפסלה - מחכים לאחרות.
+    hold(outcome): תשובה שלא מנצחת כל עוד מודל אחר עובד (תשובה "אישית" כששלב ההבנה אמר info) - מחכים לאחרים;
+    כולם כאלה (או נכשלו) - היא מוחזרת, עם personal_votes.
+    None: אין מודלים זמינים, או שכולם נכשלו בלי שהגיבוי נוסה - ממשיכים בשרשרת הרגילה. הגיבוי נוסה ונכשל - AllProvidersFailed."""
     messages = [{"role": "user", "content": _user_message(question, standalone, history, hits)}]
     request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=FULL_CONTEXT_LLMS,
                    low_thinking=config.ANSWER_LOW_THINKING)
     if cached := llm.lookup(messages, parse=parse_reply, **request):  # כבר נענתה - בלי שום בקשה
         return finish(cached)
     pair = llm.race_pair(config.RACE_LLMS)
-    if len(pair) < 2:
+    sides = pair or ([free] if (free := llm.free_keys()) else [])
+    backup = config.BACKUP_LLM if config.BACKUP_LLM and llm.ready(config.BACKUP_LLM) else ""
+    if len(sides) < 2 and not backup:
         return None
     if on_stage:
         on_stage("compose")
     results: queue.Queue = queue.Queue()
+    trouble = threading.Event()  # Google החזיר תקלה - הגיבוי מתחיל מיד
 
-    def worker(names: list[str]):
+    def worker(names: list[str], gemini: bool):
         try:
-            results.put((llm.chat(messages, parse=parse_reply, names=names, cache=False, **request), None))
-        except Exception as exc:  # תקלה בצד אחד לא מפילה את השני
-            results.put((None, exc))
+            reply = llm.chat(messages, parse=parse_reply, names=names, cache=False,
+                             on_error=(lambda name, kind: trouble.set()) if gemini else None, **request)
+            results.put((gemini, reply, None))
+        except Exception as exc:  # תקלה בצד אחד לא מפילה את האחרים
+            if gemini:
+                trouble.set()
+            results.put((gemini, None, exc))
 
-    for names in pair:  # עם הזמן הכולל של השאלה (contextvars לא עוברים ל-thread חדש לבד)
-        threading.Thread(target=contextvars.copy_context().run, args=(worker, names), daemon=True).start()
-    racers = " מול ".join(llm.describe(names[0]) for names in pair)
-    rejected, errors, held, votes, answered = None, [], None, 0, 0
-    backup = None  # תשובה תקינה של מודל הגיבוי (לא Google) בזמן ש-Gemini עוד עובד - מחכים קודם ל-Gemini
-    for i in range(len(pair)):
-        left = time_left()
-        if backup and left is not None:  # עד BACKUP_WAIT_MARGIN לפני סוף הזמן; אז - התשובה של הגיבוי
-            left -= BACKUP_WAIT_MARGIN
+    def start(names: list[str], gemini: bool):  # עם הזמן הכולל של השאלה (contextvars לא עוברים ל-thread חדש לבד)
+        threading.Thread(target=contextvars.copy_context().run, args=(worker, names, gemini), daemon=True).start()
+
+    began = time.perf_counter()
+    for names in sides:
+        start(names, True)
+    racers = " מול ".join([llm.describe(names[0]) for names in sides] + ([llm.describe(backup)] if backup else []))
+    gemini_running, backup_running, backup_started = len(sides), False, False
+    held_backup, rejected, errors, held, votes, answered = None, None, [], None, 0, 0
+
+    def accept(pick):
+        llm.remember(messages, result=pick[0], **request)  # רק המנצח נשמר במטמון
+        return pick[1]
+
+    while gemini_running or backup_running or (backup and not backup_started):
+        now, left = time.perf_counter(), time_left()
+        if backup and not backup_started and (trouble.is_set() or not gemini_running
+                                              or now - began >= config.BACKUP_AFTER_SECONDS):
+            start([backup], False)
+            backup_running = backup_started = True
+        if held_backup and (not gemini_running or now - began >= config.GEMINI_PREFERRED_SECONDS
+                            or (left is not None and left <= BACKUP_WAIT_MARGIN)):
+            return accept(held_backup)
+        if left is not None and left <= 0.05:
+            raise OutOfTime("llm", errors + [f"parallel ({racers}): out of time"])
+        waits = [left] if left is not None else []
+        if backup and not backup_started:  # בודקים שוב כל 0.1 ש' אם Google החזיר תקלה
+            waits.append(min(0.1, max(began + config.BACKUP_AFTER_SECONDS - now, 0.01)))
+        if held_backup:
+            waits.append(max(began + config.GEMINI_PREFERRED_SECONDS - now, 0.01))
+            if left is not None:
+                waits.append(max(left - BACKUP_WAIT_MARGIN, 0.01))
         try:
-            reply, error = results.get(timeout=None if left is None else max(left, 0.1))
+            gemini, reply, error = results.get(timeout=max(min(waits), 0.01) if waits else None)
         except queue.Empty:
-            if backup:
-                llm.remember(messages, result=backup[0], **request)
-                return backup[1]
-            raise OutOfTime("llm", [f"parallel ({racers}): out of time"]) from None
+            continue
+        if gemini:
+            gemini_running -= 1
+        else:
+            backup_running = False
         if reply is None:
             errors.append(error)
             continue
@@ -701,27 +735,27 @@ def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], 
         outcome.race = f"במקביל: {racers}"
         answered += 1
         votes += outcome.kind == "personal"
-        if hold and hold(outcome):  # "אישי" לשאלת מידע - לא מנצח; מחכים למודל השני (עד מגבלת הזמן)
+        if hold and hold(outcome):  # "אישי" לשאלת מידע - לא מנצח; מחכים לאחרים (עד מגבלת הזמן)
             held = held or (reply, outcome)
             continue
-        if not outcome.reason.startswith(REJECTED):
-            if not reply.provider.startswith("gemini:") and i + 1 < len(pair):  # Gemini קודם (איכות), הגיבוי - רשת ביטחון
-                backup = (reply, outcome)
-                continue
-            llm.remember(messages, result=reply, **request)  # רק המנצח נשמר במטמון
-            return outcome
-        rejected = rejected or (reply, outcome)
-    if backup:  # Gemini נכשל, נפסל או ענה "אישי" לשאלת מידע - התשובה התקינה של הגיבוי
-        llm.remember(messages, result=backup[0], **request)
-        return backup[1]
-    if held:  # כל המודלים שענו אמרו "אישי" (או שהשני נכשל/נפסל) - התשובה האישית, ו-respond מחליט על תיקון
+        if outcome.reason.startswith(REJECTED):
+            rejected = rejected or (reply, outcome)
+            continue
+        if gemini:
+            return accept((reply, outcome))
+        held_backup = (reply, outcome)  # הגיבוי תקין - מחכים ל-Gemini לפי הכלל (בתחילת הלולאה)
+    if held_backup:
+        return accept(held_backup)
+    if held:  # כל המודלים שענו אמרו "אישי" (או שהאחרים נכשלו/נפסלו) - התשובה האישית, ו-respond מחליט על תיקון
         held[1].personal_votes, held[1].answered = votes, answered
         return held[1]
-    if rejected:  # שתי התשובות נפסלו (או אחת נפסלה והשנייה נכשלה) - הראשונה, כמו במודל אחד
+    if rejected:  # כל התשובות נפסלו (או נפסלו ונכשלו) - הראשונה, כמו במודל אחד
         llm.remember(messages, result=rejected[0], **request)
         return rejected[1]
     if any(isinstance(e, OutOfTime) for e in errors):
         raise next(e for e in errors if isinstance(e, OutOfTime))
+    if backup_started:  # גם הגיבוי נוסה ונכשל - בלי לנסות שוב בשרשרת (המשפט מהאתר / ההודעה הרגילה)
+        raise AllProvidersFailed("llm", [str(e)[:150] for e in errors])
     log.warning("parallel: both failed (%s), continuing with the chain", " | ".join(str(e)[:120] for e in errors))
     return None
 
