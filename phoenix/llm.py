@@ -151,7 +151,7 @@ def _openai_compatible(provider, model):
 def _cohere(model):
     def call(messages, system, temperature, json_mode=False, timeout=None):
         from . import store  # כאן ולא למעלה: store לא נדרש לשאר הספקים
-        store.count_call("cohere_chat" if config.COHERE_CHAT_KEY != config.API_KEYS["cohere"] else "cohere")
+        store.count_call("cohere_chat")  # מונה חודשי נפרד מה-Rerank (calls:cohere_chat:<חודש> ב-Upstash)
         r = httpx.post(
             "https://api.cohere.com/v2/chat",
             headers={"Authorization": f"Bearer {config.COHERE_CHAT_KEY}"},
