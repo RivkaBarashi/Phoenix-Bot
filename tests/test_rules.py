@@ -1720,3 +1720,25 @@ def test_cloud_judge_counts_an_error_as_an_error_not_invented(kind, expected):
     spec.loader.exec_module(judge)
     row = {"type": "not_on_site", "question": "שאלה", "expected_answer": ""}
     assert judge.verdict(row, {"kind": kind, "answer": "טקסט", "reason": "timeout"})[0] == expected
+
+
+def test_cohere_answers_use_only_the_chat_key_never_the_rerank_key(monkeypatch):
+    """21/10, החלטת הבעלים: COHERE_API_KEY רק ל-Rerank (המכסה החודשית שלו). תשובות והבנה - רק COHERE_CHAT_API_KEY."""
+    from phoenix import config
+    sent = []
+
+    class Reply:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": [{"text": "{}"}]}, "usage": {}}
+    monkeypatch.setattr(config, "COHERE_CHAT_KEY", "chat-key")
+    monkeypatch.setitem(config.API_KEYS, "cohere", "rerank-key")
+    monkeypatch.setattr(llm.httpx, "post", lambda url, headers, **kw: sent.append(headers["Authorization"]) or Reply())
+    llm._cohere("command-a-plus-05-2026")([{"role": "user", "content": "x"}], "", 0)
+    assert sent == ["Bearer chat-key"]
+    monkeypatch.setattr(config, "COHERE_CHAT_KEY", "")
+    assert not llm._providers()[-1].enabled  # בלי מפתח לתשובות - בלי גיבוי, ולא נופלים למפתח של ה-Rerank

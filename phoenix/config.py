@@ -53,7 +53,7 @@ API_KEYS = {
 }
 # Cohere כמודל שפה (גיבוי מחוץ ל-Google): רק חשבון Trial נפרד, COHERE_CHAT_API_KEY (החלטת הבעלים 21/10: המפתח של
 # ה-Rerank, COHERE_API_KEY, לא עונה ולא מבין שאלות - המכסה החודשית שלו, 1,000, שמורה ל-Rerank). בלי המפתח - בלי גיבוי.
-COHERE_CHAT_KEY = os.getenv("COHERE_CHAT_API_KEY", "").strip()
+COHERE_CHAT_KEY = (os.getenv("COHERE_CHAT_API_KEY", "") or os.getenv("COHERE_API_KEY2", "")).strip()  # שני השמות - אותו חשבון
 # מאגר מפתחות Gemini: כל מפתח מחשבון ומפרויקט נפרד, ולכן עם מכסה יומית משלו לכל מודל.
 # המספר הוא המספר בשם המשתנה (GEMINI_API_KEY = 1, GEMINI_API_KEY_2 = 2 ...) - כך הוא מופיע בדוחות, בלי הערך.
 GEMINI_KEYS: list[tuple[int, str]] = [
