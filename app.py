@@ -48,7 +48,7 @@ from phoenix import answer_cache
 from phoenix import bm25, config, conversation_log, embeddings, hours, index, llm, store
 from phoenix import chat_design as design
 
-if getattr(design, "UI_VERSION", 0) < 3:  # Streamlit Cloud: אחרי git pull app.py נטען מחדש, אבל מודול שכבר יובא - לא
+if getattr(design, "UI_VERSION", 0) < 4:  # Streamlit Cloud: אחרי git pull app.py נטען מחדש, אבל מודול שכבר יובא - לא
     import importlib  # (21/10 03:00: הגרסה החדשה של app.py קראה ל-script_html במודול הישן שבזיכרון - שגיאה בדף)
     design = importlib.reload(design)
 

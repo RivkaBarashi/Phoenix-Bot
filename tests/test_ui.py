@@ -277,7 +277,7 @@ def test_high_contrast_mode_meets_wcag_aa():
 def test_the_app_installs_the_accessibility_script_separately():
     source = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
     assert "st.html(design.a11y_script_html(), unsafe_allow_javascript=True)" in source
-    assert 'getattr(design, "UI_VERSION", 0) < 3' in source  # Streamlit Cloud: מודול עיצוב ישן בזיכרון נטען מחדש
+    assert 'getattr(design, "UI_VERSION", 0) < 4' in source  # Streamlit Cloud: מודול עיצוב ישן בזיכרון נטען מחדש
 
 
 # ---------------------------------------------------------------- 22/10: כניסה מהקישור - סגור, ופתיחה על איור הרובוט
@@ -294,4 +294,20 @@ def test_entry_from_the_public_link_starts_closed_and_new_chats_open_directly():
     # רק כניסה בלי ?c= (שיחה חדשה ורענון באים עם ?c=) ולא במצב מפתחת (הבדיקות בדפדפן)
     assert 'st.session_state.setdefault("start_closed", "c" not in st.query_params and not dev_mode())' in source
     assert "design.script_html(st.session_state.start_closed)" in source
-    assert 'getattr(design, "UI_VERSION", 0) < 3' in source and chat_design.UI_VERSION >= 3
+    assert f'getattr(design, "UI_VERSION", 0) < {chat_design.UI_VERSION}' in source
+
+
+# ---------------------------------------------------------------- 22/10: שאלה ארוכה - התיבה לא מתכווצת לעיגול
+def test_a_long_question_keeps_the_input_a_wide_pill_in_both_streamlit_layouts():
+    """Streamlit 1.66 switches the box to an "extended" layout (a column, the buttons in a full-width row) when the text
+    is longer than one line; forced into one row it shrank to a small circle. Every input rule must hold in both."""
+    from phoenix import chat_design
+    css = chat_design.css()
+    assert '[data-testid="stChatInput"] > div > div { flex-direction:row-reverse !important; flex-wrap:nowrap !important;' in css
+    pill = css.split('[data-testid="stChatInput"] > div > div > div:first-child {', 1)[1].split("}", 1)[0]
+    assert "flex:1 1 auto !important" in pill and "width:auto !important" in pill and "min-height:56px" in pill
+    assert "height:56px" not in pill.replace("min-height:56px", "")  # grows with the text, never a fixed height
+    assert "border-radius:28px" in pill  # = half of 56px: the same pill on one line, rounded corners when it grows
+    buttons = css.split('[data-testid="stChatInput"] > div > div > div:last-child {', 1)[1].split("}", 1)[0]
+    assert "flex:none !important" in buttons and "width:auto !important" in buttons  # not a full-width row
+    assert "max-height:96px !important" in css  # up to 4 lines, then it scrolls

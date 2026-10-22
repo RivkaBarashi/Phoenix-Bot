@@ -18,7 +18,7 @@ NAVY, ORANGE, BG, GREY = "#111C3F", "#FF5A23", "#F7F8FB", "#8A8FA0"  # the only 
 WINDOW = 476  # px - the width at which the sizes of the instructions (16px text, 64px header, ...) fit the reference
 RADIUS = 28
 # app.py טוען מחדש את המודול הזה כשהגרסה בזיכרון ישנה יותר (Streamlit Cloud לא טוען מחדש מודולים אחרי git pull)
-UI_VERSION = 3
+UI_VERSION = 4
 
 
 def _icon_uri() -> str:
@@ -141,14 +141,19 @@ body.px-closed #root {{ display:none !important; }}  /* all of Streamlit; the la
 [data-testid="stChatInput"] {{ background:transparent; width:100%; }}
 [data-testid="stChatInput"] > div {{ border:none !important; background:transparent !important; box-shadow:none !important;
   border-radius:0 !important; padding:0 !important; overflow:visible !important; }}
-[data-testid="stChatInput"] > div > div {{ flex-direction:row-reverse; align-items:center; gap:10px; }}
-[data-testid="stChatInput"] > div > div > div:first-child {{ flex:1; min-width:0; height:56px; box-sizing:border-box;
-  border:2px solid var(--orange); border-radius:999px; background:#fff; padding:0 24px; align-items:center; }}
+/* a question longer than one line (typed or pasted): Streamlit 1.66 switches the box to its "extended" layout - a column, with
+   the buttons in a full-width row of their own; forced into one row, the pill shrank to a small circle (22/10, the owner's
+   screenshot). So every rule below holds in both layouts: one row, and the pill grows with the text, up to 4 lines. */
+[data-testid="stChatInput"] > div > div {{ flex-direction:row-reverse !important; flex-wrap:nowrap !important;
+  align-items:center !important; gap:10px; }}
+[data-testid="stChatInput"] > div > div > div:first-child {{ flex:1 1 auto !important; width:auto !important; min-width:0;
+  min-height:56px; box-sizing:border-box; border:2px solid var(--orange); border-radius:28px; background:#fff; padding:14px 24px;
+  align-items:center !important; }}
 [data-testid="stChatInput"] > div > div > div:first-child > div {{ width:100%; }}
 [data-testid="stChatInputTextArea"] {{ direction:rtl; text-align:right; color:var(--navy); font-size:16px; padding:0 !important;
-  min-height:0 !important; line-height:24px; }}
+  min-height:0 !important; line-height:24px; max-height:96px !important; }}
 [data-testid="stChatInputTextArea"]::placeholder {{ color:var(--grey); opacity:1; }}
-[data-testid="stChatInput"] > div > div > div:last-child {{ flex:none; }}
+[data-testid="stChatInput"] > div > div > div:last-child {{ flex:none !important; width:auto !important; gap:10px !important; }}  /* = the gaps of one line: the pill keeps its width */
 [data-testid="stChatInputSubmitButton"] {{ width:48px; height:48px; border-radius:50%; padding:0; border:none;
   background:url("{_send_uri()}") center/48px 48px no-repeat !important; opacity:1 !important; }}
 [data-testid="stChatInputSubmitButton"] svg {{ display:none; }}
@@ -178,8 +183,10 @@ body.px-size-1 .px-sources {{ font-size:16px; }}
 body.px-size-2 .px-sources {{ font-size:18px; }}
 body.px-size-1 .px-hours, body.px-size-1 .px-checked {{ font-size:15px; }}
 body.px-size-2 .px-hours, body.px-size-2 .px-checked {{ font-size:17px; }}
-body.px-size-1 [data-testid="stChatInputTextArea"] {{ font-size:18px; line-height:26px; }}
-body.px-size-2 [data-testid="stChatInputTextArea"] {{ font-size:20px; line-height:28px; }}
+body.px-size-1 [data-testid="stChatInputTextArea"] {{ font-size:18px; line-height:26px; max-height:104px !important; }}
+body.px-size-2 [data-testid="stChatInputTextArea"] {{ font-size:20px; line-height:28px; max-height:112px !important; }}
+body.px-size-1 [data-testid="stChatInput"] > div > div > div:first-child {{ padding:13px 24px; }}  /* one line: still 56px */
+body.px-size-2 [data-testid="stChatInput"] > div > div > div:first-child {{ padding:12px 24px; }}
 /* high contrast: only navy and white (16.6:1, WCAG AA needs 4.5:1) - the grey and orange text become navy, frames thicker */
 body.px-contrast .stMain, body.px-contrast [data-testid="stBottomBlockContainer"] {{ background:#fff !important; }}
 body.px-contrast .px-time, body.px-contrast .px-meta, body.px-contrast .px-checked, body.px-contrast .px-hours,
