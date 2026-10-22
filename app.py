@@ -151,7 +151,9 @@ def to_html(text: str) -> str:
 def chat_history(messages: list[dict]) -> list[dict]:
     """השיחה עד עכשיו, לשאלות המשך: שאלות ותשובות בלבד. הודעת הפתיחה לא נשמרת בשיחה, והודעות שגיאה
     ("משהו השתבש...") לא עוזרות להבין את השאלה הבאה. הודעה ארוכה מדי ובקשת הקיצור שאחריה - גם לא: היא לא נענתה."""
-    return [{"role": m["role"], "content": m["content"]} for m in messages
+    return [{"role": m["role"], "content": m["content"]}
+            | ({"memory": memory} if (memory := (m.get("meta") or {}).get("memory")) else {})  # ב2: זיכרון הנושא
+            for m in messages
             if (len(m["content"]) <= bot.MAX_QUESTION_CHARS if m["role"] == "user"
                 else (m.get("meta") or {}).get("kind") not in ("error", "too_long"))]
 
@@ -163,7 +165,7 @@ def message_from_answer(a: bot.Answer, question: str = "") -> dict:
     meta = {"kind": a.kind, "reason": a.reason, "llm": a.llm, "reranker": a.reranker, "top_score": a.top_score,
             "timings": a.timings, "question": question, "race": a.race, "pages": a.pages, "warning": a.warning,
             "early_search": a.early_search, "cached": a.cached,
-            "understanding": a.understanding, "more_questions": a.more_questions,
+            "understanding": a.understanding, "more_questions": a.more_questions, "memory": a.memory,
             "standalone": a.question if a.question and question and a.question != question else ""}
     return {"role": "assistant", "content": text,
             "sources": [(titles.get(url, url), a.links.get(url, url)) for url in a.sources], "meta": meta}

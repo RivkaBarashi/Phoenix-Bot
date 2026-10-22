@@ -24,11 +24,11 @@ import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from . import answer_cache, bm25, config, llm
+from . import answer_cache, bm25, config, conversation_log, llm
 from .chunk import CHUNKS_FILE, SENTENCE_END
 from .fallback import AllProvidersFailed, OutOfTime, time_budget, time_left
 from .search import Hit, SearchResult, search
-from .understand import Understanding, try_understand
+from .understand import Understanding, conversation_text, last_memory, try_understand
 
 CONTEXT_CHUNKS = 5
 # כל מודל בנתיב התשובה (config.ROUTES["answer"]) מקבל את 5 הקטעים המלאים (~11K טוקנים). תשובה ללקוחה - רק ממודל חזק:
@@ -320,6 +320,7 @@ class Answer:
     cached: bool = False      # התשובה מהמטמון של התשובות המאומתות (answer_cache) - למצב מפתחת וליומן
     repaired: str = ""         # התשובה עברה רק אחרי ניסיון תיקון - הסיבה לפסילה הראשונה (ליומן ולבדיקות)
     understanding: dict | None = None  # מה שלב הבנת השאלה החליט (בלי טקסט חופשי של הלקוחה) - ליומן ולמצב מפתחת
+    memory: dict | None = None  # ב2: זיכרון הנושא אחרי התשובה הזו (next_memory) - הצ'אט שומר אותו בהודעה ומחזיר בשיחה
     more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
     links: dict[str, str] = field(default_factory=dict)  # כתובת מקור -> קישור שנפתח על הציטוט ומדגיש אותו (Text Fragment)
 
@@ -697,10 +698,11 @@ def needs_context(question: str) -> bool:
 
 
 def standalone_question(question: str, history: list[dict]) -> str:
-    """שאלת המשך ("ותוך כמה זמן?") -> שאלה עצמאית לחיפוש, לפי השיחה."""
+    """שאלת המשך ("ותוך כמה זמן?") -> שאלה עצמאית לחיפוש, לפי השיחה (ב2: כל השיחה, כמו בשלב ההבנה)."""
     if not history:
         return question
-    convo = "\n".join(f"{'לקוח' if m['role'] == 'user' else 'בוט'}: {m['content']}" for m in history[-4:])
+    convo = (conversation_text(history) if config.CONVERSATION_MEMORY else
+             "\n".join(f"{'לקוח' if m['role'] == 'user' else 'בוט'}: {m['content']}" for m in history[-4:]))
     try:
         reply = llm.chat([{"role": "user", "content": f"{convo}\nלקוח: {question}"}],
                          system=CONDENSE_PROMPT, temperature=0, route="helper")
@@ -1110,12 +1112,16 @@ def answer(question: str, history: list[dict] = (), on_stage=None, cache: bool =
             on_stage("understand")
         legacy = config.LEGACY.get()  # מדידת "לפני": בלי חיפוש מוקדם, בלי מרוץ ובלי מטמון
         early = None if legacy else start_early_search(question, history)  # החיפוש מתחיל כבר עכשיו, במקביל להבנה
+        memory = last_memory(history) if config.CONVERSATION_MEMORY else None  # ב2: הנושא עד עכשיו
         understood = try_understand(question, history)
         understand_s = time.perf_counter() - start
         if understood:
-            result = _answer_understood(question, history, understood, on_stage, early, cache and not legacy)
+            result = _answer_understood(question, history, understood, on_stage, early, cache and not legacy,
+                                        memory=memory)
         else:
-            result = _answer_by_rules(question, history, on_stage, early)
+            result = _answer_by_rules(question, history, on_stage, early, memory=memory)
+    if config.CONVERSATION_MEMORY:
+        result.memory = next_memory(memory, understood, result)
     result.timings["understand"] = understand_s
     result.timings["total"] = time.perf_counter() - start
     log.info("timings %s | %s", " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items()), question[:60])
@@ -1129,8 +1135,40 @@ def understanding_record(u: Understanding) -> dict:
             "sub_questions": len(u.sub_questions), "llm": u.llm}
 
 
+NON_TOPICAL = ("greeting", "thanks", "off_topic", "injection")  # ב2: לא משנים את נושא השיחה
+
+
+def next_memory(previous: dict | None, u: "Understanding | None", result: "Answer") -> dict:
+    """ב2: זיכרון הנושא אחרי התשובה הזו - נשמר בהודעה של הבוט, ועובר לשאלה הבאה בתוך השיחה. ברכה, תודה, שאלה לא קשורה
+    וניסיון לשנות את ההוראות לא משנים את הנושא. נושא חדש (topic_changed, או סוג אחר שנאמר) - מתחילים ממנו. intent -
+    הכוונה של ההודעה הזו (conversation_text משמיט מהשיחה ניסיון לשנות את ההוראות); clarified - הבוט שאל עכשיו
+    "על איזה ביטוח?" (לא שואלים פעמיים ברצף)."""
+    previous = previous or {}
+    memory = {"insurance_type": previous.get("insurance_type"), "subject": previous.get("subject"),
+              "turn": int(previous.get("turn") or 0) + 1, "intent": u.intent if u else "rules",
+              "clarified": result.kind == "clarify"}
+    if memory["intent"] in NON_TOPICAL:
+        return memory
+    asked = result.question or (u.standalone_question if u else "")
+    said = (u.insurance_type if u else None) or insurance_type(asked)
+    memory["insurance_type"] = said if u and u.topic_changed else said or memory["insurance_type"]
+    memory["subject"] = conversation_log.hide_numbers(asked)[:300] if asked else memory["subject"]
+    return memory
+
+
+def inherited_type(u: "Understanding", memory: dict | None, question: str) -> str | None:
+    """ב2: שאלת המשך בלי סוג ביטוח יורשת את הסוג מזיכרון השיחה - רק אם הנושא לא התחלף, המודל לא זיהה סוג אחר,
+    וההודעה עצמה לא מזכירה סוג אחר (כלל בקוד, לא רק בהוראות: "ואבא שלי בן 70, הוא חייב למלא טופס?" אחרי שאלה על
+    טוטאל לוס - המודל השמיט את "רכב", והחיפוש הביא תביעות פטירה)."""
+    kind = (memory or {}).get("insurance_type")
+    if not kind or u.topic_changed or (u.insurance_type and u.insurance_type != kind):
+        return None
+    said = insurance_type(question)
+    return None if said and said != kind else kind
+
+
 def _answer_understood(question: str, history: list[dict], u: Understanding, on_stage=None,
-                       early: EarlySearch | None = None, cache: bool = False) -> Answer:
+                       early: EarlySearch | None = None, cache: bool = False, memory: dict | None = None) -> Answer:
     record = understanding_record(u)
     if u.intent in ("greeting", "thanks"):  # ברכה עם עוד מילים ("היי, מה קורה איתכם?")
         return Answer(THANKS_REPLY if u.intent == "thanks" else GREETING_REPLY, "greeting", f"understand_{u.intent}",
@@ -1138,13 +1176,19 @@ def _answer_understood(question: str, history: list[dict], u: Understanding, on_
     if u.intent in ("off_topic", "injection"):  # בלי חיפוש ובלי מודל תשובה - שום דבר לא נשלח הלאה
         return Answer(OFF_TOPIC_TEXT, "off_topic", f"understand_{u.intent}", [], None, "none",
                       question=u.standalone_question, understanding=record)
-    if u.needs_clarification and not u.insurance_type:
-        clarify = clarification(question)
-        clarify.understanding = record
-        return clarify
+    inherited = inherited_type(u, memory, question)  # ב2 (בלי זיכרון - None, כמו קודם)
+    if u.needs_clarification and not u.insurance_type and not inherited:
+        if not (memory or {}).get("clarified"):  # ב2: לא שואלים "על איזה ביטוח?" פעמיים ברצף
+            clarify = clarification(question)
+            clarify.understanding = record
+            return clarify
+        record["clarify_skipped"] = True
     # נושא חדש - מודל התשובה לא רואה את השיחה הקודמת; המשך - רואה אותה (רק כדי להבין, כלל 8)
     context = [] if u.topic_changed else history
     standalone = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
+    if inherited and not has_insurance_type(standalone):
+        standalone = with_insurance_type(standalone, inherited)
+        record["inherited_type"] = inherited
     # מטמון: רק שאלה שלא תלויה בשיחה, עם שאלה אחת בהודעה. קריאה - לא במצב מפתחת; שמירה - רק תשובה מאומתת.
     cacheable = not context and len(u.sub_questions) <= 1 and not config.LEGACY.get()
     if cacheable and cache and (hit := answer_cache.get(standalone)):
@@ -1162,8 +1206,10 @@ def _answer_understood(question: str, history: list[dict], u: Understanding, on_
     return result
 
 
-def _answer_by_rules(question: str, history: list[dict], on_stage=None, early: EarlySearch | None = None) -> Answer:
-    """הגיבוי כשהבנת השאלה לא זמינה: הכללים בקוד, כמו לפני שלב ההבנה."""
+def _answer_by_rules(question: str, history: list[dict], on_stage=None, early: EarlySearch | None = None,
+                     memory: dict | None = None) -> Answer:
+    """הגיבוי כשהבנת השאלה לא זמינה: הכללים בקוד, כמו לפני שלב ההבנה. memory (ב2): סוג הביטוח מזיכרון השיחה
+    משלים שאלה בלי סוג, ושאלת הבהרה לא חוזרת פעמיים ברצף."""
     start = time.perf_counter()
     rest, greeted, _ = split_greeting(question)
     if greeted:  # "היי, איך מגישים תביעה?" - מתעלמים מהברכה ועונים על השאלה
@@ -1174,7 +1220,9 @@ def _answer_by_rules(question: str, history: list[dict], on_stage=None, early: E
     missing_type = needs_insurance_type(question)
     known_type = next((kind for m in reversed(context) if m["role"] == "user"
                        and (kind := insurance_type(m["content"]))), None) if missing_type else None
-    if missing_type and not known_type:
+    if missing_type and not known_type and memory:
+        known_type = memory.get("insurance_type")  # ב2: הנושא מכל השיחה, לא רק מההודעות האחרונות
+    if missing_type and not known_type and not (memory or {}).get("clarified"):
         return clarification(question)
     if on_stage:
         on_stage("search")

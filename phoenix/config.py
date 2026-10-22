@@ -145,6 +145,16 @@ PREFER_MARGIN = {"answer": 1.5, "understand": 0.5}
 LLM_RETRIES = 1
 LLM_MAX_WAIT = 2.0
 
+# ב2 (23/10) - זיכרון של כל השיחה. קודם שלב ההבנה ראה רק את 6 ההודעות האחרונות, וסוג הביטוח נשכח ("ואבא שלי בן 70, הוא
+# חייב למלא טופס?" אחרי שאלה על טוטאל לוס - החיפוש הביא תביעות פטירה). דלוק:
+# 1. שלב ההבנה מקבל את כל השיחה (understand.conversation_text): כל הודעות הלקוחה, ותשובות הבוט מקוצרות; מעל
+#    CONVERSATION_CHARS - קודם מתקצרות תשובות ישנות של הבוט, וההודעה הראשונה של הלקוחה נשארת תמיד.
+# 2. זיכרון נושא (answer.next_memory): סוג הביטוח והנושא נשמרים לאורך השיחה, בתוך ההודעות עצמן (שורד רענון).
+# 3. כללים בקוד: שאלת המשך שהמודל השמיט ממנה את הסוג - יורשת אותו; סוג אחר בהודעה מחליף אותו; ניסיון לשנות את
+#    ההוראות לא נשאר בשיחה; אין שתי שאלות הבהרה ברצף. כבוי עד A/B על סט השיחות (data/conversations.json, כלל ג2).
+CONVERSATION_MEMORY = os.getenv("CONVERSATION_MEMORY", "false").strip().lower() in ("1", "true", "yes", "on")
+CONVERSATION_CHARS = int(os.getenv("CONVERSATION_CHARS", "20000"))  # ~8K טוקנים; שיחה של 40 שאלות נכנסת כמעט כולה
+
 # שלב הבנת השאלה (understand.py): עד UNDERSTAND_TIMEOUT שניות בצ'אט, ואחריו כללי הקוד; הבדיקות - בלי מגבלה
 UNDERSTAND_TIMEOUT: float | None = float(os.getenv("UNDERSTAND_TIMEOUT", "8"))
 
