@@ -48,7 +48,7 @@ from phoenix import answer_cache
 from phoenix import bm25, config, conversation_log, embeddings, hours, index, llm, store
 from phoenix import chat_design as design
 
-if not hasattr(design, "script_html"):  # Streamlit Cloud: אחרי git pull app.py נטען מחדש, אבל מודול שכבר יובא - לא
+if not hasattr(design, "a11y_script_html"):  # Streamlit Cloud: אחרי git pull app.py נטען מחדש, אבל מודול שכבר יובא - לא
     import importlib  # (21/10 03:00: הגרסה החדשה של app.py קראה ל-script_html במודול הישן שבזיכרון - שגיאה בדף)
     design = importlib.reload(design)
 
@@ -429,6 +429,7 @@ def main():
     st.set_page_config(page_title="הבוט של אתר הפניקס", page_icon="💬", layout="centered")
     st.markdown(design.css(), unsafe_allow_html=True)
     st.html(design.script_html(), unsafe_allow_javascript=True)  # ✕ סוגר ופותח מהאייקון, וצליל שליחה - בדפדפן
+    st.html(design.a11y_script_html(), unsafe_allow_javascript=True)  # נגישות: גודל טקסט, ניגודיות, מקלדת (סקריפט נפרד)
     if "session_id" not in st.session_state:  # כניסה ראשונה או רענון: המזהה מהכתובת, והשיחה - מ-Upstash
         st.session_state.session_id = conversation_id()  # מזהה אנונימי של השיחה - ליומן ולשמירה
         st.session_state.messages = restore_conversation(st.session_state.session_id)

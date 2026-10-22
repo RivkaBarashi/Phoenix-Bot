@@ -183,7 +183,8 @@ def test_header_new_chat_link_and_a_close_button_that_only_closes(app, dev):
     assert re.search(r"[?&]c=[0-9a-f]{12}(?![0-9a-f])", href) and (("dev=1" in href) == dev)
     assert href.split("c=")[1][:12] != at.session_state["session_id"]  # מזהה אחר - שיחה חדשה
     scripts = [h.proto.body for h in at.html]
-    assert len(scripts) == 1 and "__pxUI" in scripts[0] and "app/static/launcher.png" in scripts[0]
+    assert len(scripts) == 2 and "__pxUI" in scripts[0] and "app/static/launcher.png" in scripts[0]
+    assert "__pxA11y" in scripts[1]  # הנגישות - סקריפט נפרד (22/10): תקלה בו לא עוצרת את ✕, האייקון והצליל
 
 
 def test_the_launcher_icon_is_served_as_the_owner_sent_it():
@@ -218,3 +219,62 @@ def test_bubble_time_is_israel_time_even_on_a_utc_server(monkeypatch):
     expected = {datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M")}
     assert app_module.clock() in expected | {datetime.now(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M")}
 
+
+
+# ---------------------------------------------------------------- נגישות (22/10): גודל טקסט, ניגודיות, מקלדת
+def test_accessibility_script_has_no_less_than_sign_at_all():
+    """Streamlit מוחק סקריפט שיש בו "<" ואחריו אות - בסקריפט הנגישות אין "<" בכלל, והוא נפרד מהסקריפט הקיים."""
+    from phoenix import chat_design
+    body = chat_design.a11y_script_html()
+    assert body.startswith("<script>") and body.endswith("</script>")
+    assert "<" not in body[len("<script>"):-len("</script>")]
+    assert "window.__pxA11y" in body and "localStorage" in body and "try {" in body  # שמירה, ובלי שגיאה כשאי אפשר
+
+
+def test_accessibility_controls_in_the_header_with_labels_for_screen_readers():
+    from phoenix import chat_design
+    header = chat_design.header_html("?c=123456789abc")
+    assert 'class="px-a11y"' in header and 'aria-expanded="false"' in header and 'aria-controls="px-a11y-panel"' in header
+    assert 'id="px-a11y-panel"' in header and " hidden>" in header  # הלוח סגור עד לחיצה
+    for cls, text in (("px-a11y-smaller", "א-"), ("px-a11y-bigger", "א+"), ("px-a11y-contrast", "ניגודיות גבוהה")):
+        assert f'class="{cls}" type="button"' in header and f">{text}</button>" in header
+    assert 'aria-pressed="false"' in header
+    assert 'class="px-close" type="button" aria-label="' in header  # ✕ עם תווית לקורא מסך
+
+
+def test_accessibility_css_changes_nothing_until_a_button_is_pressed():
+    """כל כלל חדש: רק אחרי לחיצה (body.px-size-*, body.px-contrast), הכפתור והלוח עצמם, או מסגרת מקלדת (:focus-visible)."""
+    import re
+    from phoenix import chat_design
+    css = chat_design.css()
+    block = css[css.index("---- accessibility"):css.index("</style>")]
+    block = "---- */" + re.sub(r"/\*.*?\*/", "", block.split("---- */", 1)[1], flags=re.S)  # בלי ההערות
+    selectors = [s.strip() for rule in re.findall(r"([^{}]+)\{[^{}]*\}", block.split("---- */", 1)[1]) for s in rule.split(",")]
+    allowed = ("body.px-size-1", "body.px-size-2", "body.px-contrast", ".px-a11y", ":focus-visible")
+    loose = [s for s in selectors if s and not any(a in s for a in allowed) and s != ".px-header"]
+    assert not loose, loose
+    assert re.search(r"\.px-header \{ position:relative; \}", block)  # בלי שינוי נראה - רק עוגן ללוח
+
+
+def _luminance(hex_color: str) -> float:
+    rgb = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def test_high_contrast_mode_meets_wcag_aa():
+    """ניגודיות גבוהה: טקסט כחול-כהה על לבן ולבן על כחול-כהה בלבד - 4.5:1 לפחות (WCAG AA)."""
+    import re
+    from phoenix import chat_design
+    light, dark = _luminance("#FFFFFF"), _luminance(chat_design.NAVY)
+    assert (light + 0.05) / (dark + 0.05) >= 4.5
+    css = chat_design.css()
+    contrast_rules = re.findall(r"body\.px-contrast[^{]*\{([^}]*)\}", css)
+    colors = set(re.findall(r"(?:color|background|border-color|stroke):\s*([^;!]+)", " ".join(contrast_rules)))
+    assert {c.strip() for c in colors} <= {"var(--navy)", "#fff"}, colors
+
+
+def test_the_app_installs_the_accessibility_script_separately():
+    source = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
+    assert "st.html(design.a11y_script_html(), unsafe_allow_javascript=True)" in source
+    assert 'hasattr(design, "a11y_script_html")' in source  # Streamlit Cloud: מודול עיצוב ישן בזיכרון נטען מחדש

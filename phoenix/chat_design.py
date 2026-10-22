@@ -150,6 +150,46 @@ body.px-closed #root {{ display:none !important; }}  /* all of Streamlit; the la
 [data-testid="stChatInputSubmitButton"] {{ width:48px; height:48px; border-radius:50%; padding:0; border:none;
   background:url("{_send_uri()}") center/48px 48px no-repeat !important; opacity:1 !important; }}
 [data-testid="stChatInputSubmitButton"] svg {{ display:none; }}
+/* ---- accessibility (22/10, the owner's request): nothing below changes the normal look - only the small "Aa" button that
+   hangs off the header's bottom-left corner (it takes no room in the header: on a 360px phone there are 0 free pixels).
+   Text size and high contrast are classes on <body> (outside Streamlit's redraws), set by a11y_script_html(). ---- */
+.px-header {{ position:relative; }}
+.px-a11y {{ position:absolute; left:14px; bottom:-18px; width:36px; height:36px; box-sizing:border-box; padding:0;
+  border-radius:50%; border:1.5px solid var(--navy); background:#fff; color:var(--navy); font:700 14px/1 'Heebo',sans-serif;
+  cursor:pointer; z-index:31; box-shadow:0 2px 8px rgba(17,28,63,.18); }}
+.px-a11y:hover, .px-a11y[aria-expanded="true"] {{ background:var(--navy); color:#fff; border-color:#fff; }}
+.px-a11y-panel {{ position:absolute; left:14px; top:calc(100% + 24px); display:flex; gap:8px; padding:8px; z-index:32;
+  background:#fff; border:1.5px solid var(--navy); border-radius:16px; box-shadow:0 10px 30px rgba(17,28,63,.16); direction:rtl; }}
+.px-a11y-panel[hidden] {{ display:none; }}
+.px-a11y-panel button {{ border:1.5px solid var(--navy); background:#fff; color:var(--navy); border-radius:999px; padding:6px 12px;
+  font:500 14px/1.2 'Heebo',sans-serif; cursor:pointer; white-space:nowrap; }}
+.px-a11y-panel button:hover, .px-a11y-panel button[aria-pressed="true"] {{ background:var(--navy); color:#fff; }}
+.px-a11y-panel button[aria-disabled="true"] {{ opacity:.45; cursor:default; }}
+/* the keyboard frame - only for keyboard navigation (:focus-visible), never on a mouse click */
+.stApp :focus-visible:not([data-testid="stChatInputTextArea"]), .px-launcher:focus-visible {{ outline:3px solid var(--navy) !important;
+  outline-offset:2px; }}  /* the input box: its orange frame already shows it (a text box is "focus-visible" even by mouse) */
+.px-header :focus-visible {{ outline-color:#fff !important; }}
+/* text size: large / very large - the bubbles (and everything inside them) and the input box */
+body.px-size-1 .px-bubble {{ font-size:18px; }}
+body.px-size-2 .px-bubble {{ font-size:20px; }}
+body.px-size-1 .px-sources {{ font-size:16px; }}
+body.px-size-2 .px-sources {{ font-size:18px; }}
+body.px-size-1 .px-hours, body.px-size-1 .px-checked {{ font-size:15px; }}
+body.px-size-2 .px-hours, body.px-size-2 .px-checked {{ font-size:17px; }}
+body.px-size-1 [data-testid="stChatInputTextArea"] {{ font-size:18px; line-height:26px; }}
+body.px-size-2 [data-testid="stChatInputTextArea"] {{ font-size:20px; line-height:28px; }}
+/* high contrast: only navy and white (16.6:1, WCAG AA needs 4.5:1) - the grey and orange text become navy, frames thicker */
+body.px-contrast .stMain, body.px-contrast [data-testid="stBottomBlockContainer"] {{ background:#fff !important; }}
+body.px-contrast .px-time, body.px-contrast .px-meta, body.px-contrast .px-checked, body.px-contrast .px-hours,
+body.px-contrast [data-testid="stChatInputTextArea"]::placeholder {{ color:var(--navy) !important; opacity:1; }}
+body.px-contrast .px-meta svg, body.px-contrast .px-meta svg path {{ stroke:var(--navy); }}
+body.px-contrast .px-orange {{ color:var(--navy); text-decoration:underline; }}
+body.px-contrast .px-bot .px-bubble, body.px-contrast .px-avatar {{ border-width:2px; }}
+body.px-contrast .px-bubble a {{ text-decoration-thickness:2px; }}
+body.px-contrast .px-card {{ box-shadow:none; border:2px solid var(--navy); }}
+body.px-contrast [data-testid="stChatInput"] > div > div > div:first-child {{ border-color:var(--navy); }}
+body.px-contrast .stMain [data-testid^="stBaseButton"], body.px-contrast .stMain [data-testid^="stBaseLinkButton"] {{ border-width:2px !important; }}
+body.px-contrast [data-testid="stFeedback"] button, body.px-contrast [data-testid="stFeedback"] button span {{ color:var(--navy) !important; }}
 </style>"""
 
 
@@ -164,7 +204,13 @@ def header_html(new_chat_href: str) -> str:
              'stroke-linecap="round"><path d="M4 4l16 16M20 4L4 20"/></svg>')
     return (f'<div class="px-header"><div class="px-icon"></div><div class="px-header-title">הבוט האישי שלך</div>'
             f'<a class="px-new" href="{esc_attr(new_chat_href)}" target="_self">שיחה חדשה</a>'
-            f'<button class="px-close" type="button" aria-label="סגירה" title="סגירה">{close}</button></div>')
+            f'<button class="px-close" type="button" aria-label="סגירת החלון" title="סגירה">{close}</button>'
+            '<button class="px-a11y" type="button" aria-label="נגישות: גודל טקסט וניגודיות" title="נגישות"'
+            ' aria-expanded="false" aria-controls="px-a11y-panel">Aa</button>'
+            '<div class="px-a11y-panel" id="px-a11y-panel" role="group" aria-label="נגישות" hidden>'
+            '<button class="px-a11y-smaller" type="button" aria-label="הקטנת הטקסט">א-</button>'
+            '<button class="px-a11y-bigger" type="button" aria-label="הגדלת הטקסט">א+</button>'
+            '<button class="px-a11y-contrast" type="button" aria-pressed="false">ניגודיות גבוהה</button></div></div>')
 
 
 LAUNCHER_URL = "app/static/launcher.png"  # the owner's icon ("עוזר אישי"), as she sent it (design-references/launcher-icon.png)
@@ -216,8 +262,16 @@ def script_html() -> str:
   doc.addEventListener('click', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
-    if (t.closest('.px-close')) { e.preventDefault(); launcher(); doc.body.classList.add('px-closed'); return; }
-    if (t.closest('.px-launcher')) { doc.body.classList.remove('px-closed'); return; }
+    if (t.closest('.px-close')) {
+      e.preventDefault(); var l = launcher(); doc.body.classList.add('px-closed');
+      try { l.focus(); } catch (x) {}
+      return;
+    }
+    if (t.closest('.px-launcher')) {
+      doc.body.classList.remove('px-closed');
+      var bx = box(); if (bx) { try { bx.focus({preventScroll: true}); } catch (x) {} }
+      return;
+    }
     var send = t.closest('[data-testid="stChatInputSubmitButton"]');
     if (send && !send.disabled && box() && box().value.trim()) pop();
   }, true);
@@ -228,6 +282,91 @@ def script_html() -> str:
   }, true);
 })();
 </script>""".replace("LAUNCHER", LAUNCHER_URL)
+
+
+def a11y_script_html() -> str:
+    """Accessibility (22/10), for st.html(..., unsafe_allow_javascript=True) - a separate script from script_html(), so a
+    problem here cannot stop the X, the launcher or the send sound. Installed once per page (window.__pxA11y):
+    - "Aa" opens a small panel: "א-" / "א+" (3 sizes: normal, large, very large) and "ניגודיות גבוהה" / "מצב רגיל"
+      (aria-pressed). The choice is saved in localStorage - also after a refresh; when it cannot be saved: normal mode.
+    - Escape or a click outside closes the panel. After the bot's answer appears, the cursor returns to the input box
+      (only with a mouse/keyboard - on a phone it would open the keyboard every time).
+    - Streamlit redraws the header on every message: a MutationObserver puts the state back on the new buttons.
+    No "<" in the script at all (Streamlit's sanitizer drops a script with "<" followed by a letter)."""
+    return """<script>
+(function () {
+  if (window.__pxA11y) return;
+  window.__pxA11y = true;
+  var doc = document, body = doc.body, NAMES = ['רגיל', 'גדול', 'גדול מאוד'];
+  var state = {size: 0, contrast: false, open: false}, bots = -1, pending = false;
+  function load() {
+    try {
+      var s = parseInt(localStorage.getItem('pxTextSize') || '0', 10);
+      state.size = (s === 1 || s === 2) ? s : 0;
+      state.contrast = localStorage.getItem('pxContrast') === '1';
+    } catch (e) { state.size = 0; state.contrast = false; }
+  }
+  function save() {
+    try {
+      localStorage.setItem('pxTextSize', String(state.size));
+      localStorage.setItem('pxContrast', state.contrast ? '1' : '0');
+    } catch (e) {}
+  }
+  function attr(el, name, value) { if (el && el.getAttribute(name) !== value) el.setAttribute(name, value); }
+  function text(el, value) { if (el && el.textContent !== value) el.textContent = value; }
+  function apply() {
+    body.classList.toggle('px-size-1', state.size === 1);
+    body.classList.toggle('px-size-2', state.size === 2);
+    body.classList.toggle('px-contrast', state.contrast);
+    attr(doc.querySelector('.px-a11y'), 'aria-expanded', state.open ? 'true' : 'false');
+    var panel = doc.querySelector('.px-a11y-panel');
+    if (!panel) return;
+    if (state.open) panel.removeAttribute('hidden'); else if (!panel.hasAttribute('hidden')) panel.setAttribute('hidden', '');
+    var c = panel.querySelector('.px-a11y-contrast');
+    attr(c, 'aria-pressed', state.contrast ? 'true' : 'false');
+    text(c, state.contrast ? 'מצב רגיל' : 'ניגודיות גבוהה');
+    var big = panel.querySelector('.px-a11y-bigger'), small = panel.querySelector('.px-a11y-smaller');
+    attr(big, 'aria-disabled', state.size === 2 ? 'true' : 'false');
+    attr(small, 'aria-disabled', state.size === 0 ? 'true' : 'false');
+    attr(big, 'aria-label', 'הגדלת הטקסט, עכשיו: ' + NAMES[state.size]);
+    attr(small, 'aria-label', 'הקטנת הטקסט, עכשיו: ' + NAMES[state.size]);
+  }
+  function close(focusBadge) {
+    state.open = false; apply();
+    if (focusBadge) { var b = doc.querySelector('.px-a11y'); if (b) b.focus(); }
+  }
+  doc.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('.px-a11y')) { e.preventDefault(); state.open = !state.open; apply(); return; }
+    if (t.closest('.px-a11y-bigger')) { if (state.size !== 2) { state.size += 1; save(); } apply(); return; }
+    if (t.closest('.px-a11y-smaller')) { if (state.size !== 0) { state.size -= 1; save(); } apply(); return; }
+    if (t.closest('.px-a11y-contrast')) { state.contrast = !state.contrast; save(); apply(); return; }
+    if (state.open && !t.closest('.px-a11y-panel')) close(false);
+  }, true);
+  doc.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && state.open) { e.preventDefault(); close(true); }
+  }, true);
+  function afterRender() {
+    apply();
+    var n = doc.querySelectorAll('.px-bot').length;
+    if (bots === -1 || n === bots) { bots = n; return; }
+    var grew = n > bots;
+    bots = n;
+    if (!grew || body.classList.contains('px-closed')) return;
+    var fine = window.matchMedia && window.matchMedia('(pointer: fine)').matches;
+    var box = doc.querySelector('textarea[data-testid="stChatInputTextArea"]');
+    var a = doc.activeElement;
+    if (fine && box && !(a && a.closest && a.closest('.px-a11y-panel'))) { try { box.focus({preventScroll: true}); } catch (e) {} }
+  }
+  new MutationObserver(function () {
+    if (pending) return;
+    pending = true;
+    setTimeout(function () { pending = false; afterRender(); }, 60);
+  }).observe(body, {childList: true, subtree: true});
+  load(); apply(); afterRender();
+})();
+</script>"""
 
 
 def hero_html() -> str:
