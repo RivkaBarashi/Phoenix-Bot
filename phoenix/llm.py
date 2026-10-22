@@ -149,7 +149,7 @@ def _openai_compatible(provider, model):
 
 
 def _cohere(model):
-    def call(messages, system, temperature, json_mode=False, timeout=None):
+    def call(messages, system, temperature, json_mode=False, timeout=None, low_thinking=False):
         from . import store  # כאן ולא למעלה: store לא נדרש לשאר הספקים
         store.count_call("cohere_chat")  # מונה חודשי נפרד מה-Rerank (calls:cohere_chat:<חודש> ב-Upstash)
         r = httpx.post(
@@ -157,7 +157,8 @@ def _cohere(model):
             headers={"Authorization": f"Bearer {config.COHERE_CHAT_KEY}"},
             json={"model": model, "temperature": temperature, "messages": _with_system(messages, system)}
             | ({"response_format": {"type": "json_object"}} if json_mode else {})
-            | ({"thinking": {"type": "enabled", "token_budget": config.COHERE_THINKING_BUDGET}}
+            | ({"thinking": {"type": "enabled", "token_budget": config.COHERE_LOW_THINKING_BUDGET if low_thinking
+                                                                  else config.COHERE_THINKING_BUDGET}}
                if model.startswith(config.COHERE_THINKING_MODELS) else {}),
             timeout=timeout or config.HTTP_TIMEOUT,
         )
@@ -344,7 +345,7 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
 
     def checked(p: Provider) -> Provider:
         def call(messages, system, temperature):
-            extra = {"low_thinking": True} if low_thinking and p.name.startswith("gemini:") else {}
+            extra = {"low_thinking": True} if low_thinking and p.name.startswith(("gemini:", "cohere:")) else {}
             text = p.call(messages, system, temperature, json_mode=json_mode, timeout=config.QUERY_TIMEOUT, **extra)
             if parse is None:
                 return text, None

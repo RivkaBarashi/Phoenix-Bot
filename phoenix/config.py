@@ -95,6 +95,9 @@ BACKUP_LLM = os.getenv("BACKUP_LLM", "cohere:command-a-plus-05-2026").strip()
 # command-a-plus "חושב" לפני התשובה: נמדד 21/10 - 4,082 טוקני חשיבה מול ~470 של התשובה, 12-25 ש' ולפעמים יותר מ-90.
 # עם תקציב חשיבה של 300 טוקנים - 4-5 ש' ברוב השאלות, אותן תשובות. "disabled" שובר את ה-JSON (נבדק).
 COHERE_THINKING_BUDGET = int(os.getenv("COHERE_THINKING_BUDGET", "300"))
+# שלב ההבנה (סיווג וניסוח - JSON קצר): תקציב קטן יותר. נמדד 22/10 05:20 על פרומפט ההבנה: 300 - 4.3-5.1 ש' (ולפעמים יותר
+# מ-8, מגבלת ההבנה, והשאלה עברה לכללי הקוד); 100 - 2.5 ש', JSON תקין. רק בהבנה (low_thinking), לא בתשובה.
+COHERE_LOW_THINKING_BUDGET = int(os.getenv("COHERE_LOW_THINKING_BUDGET", "100"))
 COHERE_THINKING_MODELS = ("command-a-plus", "command-a-reasoning")
 if BACKUP_LLM:
     LLM_CHAIN.append(tuple(BACKUP_LLM.split(":", 1)))

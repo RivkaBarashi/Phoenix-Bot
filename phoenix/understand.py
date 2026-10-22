@@ -147,6 +147,8 @@ def understand(question: str, history: list[dict] = (), models: list[str] | None
              if (p.name == name if ":" in name else p.group == f"gemini:{name}")]
     hedge = models == [config.UNDERSTAND_HEDGE]  # בקשת הגיבוי בצ'אט (3.6) - הגדרת חשיבה משלה
     low = config.UNDERSTAND_HEDGE_LOW_THINKING if hedge else config.UNDERSTAND_LOW_THINKING
+    if config.UNDERSTAND_BACKUP and models == [config.UNDERSTAND_BACKUP]:
+        low = True  # Cohere בהבנה: תקציב חשיבה קטן (COHERE_LOW_THINKING_BUDGET) - 2.5 ש' במקום 4-8
     reply = llm.chat([{"role": "user", "content": _message(question, list(history))}], system=UNDERSTAND_PROMPT,
                      temperature=0, json_mode=True, parse=parse_understanding, names=names,
                      low_thinking=low and not config.LEGACY.get())  # מדידת "לפני" - חשיבה רגילה, כמו לפני סעיף 6ג

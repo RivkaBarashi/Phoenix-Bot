@@ -2012,3 +2012,36 @@ def test_the_chat_bubble_shows_open_now_next_to_a_referral():
     import app
     assert 'class="px-hours"' in app.hours_html({"role": "assistant", "content": A.GENERIC_REFERRAL})
     assert app.hours_html({"role": "assistant", "content": "שלום! במה אפשר לעזור?"}) == ""
+
+
+def test_cohere_understanding_uses_the_small_thinking_budget(monkeypatch):
+    """22/10 05:20: Cohere בשלב ההבנה (תקציב 300) לקח 4-8+ ש' ונחתך במגבלת 8 השניות; עם 100 - 2.5 ש'."""
+    from phoenix import config
+    sent = []
+
+    class Reply:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": [{"type": "text", "text": "{}"}]}, "usage": {}}
+    monkeypatch.setattr(config, "COHERE_CHAT_KEY", "chat-key")
+    monkeypatch.setattr(llm.httpx, "post", lambda url, headers, json, **kw: sent.append(json["thinking"]["token_budget"]) or Reply())
+    call = llm._cohere("command-a-plus-05-2026")
+    call([{"role": "user", "content": "x"}], "", 0, low_thinking=True)
+    call([{"role": "user", "content": "x"}], "", 0)
+    assert sent == [config.COHERE_LOW_THINKING_BUDGET, config.COHERE_THINKING_BUDGET] == [100, 300]
+
+
+def test_understanding_through_the_backup_asks_for_low_thinking(monkeypatch):
+    from phoenix import config, understand
+    seen = {}
+
+    def chat(messages, names=None, low_thinking=False, **kwargs):
+        seen["low"] = low_thinking
+        raise fallback.AllProvidersFailed("llm", ["x"])
+    monkeypatch.setattr(understand.llm, "chat", chat)
+    monkeypatch.setattr(config, "UNDERSTAND_BACKUP", "cohere:command-a-plus-05-2026")
+    with pytest.raises(fallback.AllProvidersFailed):
+        understand.understand("שאלה", models=["cohere:command-a-plus-05-2026"])
+    assert seen["low"] is True
