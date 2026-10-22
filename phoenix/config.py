@@ -111,11 +111,12 @@ if BACKUP_LLM:
 # "BACKUP" - BACKUP_LLM (ריק - בלי). כל נתיב אפשר להחליף במשתנה סביבה.
 # - הבנת השאלה: 3.8 בחשיבה רגילה (החלטת הבעלים 20/10 - פחות טעויות ניסוח); תקלה או 3 ש' בלי תשובה - 3.6 בחשיבה נמוכה
 #   (2.7 ש' בעומס, כש-3.8 החזיר 504 אחרי 30 ש') ומודל הגיבוי מחוץ ל-Google, יחד.
-# - תשובה: 3.6 (המודל שנמדד באיכות), ומודל הגיבוי מחוץ ל-Google.
+# - תשובה: 3.6 (המודל שנמדד באיכות); תקלה או 3 ש' בלי תשובה - 3.8 ומודל הגיבוי מחוץ ל-Google, יחד. תשובה של 3.8
+#   מנצחת מיד (Gemini), ושל Cohere מחכה ל-Gemini עד 12 ש' (החלטת הבעלים 23/10: Gemini שני לפני Cohere).
 # - קריאות עזר (בדיקת נושא, השלמת שאלת המשך, ניסוח מחדש, ניסיון התיקון): Gemini בלבד, כמו קודם.
 ROUTES = {
     "understand": os.getenv("UNDERSTAND_ROUTE", "gemini:gemini-3.8-flash, gemini:gemini-3.6-flash~low | BACKUP~low"),
-    "answer": os.getenv("ANSWER_ROUTE", "gemini:gemini-3.6-flash | BACKUP"),
+    "answer": os.getenv("ANSWER_ROUTE", "gemini:gemini-3.6-flash, gemini:gemini-3.8-flash | BACKUP"),
     "helper": os.getenv("HELPER_ROUTE", "gemini:gemini-3.6-flash, gemini:gemini-3.8-flash"),
 }
 

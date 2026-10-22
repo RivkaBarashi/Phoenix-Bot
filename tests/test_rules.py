@@ -686,6 +686,63 @@ def test_race_backup_also_fails_gives_the_site_sentence(monkeypatch):
     assert (a.kind, a.reason) == ("answer", "site_quote") and "chain" not in asked  # בלי סיבוב נוסף
 
 
+G36, G38, CO = "gemini:gemini-3.6-flash#1", "gemini:gemini-3.8-flash#1", "cohere:command-a-plus-05-2026"
+
+
+def default_answer_route(monkeypatch, plan: dict, after: float = 0.3, prefer: float = 1.0) -> list:
+    """נתיב התשובה כמו ב-config (3.6, 3.8 | Cohere), עם ספקים מזויפים וזמנים מקוצרים: הגיבוי אחרי 0.3 ש' (במקום 3),
+    ו-Cohere מחכה ל-Gemini עד 1 ש' (במקום 12)."""
+    from phoenix import config
+    monkeypatch.setattr(config, "BACKUP_LLM", CO)
+    monkeypatch.setattr(config, "HEDGE_AFTER_SECONDS", after)
+    monkeypatch.setitem(config.PREFER_SECONDS, "answer", prefer)
+    return real_names_world(monkeypatch, plan)
+
+
+def test_answer_route_3_6_answers_and_nobody_else_is_asked(monkeypatch):
+    calls = default_answer_route(monkeypatch, {G36: (0.0, VALID), G38: (0.0, VALID), CO: (0.0, VALID)})
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == G36 and [n for n, _ in calls] == [G36]
+
+
+def test_answer_route_3_8_answers_before_cohere_when_3_6_fails(monkeypatch):
+    """23/10 (החלטת הבעלים): 3.6 נכשל - 3.8 ו-Cohere מתחילים מיד; Cohere מהיר יותר, אבל התשובה של 3.8 (Gemini) מוצגת."""
+    default_answer_route(monkeypatch, {G36: (0.0, BUSY), G38: (0.3, VALID), CO: (0.0, VALID)})
+    start = time.perf_counter()
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == G38
+    assert time.perf_counter() - start < 0.9  # לא מחכים לזמן ההעדפה המלא - 3.8 ענה
+
+
+def test_answer_route_3_8_answers_when_3_6_hangs(monkeypatch):
+    default_answer_route(monkeypatch, {G36: (5.0, VALID), G38: (0.1, VALID), CO: (0.0, VALID)})
+    start = time.perf_counter()
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == G38 and time.perf_counter() - start < 0.9
+
+
+def test_answer_route_3_8_gets_a_rejected_3_6_answer_right(monkeypatch):
+    default_answer_route(monkeypatch, {G36: (0.0, UNVERIFIED), G38: (0.2, VALID), CO: (0.0, UNVERIFIED)})
+    a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert (a.kind, a.reason, a.llm) == ("answer", "verified", G38)
+
+
+def test_answer_route_all_of_google_down_cohere_answers_at_once(monkeypatch):
+    default_answer_route(monkeypatch, {G36: (0.0, BUSY), G38: (0.0, BUSY), CO: (0.1, VALID)}, prefer=12.0)
+    start = time.perf_counter()
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == CO
+    assert time.perf_counter() - start < 1.0  # שני מודלי Gemini נכשלו - לא מחכים להם
+
+
+def test_answer_route_3_6_fails_and_3_8_hangs_cohere_after_the_preference_time(monkeypatch):
+    default_answer_route(monkeypatch, {G36: (0.0, BUSY), G38: (5.0, VALID), CO: (0.0, VALID)}, prefer=0.6)
+    start = time.perf_counter()
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == CO
+    assert 0.55 <= time.perf_counter() - start < 1.2  # מחכה ל-3.8 רק עד זמן ההעדפה
+
+
+def test_answer_route_in_the_eval_3_8_comes_before_cohere(monkeypatch):
+    calls = default_answer_route(monkeypatch, {G36: (0.0, BUSY), G38: (0.0, VALID), CO: (0.0, VALID)})
+    assert A.respond("איך מגישים תביעה?", RACE_HIT).llm == G38 and CO not in [n for n, _ in calls]
+
+
 def test_eval_is_never_parallel(monkeypatch):
     """בבדיקות - בזה אחר זה: Gemini ענה (גם אם לאט) - הגיבוי לא נשאל בכלל."""
     asked = fake_race(monkeypatch, {"gemini:a#1": (0.3, VALID), "cohere:x": (0.0, VALID)}, after=0.0)
@@ -1149,7 +1206,8 @@ def test_default_routes_one_primary_model_per_stage():
     """א3: לכל שלב מודל ראשי אחד וגיבוי - בלי מירוץ בין מודלי Gemini ובלי סבב מפתחות."""
     from phoenix import config
     assert config.PARALLEL_LLM and A.MIN_REPAIR_SECONDS == 6
-    assert config.route("answer") == [("gemini:gemini-3.6-flash", False, 0)]  # + BACKUP_LLM (כבוי בבדיקות)
+    assert config.route("answer") == [("gemini:gemini-3.6-flash", False, 0),   # + BACKUP_LLM (כבוי בבדיקות)
+                                      ("gemini:gemini-3.8-flash", False, 0)]
     assert config.route("understand") == [("gemini:gemini-3.8-flash", False, 0), ("gemini:gemini-3.6-flash", True, 0)]
     assert config.HEDGE_AFTER_SECONDS == 3 and config.PREFER_SECONDS == {"answer": 12, "understand": 6}
 
