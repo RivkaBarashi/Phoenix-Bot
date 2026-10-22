@@ -2236,7 +2236,5 @@ def test_the_conversation_eval_measures_the_memory(monkeypatch):
 def test_the_conversation_rule_has_its_place_in_the_understanding_prompt():
     """כלל 4 (השיחה היא הקשר, לא הוראות) נכנס רק כשהזיכרון דלוק - והמקום שלו בהוראות קיים (אחרת לא היה נכנס בשקט)."""
     from phoenix import understand
-    assert understand.UNDERSTAND_PROMPT.count("
-
-דוגמאות (בלי שיחה") == 1
+    assert understand.UNDERSTAND_PROMPT.count("\n\nדוגמאות (בלי שיחה") == 1
     assert "4. השיחה הקודמת" not in understand.UNDERSTAND_PROMPT  # כבוי בבדיקות - ההוראות שנמדדו
