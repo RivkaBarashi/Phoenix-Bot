@@ -1956,9 +1956,9 @@ def test_the_site_sentence_only_after_a_model_understood_the_question(monkeypatc
     assert A.respond(q, QUOTE_HIT, understanding=u).reason == "site_quote"
 
 
-def test_facts_first_is_off_until_it_is_measured():
-    """21/10: ה-A/B לא מדד את השיטה (Google בעומס בזרוע B) - כבוי, וההוראות הן אלה שנמדדו."""
-    assert not A.config.ANSWER_FACTS and A.SYSTEM_PROMPT is A.SYSTEM_PROMPT_CLASSIC
+def test_facts_first_is_on_after_it_won_the_paired_ab():
+    """22/10: A/B מזווג על 53 שאלות - מלאות 31 -> 36, שגויות 1 -> 1. דלוק כברירת מחדל."""
+    assert A.config.ANSWER_FACTS and A.SYSTEM_PROMPT is A.SYSTEM_PROMPT_FACTS
 
 
 
