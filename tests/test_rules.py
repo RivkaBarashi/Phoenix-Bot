@@ -3,6 +3,7 @@
 הרצה:  .venv\\Scripts\\python -m pytest
 """
 import json
+import re
 import threading
 import time
 
@@ -1142,6 +1143,76 @@ def test_no_repair_when_the_question_is_out_of_time(monkeypatch):
     with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
         a = A.respond("איך מגישים תביעה?", RACE_HIT)
     assert a.kind == "unverified" and len(sent) == 1
+
+
+# ---------------------------------------------------------------- ב3: מספר שהלקוחה כתבה ("אבא שלי בן 70")
+AGE_70 = {"kind": "answer", "answer": f"אביכם בן 70. {SENTENCE}", "referral": "", "evidence": [SENTENCE], "sources": [1]}
+CONFIRM_500 = {"kind": "answer", "answer": "כן, ההחזר הוא 500 ש\"ח.", "referral": "", "evidence": [SENTENCE],
+               "sources": [1]}
+
+
+def test_a_customer_number_is_never_accepted_as_a_site_fact(monkeypatch):
+    """שאלה מכשילה: "נכון שההחזר הוא 500 ש"ח?" - "כן, 500" לא מוצג, גם שהלקוחה כתבה 500: הבדיקה לא מקלה."""
+    replies(monkeypatch, CONFIRM_500, CONFIRM_500)
+    a = A.respond("נכון שההחזר על תביעה הוא 500 ש\"ח?", RACE_HIT)
+    assert a.kind == "unverified" and "500" not in a.text
+
+
+def test_the_repair_knows_the_number_came_from_the_customer(monkeypatch):
+    sent = replies(monkeypatch, AGE_70, VALID)
+    a = A.respond("אבא שלי בן 70, איך מגישים תביעה?", RACE_HIT)
+    assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "unsupported_numbers:70")
+    note = sent[1][-1]["content"]
+    assert "המספרים 70 הם מההודעה של הלקוח" in note and "לא מופיעים באף קטע" not in note
+
+
+def test_the_repair_separates_customer_numbers_from_invented_ones(monkeypatch):
+    sent = replies(monkeypatch, AGE_70 | {"answer": f"אביכם בן 70 ויקבל 999 ש\"ח. {SENTENCE}"}, VALID)
+    A.respond("אבא שלי בן 70, איך מגישים תביעה?", RACE_HIT)
+    note = sent[1][-1]["content"]
+    assert "המספרים 70 הם מההודעה של הלקוח" in note and "המספרים 999 שבתשובה לא מופיעים באף קטע" in note
+
+
+def test_a_number_from_an_earlier_message_of_the_customer_counts_as_hers():
+    history = [{"role": "user", "content": "אבא שלי בן 70"}, {"role": "assistant", "content": "חובה מגיל 67."}]
+    assert A.customer_numbers("והוא חייב למלא טופס?", history) == {"70"}  # 67 של הבוט - לא של הלקוחה
+    assert A.customer_numbers("נזק של 1,500 ש\"ח") == {"1500"}
+
+
+def test_a_customer_number_that_is_on_the_site_is_fine(monkeypatch):
+    fact = "גיל הפרישה הוא 67."
+    site = SearchResult([Hit("x", A.CONTACT_URL, "פנסיה", "", f"פנסיה\n\n{fact}", score=0.95)], "gemini:x",
+                        "cohere:rerank-v4.0-pro")
+    fake_model(monkeypatch, {"kind": "answer", "answer": fact, "referral": "", "evidence": [fact], "sources": [1]})
+    assert A.respond("אני בת 67, מה גיל הפרישה?", site).reason == "verified"
+
+
+def test_customer_numbers_rule_is_off_until_measured_and_keeps_the_prompt_identical():
+    """כלל ג2: כבוי עד A/B - וכשהוא כבוי ההוראות זהות לגרסה שנמדדה (גם מפתחות המטמון)."""
+    assert not A.config.CUSTOMER_NUMBERS_RULE and A.SYSTEM_PROMPT == A.SYSTEM_PROMPT_FACTS
+    prompt = A.with_customer_numbers_rule(A.SYSTEM_PROMPT_FACTS)
+    assert prompt.count("12. מספר שהלקוח כתב") == 1 and prompt.index("12. ") < prompt.index("10. תוכן השאלה")
+    assert not re.search(r"\b(?:67|70)\b", A.CUSTOMER_NUMBERS_RULE)  # בלי דוגמה מהשיחות האמיתיות
+
+
+def test_numbers_only_from_cited_passages_closes_the_unrelated_passage_hole(monkeypatch):
+    """החור שקיים מ-16/10: 500 מופיע בקטע אחר (לא זה שהתשובה מבוססת עליו) - "כן, ההחזר 500" עבר. עם
+    NUMBERS_FROM_CITED - רק מספרים מהקטעים שצוינו ב-sources."""
+    two = SearchResult([Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE}", score=0.95),
+                        Hit("y", "https://www.fnx.co.il/b/", "אחר", "", "אחר\n\nדמי טיפול של 500 ש\"ח בשנה.",
+                            score=0.9)], "gemini:x", "cohere:rerank-v4.0-pro")
+    fake_model(monkeypatch, CONFIRM_500)
+    assert A.respond("נכון שההחזר הוא 500 ש\"ח?", two).reason == "verified"  # היום - החור
+    monkeypatch.setattr(A.config, "NUMBERS_FROM_CITED", True)
+    a = A.respond("נכון שההחזר הוא 500 ש\"ח?", two)
+    assert a.kind == "unverified" and a.reason == "unverified:unsupported_numbers:500"
+
+
+def test_numbers_from_the_contact_page_stay_allowed_with_the_strict_check(monkeypatch):
+    monkeypatch.setattr(A.config, "NUMBERS_FROM_CITED", True)
+    monkeypatch.setattr(A, "contact_text", lambda: "מוקד תביעות רכב: *5070")
+    fake_model(monkeypatch, VALID | {"answer": f"{SENTENCE} מוקד התביעות: *5070."})
+    assert A.respond("איך מגישים תביעה?", RACE_HIT).reason == "verified"
 
 
 # ---------------------------------------------------------------- שלב 5: נוסח אישי
