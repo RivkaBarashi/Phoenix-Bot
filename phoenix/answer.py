@@ -21,7 +21,7 @@ import logging
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 from . import answer_cache, bm25, config, conversation_log, llm
@@ -31,6 +31,11 @@ from .search import Hit, SearchResult, search
 from .understand import Understanding, conversation_text, last_memory, try_understand
 
 CONTEXT_CHUNKS = 5
+
+
+def search_chunks() -> int:
+    """כמה קטעים מבקשים מהחיפוש: 5, או - עם config.CONTEXT_FLEX - עד CONTEXT_MAX_CHUNKS (מתוכם נכנסים רק מעל הסף)."""
+    return max(CONTEXT_CHUNKS, config.CONTEXT_MAX_CHUNKS) if config.CONTEXT_FLEX else CONTEXT_CHUNKS
 # כל מודל בנתיב התשובה (config.ROUTES["answer"]) מקבל את 5 הקטעים המלאים (~11K טוקנים). תשובה ללקוחה - רק ממודל חזק:
 # Groq/OpenRouter (מגבלת טוקנים, עונים מקטעים מקוצרים; בבדיקה עברו 3/5) נשארו רק לשופט בבדיקות.
 CONTACT_URL = "https://www.fnx.co.il/customer-service/contact-us/"
@@ -733,6 +738,92 @@ def number_sources(cited: list[tuple[str, str]], texts: list[str]) -> list[str]:
     return [text for _, text in cited] + [contact_text()]
 
 
+# --- ב1: הקשר רחב יותר (config.CONTEXT_FLEX, config.CONTEXT_PAGES) ---
+PAGE_CHARS = 8000   # בלוק של עמוד אחד - לכל היותר (קטע ממוצע ~2,100 תווים)
+OVERLAP_LINES = 5   # קטעים סמוכים חופפים בכמה שורות (chunk.overlap_from) - בבלוק הן מופיעות פעם אחת
+
+
+def context_hits(hits: list[Hit], ranker: str, calibrated: bool) -> list[Hit]:
+    """הקטעים שמודל התשובה מקבל, הרלוונטיים ביותר בהתחלה. בלי המתגים - 5 הראשונים, בדיוק כמו קודם."""
+    chosen = list(hits[:CONTEXT_CHUNKS])
+    if config.CONTEXT_FLEX and calibrated:  # בלי מדרג מכויל אין סף - נשארים 5
+        bar = config.RERANK_THRESHOLDS[ranker]
+        chosen += [h for h in hits[CONTEXT_CHUNKS:config.CONTEXT_MAX_CHUNKS] if h.score >= bar]
+        size = sum(len(h.text) for h in chosen[:CONTEXT_CHUNKS])
+        for h in chosen[CONTEXT_CHUNKS:]:  # התוספות - רק בתוך התקציב, לפי הדירוג
+            size += len(h.text)
+            if size > config.CONTEXT_CHARS:
+                chosen = chosen[:chosen.index(h)]
+                break
+    return page_blocks(chosen) if config.CONTEXT_PAGES else chosen
+
+
+@lru_cache
+def _page_chunks() -> dict[str, list[dict]]:
+    """כל הקטעים של כל עמוד, לפי הסדר בעמוד."""
+    pages: dict[str, list[dict]] = {}
+    for line in open(CHUNKS_FILE, encoding="utf-8"):
+        chunk = json.loads(line)
+        pages.setdefault(chunk["url"], []).append(chunk)
+    for chunks in pages.values():
+        chunks.sort(key=lambda c: c["chunk_index"])
+    return pages
+
+
+def _body(text: str) -> str:
+    return text.split("\n\n", 1)[-1]
+
+
+def page_blocks(hits: list[Hit], budget: int | None = None) -> list[Hit]:
+    """small-to-big: קטעים מאותו עמוד - בלוק אחד במקום של הקטע הכי רלוונטי מהעמוד, לפי הסדר בעמוד, ועוד הקטע הסמוך
+    (לפני ואחרי) לכל קטע שנמצא - לפי הדירוג, בתוך התקציב (CONTEXT_CHARS בסך הכול, PAGE_CHARS לעמוד). הציטוטים נבדקים מול
+    הבלוק כולו, כך שפרט מהקטע הסמוך עובר אימות כמו כל פרט אחר."""
+    budget = config.CONTEXT_CHARS if budget is None else budget
+    pages = _page_chunks()
+    order: list[str] = []
+    best: dict[str, Hit] = {}
+    ids: dict[str, list[str]] = {}
+    for h in hits:
+        if h.url not in best:
+            order.append(h.url)
+            best[h.url], ids[h.url] = h, []
+        if h.id not in ids[h.url]:
+            ids[h.url].append(h.id)
+    by_id = {c["id"]: c for url in order for c in pages.get(url, [])}
+    size = sum(len(h.text) for h in hits)
+
+    def page_size(url: str) -> int:
+        return sum(len(by_id[i]["text"]) if i in by_id else len(best[url].text) for i in ids[url])
+
+    for url in order:  # הקטעים הסמוכים - קודם לעמודים הרלוונטיים ביותר
+        chunks = pages.get(url, [])
+        index = {c["id"]: c["chunk_index"] for c in chunks}
+        wanted = [index[i] + step for i in list(ids[url]) if i in index for step in (-1, 1)]
+        for c in chunks:
+            if (c["chunk_index"] in wanted and c["id"] not in ids[url]
+                    and size + len(c["text"]) <= budget and page_size(url) + len(c["text"]) <= PAGE_CHARS):
+                ids[url].append(c["id"])
+                size += len(c["text"])
+    blocks = []
+    for url in order:
+        top = best[url]
+        known = [by_id[i] for i in ids[url] if i in by_id]
+        if len(ids[url]) == 1 or len(known) < len(ids[url]):  # קטע אחד, או קטע שלא בקובץ - כמו שהוא
+            blocks.append(top)
+            continue
+        parts, seen_tail = [], []
+        for c in sorted(known, key=lambda c: c["chunk_index"]):
+            lines = _body(c["text"]).strip("\n").split("\n")
+            while lines and lines[0].strip() and lines[0] in seen_tail:  # החפיפה בין קטעים סמוכים - פעם אחת
+                lines.pop(0)
+            heading = c["heading"].split(" › ")[-1] if c["heading"] else ""
+            starts_with_heading = bool(lines) and lines[0].lstrip().startswith("#")
+            parts.append((f"## {heading}\n" if heading and not starts_with_heading else "") + "\n".join(lines))
+            seen_tail = _body(c["text"]).strip("\n").split("\n")[-OVERLAP_LINES:]
+        blocks.append(replace(top, text=f"{top.title}\n\n" + "\n\n".join(parts), heading=""))
+    return blocks
+
+
 def _as_list(value) -> list:
     """מודלים מחזירים לפעמים ערך יחיד במקום רשימה ("evidence": "..." או "sources": 2)."""
     if value is None or value == "":
@@ -805,7 +896,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
     calibrated = ranker in config.RERANK_THRESHOLDS
     threshold = config.RERANK_THRESHOLDS.get(ranker, 0.0) if threshold is None else threshold
     standalone = standalone or question
-    hits = result.hits[:CONTEXT_CHUNKS]
+    hits = context_hits(result.hits, ranker, calibrated)
     timings = dict(result.timings)
     warning = "" if calibrated else CAUTIOUS_WARNING
     if warning:
@@ -1046,7 +1137,7 @@ def start_early_search(question: str, history: list[dict]) -> EarlySearch | None
     query = rest if greeted and rest else question
     if needs_insurance_type(query):
         return None
-    return EarlySearch(query, _EARLY.submit(contextvars.copy_context().run, search, query, CONTEXT_CHUNKS))
+    return EarlySearch(query, _EARLY.submit(contextvars.copy_context().run, search, query, search_chunks()))
 
 
 def same_search(asked: str, standalone: str) -> bool:
@@ -1062,7 +1153,7 @@ def searched(query: str, early: EarlySearch | None, on_stage=None) -> tuple[Sear
     """החיפוש לשאלה: המוקדם, אם הוא על אותה שאלה בעיקרה (ואם הוא עוד רץ - מחכים לו), ואחרת חיפוש חדש.
     מחזיר גם מה קרה: reused / redone, או "" כשלא היה חיפוש מוקדם."""
     if early is None:
-        return search(query, k=CONTEXT_CHUNKS, on_stage=on_stage), ""
+        return search(query, k=search_chunks(), on_stage=on_stage), ""
     if same_search(early.query, query):
         start, left = time.perf_counter(), time_left()
         try:
@@ -1074,7 +1165,7 @@ def searched(query: str, early: EarlySearch | None, on_stage=None) -> tuple[Sear
             if on_stage:
                 on_stage("rerank", pages=result.pages)
             return result, "reused"
-    return search(query, k=CONTEXT_CHUNKS, on_stage=on_stage), "redone"
+    return search(query, k=search_chunks(), on_stage=on_stage), "redone"
 
 
 def _cache_record(a: Answer) -> dict:

@@ -227,6 +227,21 @@ CUSTOMER_NUMBERS_RULE = os.getenv("CUSTOMER_NUMBERS_RULE", "false").strip().lowe
 # 500 ש"ח?" עובר אם 500 מופיע בקטע אחר). דלוק: כל מספר בתשובה חייב להופיע בקטעים שהמודל ציין ב-sources (או בפרטי
 # ההתקשרות). כבוי עד A/B - יכול לפסול תשובה שמשלבת מספר מקטע שהמודל שכח לציין.
 NUMBERS_FROM_CITED = os.getenv("NUMBERS_FROM_CITED", "false").strip().lower() in ("1", "true", "yes", "on")
+# ב1 (23/10) - תשובות חלקיות. "עובדות קודם" טיפל במודל שמשמיט פרט מהקטעים; כאן - פרט שלא הגיע אליו בכלל:
+# - CONTEXT_FLEX: עד CONTEXT_MAX_CHUNKS קטעים במקום 5 - רק קטעים שעברו את סף ה-Rerank (רלוונטיים כמו שאנחנו דורשים
+#   מהראשון), אחרי 5 הראשונים ("Lost in the Middle": הרלוונטיים ביותר בהתחלה).
+# - CONTEXT_PAGES (small-to-big): קטעים מאותו עמוד - בלוק אחד, לפי הסדר בעמוד, ועוד הקטע הסמוך (לפני ואחרי) בעמוד
+#   מחולק (211 עמודים, 508 קטעים): ההסתייגות או המספר שחסרים בדרך כלל צמודים לקטע שנמצא.
+# שניהם בתוך CONTEXT_CHARS (5 הקטעים הראשונים - תמיד). יותר קטעים = יותר מספרים "מותרים" בבדיקת המספרים - לכן כדאי
+# להפעיל איתם את NUMBERS_FROM_CITED. ההקשר הקבוע לכל קטע (שם העמוד ושרשרת הכותרות בתחילת הקטע - "Contextual Retrieval"
+# בגרסה בלי מודל) קיים כבר מבניית האינדקס (chunk.py). כבויים עד A/B (כלל ג2).
+CONTEXT_FLEX = os.getenv("CONTEXT_FLEX", "false").strip().lower() in ("1", "true", "yes", "on")
+CONTEXT_MAX_CHUNKS = int(os.getenv("CONTEXT_MAX_CHUNKS", "8"))
+CONTEXT_PAGES = os.getenv("CONTEXT_PAGES", "false").strip().lower() in ("1", "true", "yes", "on")
+CONTEXT_CHARS = int(os.getenv("CONTEXT_CHARS", "24000"))  # היום: 5 קטעים ~11K תווים
+# כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
+BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
+                  "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.
 SITE_QUOTE_ONLY_UNDERSTOOD = os.getenv("SITE_QUOTE_ONLY_UNDERSTOOD", "true").strip().lower() in ("1", "true", "yes", "on")

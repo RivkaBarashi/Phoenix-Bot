@@ -387,7 +387,8 @@ def main():
             continue
         calls, cache_before = {"answer": 0, "topic": 0, "judge": 0, "understand": understand_calls}, cache_hits()
         before, answered = model_calls(), model_answers()
-        a = respond(row["question"] if u else question, SearchResult(ranked[:5], used, reranked_by, timings),
+        a = respond(row["question"] if u else question,  # ב1: 5 קטעים, או עד 8 עם CONTEXT_FLEX (מעל הסף)
+                    SearchResult(ranked[:answer_layer.search_chunks()], used, reranked_by, timings),
                     threshold=0.0, standalone=question, understanding=u)
         calls["answer"], answer_requests = model_calls() - before, model_answers() - answered
         rec = {"n": n, "type": row["type"], "question": row["question"], "top": ranked[0].score if ranked else 0.0,

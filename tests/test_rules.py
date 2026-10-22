@@ -2238,3 +2238,113 @@ def test_the_conversation_rule_has_its_place_in_the_understanding_prompt():
     from phoenix import understand
     assert understand.UNDERSTAND_PROMPT.count("\n\nדוגמאות (בלי שיחה") == 1
     assert "4. השיחה הקודמת" not in understand.UNDERSTAND_PROMPT  # כבוי בבדיקות - ההוראות שנמדדו
+
+
+# ---------------------------------------------------------------- ב1: תשובות חלקיות - הקשר רחב יותר (CONTEXT_FLEX, CONTEXT_PAGES)
+PAGE = "https://www.fnx.co.il/car-test/"
+
+
+def page_chunk(index: int, body: str, heading: str = "") -> dict:
+    return {"id": f"p{index}", "url": PAGE, "title": "ביטוח רכב", "heading": heading, "chunk_index": index,
+            "text": "\n".join(x for x in ("ביטוח רכב", heading) if x) + f"\n\n{body}"}  # כמו chunk.chunk_page
+
+
+@pytest.fixture
+def car_page(monkeypatch):
+    """עמוד מזויף בשלושה קטעים: התנאי (מגיל 24) נמצא רק בקטע הסמוך לקטע שהחיפוש מצא."""
+    chunks = [page_chunk(0, "מוסיפים נהג באזור האישי באתר."),
+              page_chunk(1, "נהג צעיר מוסיפים בטופס מקוון.\nהבקשה מאושרת תוך יום עסקים."),
+              page_chunk(2, "הבקשה מאושרת תוך יום עסקים.\nנהג מתחת לגיל 24 משלם תוספת לפרמיה.")]
+    monkeypatch.setattr(A, "_page_chunks", lambda: {PAGE: chunks})
+    return chunks
+
+
+def as_hit(chunk: dict, score: float = 0.95) -> Hit:
+    return Hit(chunk["id"], chunk["url"], chunk["title"], chunk["heading"], chunk["text"], score=score)
+
+
+def other_hits(n: int, score: float) -> list:
+    return [Hit(f"o{i}", f"https://www.fnx.co.il/o{i}/", f"עמוד {i}", "", f"עמוד {i}\n\nטקסט {i}", score=score)
+            for i in range(n)]
+
+
+def test_wider_context_is_off_until_measured_and_the_context_is_exactly_as_before():
+    assert not (A.config.CONTEXT_FLEX or A.config.CONTEXT_PAGES) and A.search_chunks() == 5
+    hits = other_hits(8, 0.95)
+    assert A.context_hits(hits, "cohere", True) == hits[:5]
+
+
+def test_flex_adds_only_passages_above_the_threshold_up_to_eight(monkeypatch):
+    monkeypatch.setattr(A.config, "CONTEXT_FLEX", True)
+    bar = A.config.RERANK_THRESHOLDS["cohere"]
+    hits = other_hits(5, 0.95) + [h for h in other_hits(9, bar + 0.01)][5:7] + other_hits(9, bar - 0.01)[7:9]
+    chosen = A.context_hits(hits, "cohere", True)
+    assert [h.id for h in chosen] == ["o0", "o1", "o2", "o3", "o4", "o5", "o6"]  # מתחת לסף - לא נכנסים
+    assert A.search_chunks() == 8 and len(A.context_hits(other_hits(12, 0.99), "cohere", True)) == 8
+    assert len(A.context_hits(hits, "none", False)) == 5  # בלי מדרג מכויל אין סף - נשארים 5
+
+
+def test_flex_extras_stay_within_the_character_budget(monkeypatch):
+    monkeypatch.setattr(A.config, "CONTEXT_FLEX", True)
+    hits = other_hits(8, 0.99)
+    monkeypatch.setattr(A.config, "CONTEXT_CHARS", sum(len(h.text) for h in hits[:6]))  # 5 הראשונים (תמיד) + אחד
+    assert len(A.context_hits(hits, "cohere", True)) == 6
+
+
+def test_same_page_passages_become_one_block_in_page_order(car_page, monkeypatch):
+    monkeypatch.setattr(A.config, "CONTEXT_PAGES", True)
+    hits = [as_hit(car_page[2], 0.95)] + other_hits(1, 0.9) + [as_hit(car_page[0], 0.85)]
+    blocks = A.context_hits(hits, "cohere", True)
+    assert [b.url for b in blocks] == [PAGE, "https://www.fnx.co.il/o0/"]  # במקום של הקטע הכי רלוונטי מהעמוד
+    text = blocks[0].text
+    assert text.index("מוסיפים נהג באזור") < text.index("נהג צעיר") < text.index("מתחת לגיל 24")  # הסדר בעמוד
+    assert text.count("הבקשה מאושרת תוך יום עסקים.") == 1  # החפיפה בין קטעים סמוכים - פעם אחת
+    assert blocks[0].score == 0.95 and blocks[0].heading == ""
+
+
+def test_a_neighbor_passage_is_added_within_the_budgets(car_page, monkeypatch):
+    monkeypatch.setattr(A.config, "CONTEXT_PAGES", True)
+    found = as_hit(car_page[1])
+    assert "מתחת לגיל 24" in A.page_blocks([found])[0].text                     # הקטע הסמוך (אחרי)
+    assert A.page_blocks([found], budget=len(found.text))[0].text == found.text  # אין מקום בתקציב - כמו שהוא
+    single = other_hits(1, 0.9)[0]
+    assert A.page_blocks([single]) == [single]                                 # עמוד שלא בקובץ / קטע יחיד - בלי שינוי
+
+
+def test_a_detail_from_the_neighbor_passage_is_verified_with_small_to_big(car_page, monkeypatch):
+    """הבעיה של ב1: התנאי (מתחת לגיל 24) נמצא בקטע הסמוך. בלי CONTEXT_PAGES המודל לא רואה אותו, וציטוט שלו נפסל;
+    עם CONTEXT_PAGES - הוא בבלוק, והציטוט מאומת מולו (אותן בדיקות בדיוק)."""
+    fact = "נהג מתחת לגיל 24 משלם תוספת לפרמיה."
+    reply = {"kind": "answer", "answer": f"מוסיפים נהג צעיר בטופס מקוון. {fact}", "referral": "",
+             "evidence": ["נהג צעיר מוסיפים בטופס מקוון.", fact], "sources": [1]}
+    result = SearchResult([as_hit(car_page[1])], "gemini:x", "cohere:rerank-v4.0-pro")
+    monkeypatch.setattr(A, "contact_text", lambda: "מוקד שירות הלקוחות: *2000")  # בלי "24/7" של עמוד צור קשר
+    replies(monkeypatch, reply, reply)
+    before = A.respond("איך מוסיפים נהג צעיר לביטוח רכב?", result)
+    assert before.reason != "verified"                  # 24 לא בקטע שנמצא - נפסל
+    monkeypatch.setattr(A.config, "CONTEXT_PAGES", True)
+    replies(monkeypatch, reply)
+    after = A.respond("איך מוסיפים נהג צעיר לביטוח רכב?", result)
+    assert (after.kind, after.reason) == ("answer", "verified") and "24" in after.text
+
+
+def test_every_behavior_flag_is_part_of_the_answer_cache_version(monkeypatch):
+    """23/10: מתג שהשתנה במשתנה סביבה (בלי שינוי בקוד) לא ביטל את התשובות השמורות - תשובה מגרסה אחת הוצגה בשנייה."""
+    from phoenix import answer_cache
+    before = answer_cache.code_version()
+    for name in A.config.BEHAVIOR_FLAGS:
+        value = getattr(A.config, name)
+        monkeypatch.setattr(A.config, name, (not value) if isinstance(value, bool) else value + 1)
+        assert answer_cache.code_version() != before, name
+        monkeypatch.setattr(A.config, name, value)
+    assert answer_cache.code_version() == before
+    monkeypatch.setitem(A.config.ROUTES, "answer", "gemini:gemini-3.8-flash")
+    assert answer_cache.code_version() != before
+
+
+def test_flex_asks_the_search_for_eight(monkeypatch):
+    monkeypatch.setattr(A.config, "CONTEXT_FLEX", True)
+    asked = []
+    monkeypatch.setattr(A, "search", lambda query, k=5, **kwargs: asked.append(k) or RACE_HIT)
+    A.searched("שאלה", None)
+    assert asked == [8]

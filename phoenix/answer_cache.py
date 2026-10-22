@@ -31,8 +31,15 @@ def index_version() -> str:
     return _fingerprint([p for p in files if p.exists()])
 
 
-@lru_cache
 def code_version() -> str:
+    """טביעת האצבע של הקוד, ועוד המתגים שמשנים תשובה (config.BEHAVIOR_FLAGS) והנתיבים - כולם יכולים להשתנות
+    במשתנה סביבה בלי לגעת בקוד (23/10: ANSWER_FACTS=false היה מקבל תשובות ששמרה הגרסה עם "עובדות קודם")."""
+    flags = "|".join(f"{name}={getattr(config, name)}" for name in config.BEHAVIOR_FLAGS) + f"|{config.ROUTES}"
+    return hashlib.sha1((_files_version() + flags).encode()).hexdigest()[:10]
+
+
+@lru_cache
+def _files_version() -> str:
     return _fingerprint(sorted((config.ROOT / "phoenix").glob("*.py")))
 
 
