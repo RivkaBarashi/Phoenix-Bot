@@ -17,6 +17,8 @@ ROBOT_URL = "app/static/robot.png"  # relative: also right when the app sits und
 NAVY, ORANGE, BG, GREY = "#111C3F", "#FF5A23", "#F7F8FB", "#8A8FA0"  # the only colors (white aside)
 WINDOW = 476  # px - the width at which the sizes of the instructions (16px text, 64px header, ...) fit the reference
 RADIUS = 28
+# app.py טוען מחדש את המודול הזה כשהגרסה בזיכרון ישנה יותר (Streamlit Cloud לא טוען מחדש מודולים אחרי git pull)
+UI_VERSION = 3
 
 
 def _icon_uri() -> str:
@@ -216,11 +218,14 @@ def header_html(new_chat_href: str) -> str:
 LAUNCHER_URL = "app/static/launcher.png"  # the owner's icon ("עוזר אישי"), as she sent it (design-references/launcher-icon.png)
 
 
-def script_html() -> str:
+def script_html(start_closed: bool = False) -> str:
     """For st.html(..., unsafe_allow_javascript=True), installed once per page (window.__pxUI):
     - the X hides the window (body.px-closed) and shows the launcher at the bottom left; the launcher shows the window again;
     - a short "send" sound when the customer sends a message (Enter in the box, or the send button), made by the browser
       (Web Audio) - no file. window.__pxSends counts the sounds (for the browser test).
+    - start_closed (22/10, the owner): an entry from the public link starts closed - only the launcher; a click opens it.
+    - a new conversation opens on the robot illustration: until the customer's first message Streamlit's scroll-to-bottom
+      container is kept at the top (from the first message on, Streamlit scrolls to the answers as before).
     Event delegation on the document: Streamlit can redraw the header and the box, the listeners stay.
     No "<" followed by a letter or "/" inside the script: Streamlit's HTML sanitizer drops such a script completely (checked
     21/10 - the launcher was first written as an "<img ...>" string, and nothing ran)."""
@@ -259,6 +264,28 @@ def script_html() -> str:
     window.__pxSends = (window.__pxSends || 0) + 1;
   }
   function box() { return doc.querySelector('textarea[data-testid="stChatInputTextArea"]'); }
+  function top() {
+    if (doc.querySelector('.px-user')) return false;
+    var m = doc.querySelector('[data-testid="stAppScrollToBottomContainer"]');
+    if (m && m.scrollTop !== 0) m.scrollTop = 0;
+    return true;
+  }
+  function settle() { [60, 250, 600, 1200, 2000, 3000].forEach(function (ms) { setTimeout(top, ms); }); }
+  /* until the first question: a scroll the customer did not make (no wheel, finger or key in the last 0.8 s) is
+     Streamlit's scroll-to-bottom - back to the illustration. The customer can still scroll down herself. */
+  var userAt = 0;
+  ['wheel', 'touchmove', 'keydown', 'mousedown'].forEach(function (name) {
+    doc.addEventListener(name, function () { userAt = Date.now(); }, {capture: true, passive: true});
+  });
+  doc.addEventListener('scroll', function (e) {
+    var m = e.target;
+    if (m && m.getAttribute && m.getAttribute('data-testid') === 'stAppScrollToBottomContainer' &&
+        Date.now() - userAt > 800) top();
+  }, true);
+  var watch = new MutationObserver(function () { if (!top()) watch.disconnect(); });
+  watch.observe(doc.body, {childList: true, subtree: true});
+  settle();
+  if (STARTCLOSED) { launcher(); doc.body.classList.add('px-closed'); }
   doc.addEventListener('click', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
@@ -269,6 +296,7 @@ def script_html() -> str:
     }
     if (t.closest('.px-launcher')) {
       doc.body.classList.remove('px-closed');
+      settle();  /* Streamlit scrolls to the bottom again when the window becomes visible - keep the illustration */
       var bx = box(); if (bx) { try { bx.focus({preventScroll: true}); } catch (x) {} }
       return;
     }
@@ -281,7 +309,7 @@ def script_html() -> str:
         t.matches('textarea[data-testid="stChatInputTextArea"]') && t.value.trim()) pop();
   }, true);
 })();
-</script>""".replace("LAUNCHER", LAUNCHER_URL)
+</script>""".replace("LAUNCHER", LAUNCHER_URL).replace("STARTCLOSED", "true" if start_closed else "false")
 
 
 def a11y_script_html() -> str:

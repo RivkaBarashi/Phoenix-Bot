@@ -277,4 +277,21 @@ def test_high_contrast_mode_meets_wcag_aa():
 def test_the_app_installs_the_accessibility_script_separately():
     source = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
     assert "st.html(design.a11y_script_html(), unsafe_allow_javascript=True)" in source
-    assert 'hasattr(design, "a11y_script_html")' in source  # Streamlit Cloud: מודול עיצוב ישן בזיכרון נטען מחדש
+    assert 'getattr(design, "UI_VERSION", 0) < 3' in source  # Streamlit Cloud: מודול עיצוב ישן בזיכרון נטען מחדש
+
+
+# ---------------------------------------------------------------- 22/10: כניסה מהקישור - סגור, ופתיחה על איור הרובוט
+def test_entry_from_the_public_link_starts_closed_and_new_chats_open_directly():
+    import re
+    from phoenix import chat_design
+    closed, opened = chat_design.script_html(True), chat_design.script_html(False)
+    assert "if (true) { launcher(); doc.body.classList.add('px-closed'); }" in closed
+    assert "if (false) { launcher(); doc.body.classList.add('px-closed'); }" in opened
+    for body in (closed, opened):  # Streamlit מוחק סקריפט עם "<" ואחריו אות
+        assert not re.search(r"<[/A-Za-z!]", body[len("<script>"):-len("</script>")])
+        assert "stAppScrollToBottomContainer" in body and "if (doc.querySelector('.px-user')) return false;" in body
+    source = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
+    # רק כניסה בלי ?c= (שיחה חדשה ורענון באים עם ?c=) ולא במצב מפתחת (הבדיקות בדפדפן)
+    assert 'st.session_state.setdefault("start_closed", "c" not in st.query_params and not dev_mode())' in source
+    assert "design.script_html(st.session_state.start_closed)" in source
+    assert 'getattr(design, "UI_VERSION", 0) < 3' in source and chat_design.UI_VERSION >= 3
