@@ -2348,3 +2348,17 @@ def test_flex_asks_the_search_for_eight(monkeypatch):
     monkeypatch.setattr(A, "search", lambda query, k=5, **kwargs: asked.append(k) or RACE_HIT)
     A.searched("שאלה", None)
     assert asked == [8]
+
+
+def test_ab_compare_counts_changes_and_applies_the_decision_rule():
+    import ab_compare
+    before = {"1": {"verdict": "partial", "question": "a"}, "2": {"verdict": "correct", "question": "b"},
+              "3": {"verdict": "wrong", "question": "c"}, "4": {"verdict": "", "question": "d"}}
+    after = {"1": {"verdict": "correct", "question": "a"}, "2": {"verdict": "correct", "question": "b"},
+             "3": {"verdict": "wrong", "question": "c"}, "4": {"verdict": "correct", "question": "d"}}
+    r = ab_compare.compare(before, after)
+    assert (r["questions"], r["better"], r["worse"], r["correct"], r["wrong"]) == (3, ["1"], [], (1, 2), (1, 1))
+    assert r["adopt"] and r["p"] == 1.0  # שינוי אחד - לא מובהק
+    assert ab_compare.mcnemar_p(0, 10) < 0.01 and ab_compare.mcnemar_p(5, 5) == 1.0
+    worse = ab_compare.compare(after, before | {"2": {"verdict": "wrong", "question": "b"}})
+    assert not worse["adopt"] and worse["worse"] == ["1", "2"]
