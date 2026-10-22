@@ -3,7 +3,7 @@
 קריאה = בקשה שיצאה לשירות בפועל, כולל כאלה שנכשלו (גם הן נספרות במגבלה לדקה).
 תשובה מהמטמון (של המודל או של ה-Rerank) לא נספרת כקריאה - היא מופיעה בנפרד, כחיסכון.
 """
-from . import config, embeddings, llm, rerank
+from . import config, embeddings, gateway, llm, rerank
 from .fallback import CALLS, FAILED, resting
 
 SERVICES = {"gemini": "Gemini", "cohere": "Cohere", "groq": "Groq", "openrouter": "OpenRouter", "voyage": "Voyage",
@@ -52,11 +52,16 @@ def report() -> str:
         lines.append("   לפי מודל: " + " | ".join(detail))
     if rest := resting():
         lines.append("   נחים עכשיו (מכסה/עומס): " + " | ".join(f"{n} עוד {_duration(s)}" for n, s in sorted(rest.items())))
+    if circuits := gateway.circuits():  # מודלי השפה: מפסקים שאינם סגורים
+        lines.append("   מפסקים פתוחים: " + " | ".join(f"{n} ({c['reason']}) עוד {_duration(c['open_for'])}"
+                                                     for n, c in sorted(circuits.items())))
     return "\n".join(lines)
 
 
 def _duration(seconds: float) -> str:
     if seconds == float("inf"):
         return "עד הפעלה מחדש"
+    if seconds < 60:  # מפסק פתוח - בדרך כלל שניות
+        return f"{max(seconds, 1):.0f} ש'"
     minutes = int(seconds // 60)
     return f"{minutes // 60}:{minutes % 60:02d} שעות" if minutes >= 60 else f"{max(minutes, 1)} דק'"

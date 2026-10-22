@@ -350,7 +350,7 @@ def test_regular_question_without_a_model_gets_the_page_never_not_available(monk
     assert a.sources and A.GENERIC_REFERRAL in a.text
 
 
-# ---------------------------------------------------------------- מאגר מפתחות Gemini (ספקים מדומים, בלי API)
+# ---------------------------------------------------------------- מאגר מפתחות Gemini לווקטורים (run_chain, בלי API)
 
 class FakeApiError(Exception):
     """שגיאה כמו של google-genai: קוד HTTP בשדה code."""
@@ -483,8 +483,9 @@ def test_eval_scripts_retry_overload_on_the_same_model(monkeypatch):
     """בסקריפטי הבדיקות (config.patient): 503 -> ניסיון חוזר אחד, ואז רק הצירוף מפתח+מודל נח 30 שניות ואותו מודל
     ממשיך במפתח הבא. ריצה על מודל אחד קבוע לא מאבדת אותו ל-5 דקות."""
     from phoenix import config
-    for name in ("QUERY_TIMEOUT", "QUERY_RETRIES", "QUERY_MAX_WAIT"):
-        monkeypatch.setattr(config, name, getattr(config, name))  # patient() משנה אותם - יוחזרו בסוף הבדיקה
+    for name in ("QUERY_TIMEOUT", "QUERY_RETRIES", "QUERY_MAX_WAIT", "EMBED_QUERY_TIMEOUT", "LLM_RETRIES",
+                 "LLM_MAX_WAIT", "UNDERSTAND_TIMEOUT"):
+        monkeypatch.setattr(config, name, getattr(config, name))  # patient() משנה את כולם - יוחזרו בסוף הבדיקה
     monkeypatch.setattr(fallback, "OVERLOAD_MEMORY", True)
     monkeypatch.setattr(fallback, "_resting_until", {})
     config.patient()
@@ -497,33 +498,7 @@ def test_eval_scripts_retry_overload_on_the_same_model(monkeypatch):
     assert 25 < rest["t:m1#1"] <= 30 and "t:m1" not in rest
 
 
-@pytest.mark.parametrize("error, expected, tried", [
-    (FakeApiError(503, "overloaded"), "gemini:m1#2", ["m1#1", "m1#2"]),          # עומס מהיר: אותו מודל, המפתח הבא
-    (FakeApiError(504, "DEADLINE_EXCEEDED"), "gemini:m2#1", ["m1#1", "m2#1"]),   # עומס איטי: המודל מדולג בכל המפתחות
-])
-def test_llm_chat_keeps_model_and_key_groups(monkeypatch, error, expected, tried):
-    """דרך llm.chat (לא רק run_chain): הקבוצות של מודל ומפתח נשמרות."""
-    monkeypatch.setattr(fallback, "_resting_until", {})
-    monkeypatch.setattr(llm, "CACHE_MODE", "off")
-    called = []
-
-    def make(name, error=None):
-        def call(messages, system, temperature, json_mode=False, timeout=None):
-            called.append(name)
-            if error:
-                raise error
-            return '{"ok": true}'
-        return call
-
-    fake = [fallback.Provider("gemini:m1#1", make("m1#1", error), group="gemini:m1", key="gemini#1"),
-            fallback.Provider("gemini:m1#2", make("m1#2"), group="gemini:m1", key="gemini#2"),
-            fallback.Provider("gemini:m2#1", make("m2#1"), group="gemini:m2", key="gemini#1")]
-    monkeypatch.setattr(llm, "PROVIDERS", fake)
-    assert REAL_CHAT([{"role": "user", "content": "x"}]).provider == expected
-    assert called == tried
-
-
-# ---------------------------------------------------------------- בקשות במקביל בצ'אט (מודל מזויף, בלי API)
+# ---------------------------------------------------------------- נתיב התשובה בצ'אט (שער המודלים האמיתי, ספקים מזויפים)
 
 SENTENCE = "כדי להגיש תביעה ממלאים טופס תביעה דיגיטלי ומצרפים את המסמכים הדרושים."
 RACE_HIT = SearchResult([Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE}", score=0.95)],
@@ -582,71 +557,72 @@ def model_understood(question: str):
     return Understanding(question, "info", source="model")
 
 
-def fake_race(monkeypatch, plan: dict):
-    """plan: הספק הראשון של כל צד (או "chain" לשרשרת הרגילה) -> (השהיה בשניות, תשובה או חריגה)."""
+def fake_race(monkeypatch, plan: dict, after: float = 3.0, prefer: float = 12.0) -> dict:
+    """ספקים מזויפים מאחורי שער המודלים האמיתי (gateway.py). plan: ספק -> (השהיה בשניות, תשובה או חריגה).
+    נתיב התשובה: ספקי Gemini לפי הסדר, ואחריהם בדרגת גיבוי ספקים מחברה אחרת ("cohere:x"); "chain" - נתיב העזר (ניסיון
+    התיקון). after / prefer - HEDGE_AFTER_SECONDS ו-PREFER_SECONDS["answer"]. מחזיר: ספק -> מתי נשאל לראשונה."""
+    from phoenix import config
+    names = {key: ("gemini:chain#1" if key == "chain" else key) for key in plan}
+    asked = {}
+
+    def provider(key, name):
+        def call(messages, system, temperature, json_mode=False, timeout=None, **kwargs):
+            asked.setdefault(key, time.perf_counter())
+            delay, data = plan[key]
+            time.sleep(delay)
+            if isinstance(data, Exception):
+                raise data
+            return json.dumps(data, ensure_ascii=False)
+        return fallback.Provider(name, call)
+
+    monkeypatch.setattr(llm, "chat", REAL_CHAT)
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
-    monkeypatch.setattr(llm, "race_pair", lambda service="gemini": [["gemini:a#1"], ["gemini:b#2"]])
-    monkeypatch.setattr(A.config, "GEMINI_RACE", True)  # שני צדי Gemini (הבדיקות הישנות); בצ'אט - כבוי
-
-    def chat(messages, names=None, **kwargs):
-        delay, data = plan[names[0] if names else "chain"]
-        time.sleep(delay)
-        if isinstance(data, Exception):
-            raise data
-        return llm.ChatResult(json.dumps(data, ensure_ascii=False), names[0] if names else "gemini:chain#1", data)
-    monkeypatch.setattr(llm, "chat", chat)
+    monkeypatch.setattr(llm, "PROVIDERS", [provider(key, name) for key, name in names.items()])
+    gemini = [name for key, name in names.items() if name.startswith("gemini:") and key != "chain"]
+    others = [name for name in names.values() if not name.startswith("gemini:")]
+    monkeypatch.setitem(config.ROUTES, "answer", ", ".join(gemini) + (" | " + ", ".join(others) if others else ""))
+    monkeypatch.setitem(config.ROUTES, "helper", "gemini:chain#1" if "chain" in plan else "")
+    monkeypatch.setattr(config, "HEDGE_AFTER_SECONDS", after)
+    monkeypatch.setitem(config.PREFER_SECONDS, "answer", prefer)
+    return asked
 
 
-def test_race_first_valid_answer_wins(monkeypatch):
-    fake_race(monkeypatch, {"gemini:a#1": (0.0, VALID), "gemini:b#2": (2.0, VALID)})
+BUSY = FakeApiError(503, "This model is currently experiencing high demand.")
+DEADLINE = FakeApiError(504, "504 DEADLINE_EXCEEDED. Deadline expired before operation could complete.")
+
+
+def test_the_primary_answers_and_the_backup_is_not_asked(monkeypatch):
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.0, VALID), "cohere:x": (2.0, VALID)})
     start = time.perf_counter()
     a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
-    assert (a.kind, a.llm) == ("answer", "gemini:a#1") and "במקביל" in a.race
-    assert time.perf_counter() - start < 1.5      # לא מחכים לתשובה השנייה
+    assert (a.kind, a.llm) == ("answer", "gemini:a#1") and "cohere:x" not in asked and a.race == ""
+    assert time.perf_counter() - start < 1.5
 
 
-def test_race_waits_when_the_first_answer_fails_verification(monkeypatch):
-    fake_race(monkeypatch, {"gemini:a#1": (0.0, UNVERIFIED), "gemini:b#2": (0.3, VALID)})
+def test_a_rejected_answer_starts_the_backup_at_once(monkeypatch):
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.0, UNVERIFIED), "cohere:x": (0.3, VALID)})
+    start = time.perf_counter()
     a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
-    assert (a.kind, a.reason, a.llm) == ("answer", "verified", "gemini:b#2")
+    assert (a.kind, a.reason, a.llm) == ("answer", "verified", "cohere:x") and "במקביל" in a.race
+    assert asked["cohere:x"] - start < 0.5  # לא מחכים 3 שניות
 
 
-def test_race_both_fail_continues_with_the_chain(monkeypatch):
-    failed = fallback.AllProvidersFailed("llm", ["quota"])
-    fake_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (0.0, failed), "chain": (0.0, VALID)})
+def test_both_fail_gives_the_page_and_a_referral(monkeypatch):
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, BUSY), "cohere:x": (0.0, BUSY)})
     a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
-    assert (a.kind, a.llm) == ("answer", "gemini:chain#1")
-
-
-def backup_race(monkeypatch, plan, after=3.0, preferred=12.0):
-    """המירוץ עם מודל הגיבוי מחוץ ל-Google ("cohere:x"), וזמני כלל המעבר מקוצרים לבדיקה. מחזיר מתי כל ספק נשאל."""
-    from phoenix import config
-    fake_race(monkeypatch, plan)
-    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:x")
-    monkeypatch.setattr(config, "BACKUP_AFTER_SECONDS", after)
-    monkeypatch.setattr(config, "GEMINI_PREFERRED_SECONDS", preferred)
-    monkeypatch.setattr(llm, "ready", lambda name: True)
-    asked, chat = {}, llm.chat
-
-    def timed(messages, names=None, **kwargs):
-        asked.setdefault(names[0] if names else "chain", time.perf_counter())
-        return chat(messages, names=names, **kwargs)
-    monkeypatch.setattr(llm, "chat", timed)
-    return asked
+    assert (a.kind, a.reason) == ("unverified", "no_model:unavailable") and A.GENERIC_REFERRAL in a.text
 
 
 def test_race_backup_starts_at_once_when_google_returns_an_error(monkeypatch):
     """כלל המעבר (21/10): Google החזיר תקלה (503, מכסה, 504) - Cohere מתחיל מיד, בלי לחכות 3 שניות."""
-    failed = fallback.AllProvidersFailed("llm", ["503"])
-    asked = backup_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (5.0, VALID), "cohere:x": (0.0, VALID)})
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.0, BUSY), "cohere:x": (0.0, VALID)})
     start = time.perf_counter()
-    A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
+    assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "cohere:x"
     assert asked["cohere:x"] - start < 0.5
 
 
 def test_race_backup_starts_after_3_seconds_when_google_is_only_slow(monkeypatch):
-    asked = backup_race(monkeypatch, {"gemini:a#1": (10.0, VALID), "gemini:b#2": (10.0, VALID), "cohere:x": (0.0, VALID)},
-                        after=0.3, preferred=0.6)
+    asked = fake_race(monkeypatch, {"gemini:a#1": (10.0, VALID), "cohere:x": (0.0, VALID)}, after=0.3, prefer=0.6)
     start = time.perf_counter()
     a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
     assert 0.25 <= asked["cohere:x"] - start < 0.6           # לא לפני 3 השניות (כאן 0.3)
@@ -655,33 +631,32 @@ def test_race_backup_starts_after_3_seconds_when_google_is_only_slow(monkeypatch
 
 def test_race_prefers_gemini_until_12_seconds_even_when_the_backup_answers_first(monkeypatch):
     """Cohere לבד - 2 תשובות שגויות ב-45 שאלות, Gemini - 0. תשובה תקינה של Gemini עד 12 השניות מוצגת."""
-    backup_race(monkeypatch, {"gemini:a#1": (0.4, VALID), "gemini:b#2": (5.0, VALID), "cohere:x": (0.0, VALID)},
-                after=0.0, preferred=1.0)
+    fake_race(monkeypatch, {"gemini:a#1": (0.4, VALID), "cohere:x": (0.0, VALID)}, after=0.0, prefer=1.0)
     assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "gemini:a#1"
 
 
 def test_race_backup_answer_is_shown_when_gemini_fails_after_it(monkeypatch):
-    failed = fallback.AllProvidersFailed("llm", ["504"])
-    backup_race(monkeypatch, {"gemini:a#1": (0.2, failed), "gemini:b#2": (0.2, failed), "cohere:x": (0.0, VALID)},
-                after=0.0)
+    fake_race(monkeypatch, {"gemini:a#1": (0.2, DEADLINE), "cohere:x": (0.0, VALID)}, after=0.0)
     start = time.perf_counter()
     assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "cohere:x"
     assert time.perf_counter() - start < 4.0  # לא מחכים ל-12 השניות כש-Gemini כבר נכשל
 
 
-def test_race_backup_starts_at_once_when_no_gemini_key_is_free(monkeypatch):
-    asked = backup_race(monkeypatch, {"cohere:x": (0.0, VALID)})
-    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: [])
-    monkeypatch.setattr(llm, "free_keys", lambda *args, **kwargs: [])
+def test_race_backup_starts_at_once_when_gemini_is_out_of_service(monkeypatch):
+    """המפסק של Gemini פתוח (למשל מכסה): מדלגים עליו בלי לנסות, והגיבוי מתחיל מיד."""
+    from phoenix import gateway
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.0, VALID), "cohere:x": (0.0, VALID)})
+    gateway.breaker("gemini:a#1").failed(fallback.QUOTA)
     start = time.perf_counter()
     assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "cohere:x"
-    assert asked["cohere:x"] - start < 0.5
+    assert asked["cohere:x"] - start < 0.5 and "gemini:a#1" not in asked
 
 
 def test_race_backup_answers_before_the_time_runs_out_when_gemini_hangs(monkeypatch):
-    backup_race(monkeypatch, {"gemini:a#1": (30.0, VALID), "gemini:b#2": (30.0, VALID), "cohere:x": (0.0, VALID)},
-                after=0.0)
-    monkeypatch.setattr(A, "BACKUP_WAIT_MARGIN", 0.5)
+    from phoenix import config
+    fake_race(monkeypatch, {"gemini:a#1": (30.0, VALID), "cohere:x": (0.0, VALID)}, after=0.0)
+    monkeypatch.setitem(config.PREFER_MARGIN, "answer", 0.5)
+    monkeypatch.setattr(fallback, "MIN_ATTEMPT_SECONDS", 0.2)
     start = time.perf_counter()
     with fallback.time_budget(1.5):
         a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True)
@@ -691,8 +666,8 @@ def test_race_backup_answers_before_the_time_runs_out_when_gemini_hangs(monkeypa
 def test_race_out_of_time_after_a_failure_gives_the_site_sentence_not_a_crash(monkeypatch):
     monkeypatch.setattr(A.config, "SITE_QUOTE", True)
     """21/10: נגמר הזמן אחרי שצד אחד כבר נכשל - OutOfTime קיבל את אובייקט החריגה במקום טקסט (TypeError, הבוט קרס)."""
-    failed = fallback.AllProvidersFailed("llm", ["503"])
-    backup_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (30.0, VALID), "cohere:x": (30.0, VALID)})
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, BUSY), "cohere:x": (30.0, VALID)})
+    monkeypatch.setattr(fallback, "MIN_ATTEMPT_SECONDS", 0.2)
     with fallback.time_budget(0.6):
         a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=model_understood("איך מגישים תביעה?"))
     assert (a.kind, a.reason) == ("answer", "site_quote")
@@ -700,25 +675,21 @@ def test_race_out_of_time_after_a_failure_gives_the_site_sentence_not_a_crash(mo
 
 def test_race_backup_answer_gets_the_same_checks(monkeypatch):
     """תשובה של Cohere שלא עוברת את הבדיקות לא מוצגת כמאומתת - אותן בדיקות בדיוק, בלי הקלות."""
-    failed = fallback.AllProvidersFailed("llm", ["503"])
-    backup_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (0.0, failed), "cohere:x": (0.0, UNVERIFIED),
-                              "chain": (0.0, failed)})
+    fake_race(monkeypatch, {"gemini:a#1": (0.0, BUSY), "cohere:x": (0.0, UNVERIFIED), "chain": (0.0, BUSY)})
     assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).reason != "verified"
 
 
 def test_race_backup_also_fails_gives_the_site_sentence(monkeypatch):
     monkeypatch.setattr(A.config, "SITE_QUOTE", True)
-    failed = fallback.AllProvidersFailed("llm", ["503"])
-    asked = backup_race(monkeypatch, {"gemini:a#1": (0.0, failed), "gemini:b#2": (0.0, failed),
-                                      "cohere:x": (0.0, failed), "chain": (0.0, VALID)})
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.0, BUSY), "cohere:x": (0.0, BUSY), "chain": (0.0, VALID)})
     a = A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True, understanding=model_understood("איך מגישים תביעה?"))
-    assert (a.kind, a.reason) == ("answer", "site_quote") and "chain" not in asked  # בלי סיבוב נוסף בשרשרת
+    assert (a.kind, a.reason) == ("answer", "site_quote") and "chain" not in asked  # בלי סיבוב נוסף
 
 
 def test_eval_is_never_parallel(monkeypatch):
-    fake_race(monkeypatch, {"chain": (0.0, VALID)})
-    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בבדיקות אין בקשות במקביל"))
-    assert A.respond("איך מגישים תביעה?", RACE_HIT).llm == "gemini:chain#1"
+    """בבדיקות - בזה אחר זה: Gemini ענה (גם אם לאט) - הגיבוי לא נשאל בכלל."""
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.3, VALID), "cohere:x": (0.0, VALID)}, after=0.0)
+    assert A.respond("איך מגישים תביעה?", RACE_HIT).llm == "gemini:a#1" and "cohere:x" not in asked
 
 
 def test_one_gemini_client_per_key_even_when_threads_ask_at_once(monkeypatch):
@@ -760,7 +731,6 @@ def stages_for(monkeypatch, question: str, *, score: float = 0.95, parallel: boo
     monkeypatch.setattr(search_module, "rerank_hits", rerank)
     monkeypatch.setattr(A.config, "PARALLEL_LLM", parallel)
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
-    monkeypatch.setattr(llm, "race_pair", lambda service="gemini": [["gemini:a#1"], ["gemini:b#2"]])
 
     def chat(messages, names=None, system="", **kwargs):
         if system == A.TOPIC_PROMPT:
@@ -849,12 +819,16 @@ def ranked(reranker: str, score: float) -> SearchResult:
                         "gemini:x", reranker)
 
 
-def test_cohere_is_the_backup_language_model_outside_google():
-    """21/10 (החלטת הבעלים: לא להישען רק על Google): Cohere הוא מודל הגיבוי - אחרון בשרשרת, עם ההקשר המלא (לא
-    בקיצור של Groq), וה-Rerank נשאר Cohere קודם."""
+def test_cohere_is_the_backup_language_model_outside_google(monkeypatch):
+    """21/10 (החלטת הבעלים: לא להישען רק על Google): Cohere הוא מודל הגיבוי - בדרגת הגיבוי של נתיב התשובה ונתיב ההבנה,
+    עם ההקשר המלא, וה-Rerank נשאר Cohere קודם."""
     from phoenix import config
     assert config.LLM_CHAIN[-1] == ("cohere", "command-a-plus-05-2026")  # BACKUP_LLM עצמו כבוי בבדיקות (conftest)
-    assert [p for p, _ in config.LLM_CHAIN].count("cohere") == 1 and "cohere" not in A.COMPACT_LLMS
+    assert [p for p, _ in config.LLM_CHAIN].count("cohere") == 1
+    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-plus-05-2026")
+    assert config.route("answer")[-1] == ("cohere:command-a-plus-05-2026", False, 1)
+    assert config.route("understand")[-1] == ("cohere:command-a-plus-05-2026", True, 1)  # הבנה - תקציב חשיבה קטן
+    assert all(target.startswith("gemini:") for target, _, _ in config.route("helper"))   # קריאות עזר - בלי Cohere
     # Voyage לפני המדרג המקומי: מהיר, ונכנס ב-20 השניות גם בענן (המקומי ~10 שניות על המעבד)
     assert [p for p, _ in config.RERANK_CHAIN] == ["cohere", "voyage", "local"]
 
@@ -1126,93 +1100,68 @@ def test_personal_wording_fits_any_personal_question():
 
 
 # ---------------------------------------------------------------- איכות לפני מהירות: תשובות רק ממודל חזק
+def real_names_world(monkeypatch, plan: dict) -> list:
+    """llm.PROVIDERS מזויפים בשמות האמיתיים, והנתיבים כמו שהם ב-config. plan: ספק -> (השהיה, תוצאה או חריגה);
+    תוצאה "understood" - הבנת שאלה תקינה. מחזיר את הקריאות לפי הסדר: (ספק, חשיבה נמוכה)."""
+    calls = []
+
+    def provider(name):
+        def call(messages, system, temperature, json_mode=False, timeout=None, low_thinking=False):
+            calls.append((name, low_thinking))
+            delay, result = plan[name]
+            time.sleep(delay)
+            if isinstance(result, Exception):
+                raise result
+            if result == "understood":
+                return json.dumps({"standalone_question": "שאלה", "intent": "info"})
+            return json.dumps(result, ensure_ascii=False)
+        return fallback.Provider(name, call, group=name.split("#")[0] if name.startswith("gemini:") else "")
+    monkeypatch.setattr(llm, "chat", REAL_CHAT)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    monkeypatch.setattr(llm, "PROVIDERS", [provider(name) for name in plan])
+    return calls
+
+
 def test_answers_come_only_from_strong_models(monkeypatch):
     monkeypatch.setattr(A.config, "SITE_QUOTE", True)
     """בלי Flash-Lite ו-Gemma בשרשרת; כש-Gemini Flash לא זמין - מודל הגיבוי החזק מחוץ ל-Google (Cohere, ההקשר המלא),
-    וכשגם הוא לא זמין - המשפט מהאתר (בלי מודל). לא Groq/OpenRouter."""
+    וכשגם הוא לא זמין - המשפט מהאתר (בלי מודל). לא Groq/OpenRouter, גם כשהם זמינים."""
     from phoenix import config
     assert not any("lite" in m or "gemma" in m for p, m in config.LLM_CHAIN if p == "gemini")
     monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-plus-05-2026")
-    asked = []
-
-    def chat(messages, only=None, **kwargs):
-        asked.append(only)
-        raise fallback.AllProvidersFailed("llm", ["gemini overloaded"])
-    monkeypatch.setattr(llm, "chat", chat)
-    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    calls = real_names_world(monkeypatch, {"gemini:gemini-3.6-flash#1": (0.0, BUSY), "groq:openai/gpt-oss-120b": (0.0, VALID),
+                                           "cohere:command-a-plus-05-2026": (0.0, BUSY)})
     a = A.respond("איך מגישים תביעה?", RACE_HIT, understanding=model_understood("איך מגישים תביעה?"))
     assert (a.kind, a.reason) == ("answer", "site_quote") and f"«{SENTENCE}»" in a.text
-    assert asked == [["gemini"], ["cohere"]]  # Gemini, ואז Cohere - שום ניסיון אצל Groq/OpenRouter
-
-
-def fake_providers(monkeypatch, models=("gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"), keys=2):
-    """ספקים מזויפים: כל מודל בכמה מפתחות, ועוד Groq - כך הבדיקה לא תלויה במפתחות שב-.env (ב-CI אין)."""
-    from phoenix.fallback import Provider
-    providers = [Provider(f"gemini:{m}#{n}", lambda *a, **k: "", group=f"gemini:{m}", key=f"gemini#{n}")
-                 for m in models for n in range(1, keys + 1)] + [Provider("groq:x", lambda *a, **k: "")]
-    monkeypatch.setattr(llm, "PROVIDERS", providers)
-    return providers
+    assert {name for name, _ in calls} == {"gemini:gemini-3.6-flash#1", "cohere:command-a-plus-05-2026"}
 
 
 def test_understanding_runs_only_on_the_strong_models(monkeypatch):
-    """הבנת השאלה לא עוברת ל-Groq/OpenRouter: כל Gemini Flash לא זמין - כללי הקוד."""
-    from phoenix import config, understand
-    fake_providers(monkeypatch)
-    asked = []
-
-    def chat(messages, names=None, **kwargs):
-        asked.extend(names)
-        raise fallback.AllProvidersFailed("llm", ["down"])
-    monkeypatch.setattr(understand.llm, "chat", chat)
+    """הבנת השאלה לא עוברת ל-Groq/OpenRouter (וגם לא ל-3.7): 3.8 ו-3.6 לא זמינים - כללי הקוד."""
+    from phoenix import understand
+    calls = real_names_world(monkeypatch, {"gemini:gemini-3.6-flash#1": (0.0, BUSY), "gemini:gemini-3.7-flash#1": (0.0, BUSY),
+                                           "gemini:gemini-3.8-flash#1": (0.0, BUSY), "groq:x": (0.0, "understood")})
     assert understand.try_understand("שאלה") is None
-    assert asked and all(any(f"gemini:{m}#" in name for m in config.UNDERSTAND_LLMS) for name in asked)
+    assert {name for name, _ in calls} == {"gemini:gemini-3.8-flash#1", "gemini:gemini-3.6-flash#1"}
 
 
-# ---------------------------------------------------------------- 20 שניות: מרוץ, חיפוש מוקדם, חשיבה נמוכה, תיקון
-def test_race_is_on_in_the_chat_with_3_6_and_3_8():
+def test_default_routes_one_primary_model_per_stage():
+    """א3: לכל שלב מודל ראשי אחד וגיבוי - בלי מירוץ בין מודלי Gemini ובלי סבב מפתחות."""
     from phoenix import config
-    assert config.PARALLEL_LLM and config.RACE_LLMS == ["gemini-3.6-flash", "gemini-3.8-flash"]
-    assert not config.GEMINI_RACE  # 21/10: קריאת Gemini אחת, והמתחרה מחברה אחרת (Cohere)
-    assert A.MIN_REPAIR_SECONDS == 6
+    assert config.PARALLEL_LLM and A.MIN_REPAIR_SECONDS == 6
+    assert config.route("answer") == [("gemini:gemini-3.6-flash", False, 0)]  # + BACKUP_LLM (כבוי בבדיקות)
+    assert config.route("understand") == [("gemini:gemini-3.8-flash", False, 0), ("gemini:gemini-3.6-flash", True, 0)]
+    assert config.HEDGE_AFTER_SECONDS == 3 and config.PREFER_SECONDS == {"answer": 12, "understand": 6}
 
 
-def test_race_pair_prefers_the_configured_models_and_fills_in(monkeypatch):
-    """הזוג: 3.6 ו-3.8 (לא 3.6 ו-3.7 לפי סדר השרשרת), כל אחד מתחיל במפתח אחר. 3.8 נח - 3.7 נכנס במקומו."""
-    fake_providers(monkeypatch)
-    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
-    assert pair[0][0].startswith("gemini:gemini-3.6-flash#") and pair[1][0].startswith("gemini:gemini-3.8-flash#")
-    assert pair[0][0].split("#")[1] != pair[1][0].split("#")[1]
-    monkeypatch.setitem(fallback._resting_until, "gemini:gemini-3.8-flash", time.time() + 60)
-    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
-    assert pair[0][0].startswith("gemini:gemini-3.6-flash#") and pair[1][0].startswith("gemini:gemini-3.7-flash#")
-
-
-def test_race_pair_with_one_model_left_sends_it_on_two_keys(monkeypatch):
-    """3.7 ו-3.8 נחים (עומס): אותה שאלה ל-3.6 בשני מפתחות שונים במקביל. מפתח אחד בלבד - בלי מירוץ."""
-    fake_providers(monkeypatch)
-    for model in ("gemini-3.7-flash", "gemini-3.8-flash"):
-        monkeypatch.setitem(fallback._resting_until, f"gemini:{model}", time.time() + 60)
-    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
-    assert len(pair) == 2 and all(names[0].startswith("gemini:gemini-3.6-flash#") for names in pair)
-    assert pair[0][0] != pair[1][0] and sorted(pair[0]) == sorted(pair[1])
-    keys = [p for p in llm.PROVIDERS if p.group == "gemini:gemini-3.6-flash"]
-    for p in keys[1:]:
-        monkeypatch.setitem(fallback._resting_until, p.name, time.time() + 60)
-    assert llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"]) == []
-
-
-def test_race_pair_is_gemini_only_the_backup_follows_the_switching_rule(monkeypatch):
-    """מודל הגיבוי לא בזוג של race_pair - answer._race מפעיל אותו לפי כלל המעבר (תקלה - מיד, איטי - אחרי 3 ש')."""
+def test_language_models_use_one_gemini_key_without_rotation():
+    """מפתח Gemini אחד לכל מודלי השפה (GEMINI_API_KEY, שישודרג לתשלום) - לא מאגר של 28 מפתחות."""
     from phoenix import config
-    from phoenix.fallback import Provider
-    providers = fake_providers(monkeypatch) + [Provider("cohere:command-a-plus-05-2026", lambda *a, **k: "")]
-    monkeypatch.setattr(llm, "PROVIDERS", providers)
-    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-plus-05-2026")
-    pair = llm.race_pair(["gemini-3.6-flash", "gemini-3.8-flash"])
-    assert all(name.startswith("gemini:") for side in pair for name in side)
-    assert llm.ready("cohere:command-a-plus-05-2026")
-    monkeypatch.setitem(fallback._resting_until, "cohere:command-a-plus-05-2026", time.time() + 60)
-    assert not llm.ready("cohere:command-a-plus-05-2026")
+    gemini = [p for p in llm._providers() if p.name.startswith("gemini:")]
+    assert len(gemini) == sum(1 for p, _ in config.LLM_CHAIN if p == "gemini")
+    assert len({p.key for p in gemini}) == 1
+    if config.GEMINI_KEYS:
+        assert config.LLM_GEMINI_KEY == config.GEMINI_KEYS[0][0] and all(p.enabled for p in gemini)
 
 
 @pytest.mark.parametrize("asked, standalone, same", [
@@ -1270,19 +1219,15 @@ def test_no_early_search_for_a_follow_up(monkeypatch):
 
 
 def test_understanding_thinking_strong_model_normal_backup_low(monkeypatch):
-    """החלטת הבעלים (20/10, 3.8 לא התאושש): המודל הראשי (3.8) בחשיבה רגילה, מודל הגיבוי (3.6) בחשיבה נמוכה."""
-    from phoenix import understand
-    seen = []
-
-    def chat(messages, **kwargs):
-        seen.append(kwargs["low_thinking"])
-        raise fallback.AllProvidersFailed("llm", ["down"])
-    monkeypatch.setattr(understand.llm, "chat", chat)
-    monkeypatch.setattr(understand.config, "UNDERSTAND_TIMEOUT", None)  # בלי בקשת הגיבוי - לא תלוי בסדר הבדיקות
-    understand.try_understand("שאלה")                                      # המודלים החזקים
-    with pytest.raises(fallback.AllProvidersFailed):
-        understand.understand("שאלה", models=[understand.config.UNDERSTAND_HEDGE])  # בקשת הגיבוי
-    assert seen == [False, True]
+    """החלטת הבעלים (20/10, 3.8 לא התאושש): המודל הראשי (3.8) בחשיבה רגילה, 3.6 ומודל הגיבוי - בחשיבה נמוכה."""
+    from phoenix import config, understand
+    monkeypatch.setattr(config, "BACKUP_LLM", "cohere:command-a-plus-05-2026")
+    monkeypatch.setattr(config, "UNDERSTAND_TIMEOUT", None)  # בזה אחר זה - הסדר קבוע
+    calls = real_names_world(monkeypatch, {"gemini:gemini-3.8-flash#1": (0.0, BUSY), "gemini:gemini-3.6-flash#1": (0.0, BUSY),
+                                           "cohere:command-a-plus-05-2026": (0.0, BUSY)})
+    assert understand.try_understand("שאלה") is None
+    assert list(dict(calls).items()) == [("gemini:gemini-3.8-flash#1", False), ("gemini:gemini-3.6-flash#1", True),
+                                         ("cohere:command-a-plus-05-2026", True)]
 
 
 @pytest.mark.parametrize("model, level", [("gemini-3.6-flash", "MINIMAL"), ("gemini-3.8-flash", "LOW"),
@@ -1405,7 +1350,7 @@ def test_legacy_mode_turns_the_timing_changes_off(monkeypatch):
     with config.legacy_mode(True):
         understand.try_understand("שאלה")
         assert A.start_early_search(REGULAR, []) is not None  # הפונקציה עצמה לא יודעת; answer() לא קורא לה
-    assert seen["low_thinking"] is False and not config.LEGACY.get()
+    assert seen["hedge"] is False and not config.LEGACY.get()  # בלי מקביליות
 
 
 def test_the_index_in_git_is_opened_as_a_copy():
@@ -1439,85 +1384,73 @@ def test_browser_smoke_asks_the_same_questions_as_smoke_test():
 
 
 # ---------------------------------------------------------------- הבנה בצ'אט: בקשת גיבוי ל-3.6 כשהחזק לא עונה
-def hedge_world(monkeypatch, plan: dict):
-    """plan: המודל הראשון בקבוצה -> (השהיה, תוצאה או חריגה). מחזיר את רשימת הקבוצות שנשאלו."""
-    from phoenix import config, understand
-    from phoenix.understand import Understanding
-    monkeypatch.setattr(config, "UNDERSTAND_HEDGE_AFTER", 0.3)
-    monkeypatch.setattr(config, "UNDERSTAND_TIMEOUT", 8.0)  # כמו בצ'אט (בדיקה אחרת יכולה להפעיל את config.patient)
-    # מודל הגיבוי מחוץ ל-Google - רק כשהתוכנית כוללת אותו (הבדיקות הישנות בודקות את כלל 3.8/3.6 לבדו)
-    monkeypatch.setattr(config, "UNDERSTAND_BACKUP", next((m for m in plan if ":" in m), ""))
-    monkeypatch.setattr(understand.llm, "ready", lambda name: True)
-    monkeypatch.setattr(config, "UNDERSTAND_BACKUP_GRACE", 0.4)
-    asked = []
+S38, S36, COHERE = "gemini:gemini-3.8-flash#1", "gemini:gemini-3.6-flash#1", "cohere:command-a-plus-05-2026"
 
-    def fake(question, history=(), models=None):
-        asked.append(models[0])
-        delay, result = plan[models[0]]
-        time.sleep(delay)
-        if isinstance(result, Exception):
-            raise result
-        return Understanding(question, "info", llm=result)
-    monkeypatch.setattr(understand, "understand", fake)
-    return asked
+
+def hedge_world(monkeypatch, plan: dict) -> list:
+    """נתיב ההבנה האמיתי (3.8, 3.6 | Cohere) עם ספקים מזויפים, וזמני כלל המעבר מקוצרים: הגיבוי אחרי 0.3 ש' (במקום 3),
+    ותשובה של Cohere מחכה ל-Gemini עד 0.7 ש' (במקום 6). plan: ספק -> (השהיה, "understood" או חריגה)."""
+    from phoenix import config
+    monkeypatch.setattr(config, "HEDGE_AFTER_SECONDS", 0.3)
+    monkeypatch.setitem(config.PREFER_SECONDS, "understand", 0.7)
+    monkeypatch.setattr(config, "UNDERSTAND_TIMEOUT", 8.0)  # כמו בצ'אט (בדיקה אחרת יכולה להפעיל את config.patient)
+    # מודל הגיבוי מחוץ ל-Google - רק כשהתוכנית כוללת אותו
+    monkeypatch.setattr(config, "BACKUP_LLM", COHERE if COHERE in plan else "")
+    return real_names_world(monkeypatch, plan)
 
 
 def test_understanding_from_the_strong_model_when_it_answers_in_time(monkeypatch):
     from phoenix import understand
-    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, "3.8"), "gemini-3.6-flash": (0.0, "3.6")})
-    assert understand.try_understand("שאלה").llm == "3.8" and asked == ["gemini-3.8-flash"]  # בלי בקשה שנייה
+    calls = hedge_world(monkeypatch, {S38: (0.0, "understood"), S36: (0.0, "understood")})
+    assert understand.try_understand("שאלה").llm == S38 and [n for n, _ in calls] == [S38]  # בלי בקשה שנייה
 
 
 def test_understanding_backup_outside_google_answers_when_all_of_google_hangs(monkeypatch):
-    """21/10: 3.8 ו-3.6 תקועים (Google) - Cohere, שהתחיל יחד עם בקשת הגיבוי, עונה, ולא כללי הקוד."""
+    """21/10: 3.8 ו-3.6 תקועים (Google) - Cohere, שהתחיל יחד עם 3.6, עונה, ולא כללי הקוד."""
     from phoenix import understand
-    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (1.2, "3.8"), "gemini-3.6-flash": (1.2, "3.6"),
-                                      "cohere:command-a-plus-05-2026": (0.1, "cohere")})
+    calls = hedge_world(monkeypatch, {S38: (1.2, "understood"), S36: (1.2, "understood"), COHERE: (0.1, "understood")})
     start = time.perf_counter()
-    assert understand.try_understand("שאלה").llm == "cohere"
-    assert asked == ["gemini-3.8-flash", "gemini-3.6-flash", "cohere:command-a-plus-05-2026"]
-    assert time.perf_counter() - start < 1.1  # 0.3 עד הגיבוי + 0.4 חסד ל-3.6
+    assert understand.try_understand("שאלה").llm == COHERE
+    assert calls[0][0] == S38 and {n for n, _ in calls[1:]} == {S36, COHERE}
+    assert time.perf_counter() - start < 1.1  # 0.3 עד הגיבוי, ו-Gemini עדיף עד 0.7
     time.sleep(1.0)  # הבקשות של Gemini שננטשו מסיימות כאן
 
 
 def test_understanding_prefers_3_6_over_the_backup_within_the_grace(monkeypatch):
-    """כלל המעבר בהבנה: Cohere נבחר רק אם 3.8 ו-3.6 לא ענו (או נכשלו) - 3.6 שעונה בתוך 3 השניות (כאן 0.4) קובע."""
+    """Cohere נבחר רק אם 3.8 ו-3.6 לא ענו (או נכשלו) - 3.6 שעונה בתוך זמן ההעדפה קובע, וגם לא מחכה ל-3.8."""
     from phoenix import understand
-    hedge_world(monkeypatch, {"gemini-3.8-flash": (1.0, "3.8"), "gemini-3.6-flash": (0.2, "3.6"),
-                              "cohere:command-a-plus-05-2026": (0.0, "cohere")})
-    assert understand.try_understand("שאלה").llm == "3.6"
+    hedge_world(monkeypatch, {S38: (1.0, "understood"), S36: (0.2, "understood"), COHERE: (0.0, "understood")})
+    start = time.perf_counter()
+    assert understand.try_understand("שאלה").llm == S36 and time.perf_counter() - start < 0.65
     time.sleep(1.0)  # הבקשה של 3.8 שננטשה מסיימת כאן - לא בתוך הבדיקה הבאה
 
 
 def test_understanding_backup_at_once_when_3_8_and_3_6_fail(monkeypatch):
     from phoenix import understand
-    down = fallback.AllProvidersFailed("llm", ["503"])
-    hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, down), "gemini-3.6-flash": (0.05, down),
-                              "cohere:command-a-plus-05-2026": (0.1, "cohere")})
+    down = fallback.AllProvidersFailed("llm", ["down"])  # תקלה בלי ניסיון חוזר
+    hedge_world(monkeypatch, {S38: (0.0, down), S36: (0.05, down), COHERE: (0.1, "understood")})
     start = time.perf_counter()
-    assert understand.try_understand("שאלה").llm == "cohere" and time.perf_counter() - start < 0.35
+    assert understand.try_understand("שאלה").llm == COHERE and time.perf_counter() - start < 0.35
 
 
 def test_understanding_hedges_to_3_6_when_the_strong_model_hangs(monkeypatch):
     from phoenix import understand
-    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (5.0, "3.8"), "gemini-3.6-flash": (0.1, "3.6")})
+    calls = hedge_world(monkeypatch, {S38: (5.0, "understood"), S36: (0.1, "understood")})
     start = time.perf_counter()
-    assert understand.try_understand("שאלה").llm == "3.6" and asked == ["gemini-3.8-flash", "gemini-3.6-flash"]
+    assert understand.try_understand("שאלה").llm == S36 and [n for n, _ in calls] == [S38, S36]
     assert time.perf_counter() - start < 1.5  # לא מחכים ל-3.8 התקוע
 
 
 def test_understanding_hedges_at_once_when_the_strong_model_fails(monkeypatch):
     from phoenix import understand
-    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, fallback.AllProvidersFailed("llm", ["503"])),
-                                      "gemini-3.6-flash": (0.0, "3.6")})
+    hedge_world(monkeypatch, {S38: (0.0, fallback.AllProvidersFailed("llm", ["down"])), S36: (0.0, "understood")})
     start = time.perf_counter()
-    assert understand.try_understand("שאלה").llm == "3.6" and time.perf_counter() - start < 0.25
+    assert understand.try_understand("שאלה").llm == S36 and time.perf_counter() - start < 0.25
 
 
 def test_understanding_falls_back_to_the_rules_when_both_fail(monkeypatch):
     from phoenix import understand
-    down = fallback.AllProvidersFailed("llm", ["down"])
-    hedge_world(monkeypatch, {"gemini-3.8-flash": (0.0, down), "gemini-3.6-flash": (0.0, down)})
+    hedge_world(monkeypatch, {S38: (0.0, BUSY), S36: (0.0, BUSY)})
     assert understand.try_understand("שאלה") is None
 
 
@@ -1594,7 +1527,6 @@ def test_question_4_info_but_the_model_says_personal_gets_one_explicit_request(m
         return llm.ChatResult(json.dumps(data, ensure_ascii=False), "gemini:a#1", data)
     monkeypatch.setattr(llm, "chat", chat)
     monkeypatch.setattr(llm, "CACHE_MODE", "off")
-    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: [])  # בלי מירוץ
     with fallback.time_budget(20):
         a = A.respond(QUESTION_4, RACE_HIT, parallel=True, understanding=with_intent("info"))
     assert (a.kind, a.repaired) == ("answer", "personal_but_general")
@@ -1659,48 +1591,29 @@ def test_understanding_prompt_names_every_button_type():
         assert kind.replace('"', '\\"') in UNDERSTAND_PROMPT or kind in UNDERSTAND_PROMPT, kind
 
 
-# ---------------------------------------------------------------- כלל המודל הראשי: 3.8 איטי פעמיים ברצף -> 3.6 מתחיל יחד איתו
-@pytest.fixture
-def strong_state(monkeypatch):
-    """מצב נקי של המודל החזק, וסף "איטי" קצר כדי שהבדיקה לא תחכה 10 שניות."""
-    from phoenix import understand
-    monkeypatch.setattr(understand, "STRONG_OK_SECONDS", 0.2)
-    monkeypatch.setattr(understand, "_strong_recent", __import__("collections").deque(maxlen=2))
-    monkeypatch.setattr(understand, "_strong_slow_until", 0.0)
-    return understand
-
-
-def test_two_slow_answers_in_a_row_make_the_backup_start_together_with_the_strong_model(monkeypatch, strong_state):
-    understand = strong_state
-    asked = hedge_world(monkeypatch, {"gemini-3.8-flash": (0.5, "3.8"), "gemini-3.6-flash": (0.05, "3.6")})
-    monkeypatch.setattr(understand.config, "UNDERSTAND_HEDGE_AFTER", 0.25)
-    for _ in range(2):  # שתי שאלות שבהן 3.8 לא ענה בזמן (הוא ענה אחרי 0.5 > 0.2)
-        assert understand.try_understand("שאלה").llm in ("3.8", "3.6")
-    time.sleep(0.6)     # שתי הבקשות של 3.8 הסתיימו ונרשמו כאיטיות
-    assert understand.strong_is_slow()
-    asked.clear()
+# ---------------------------------------------------------------- המודל הראשי שלא עונה: מפסק הזרם (במקום "איטי פעמיים")
+def test_a_strong_model_that_times_out_twice_is_skipped_and_retried_later(monkeypatch):
+    """3.8 נתקע (504) פעמיים ברצף - המפסק שלו נפתח: בשאלה הבאה 3.6 מתחיל מיד, בלי לחכות לו. אחרי זמן הפתיחה - בקשת
+    ניסיון אחת ל-3.8 (במקביל ל-3.6); הוא ענה - המפסק נסגר והוא שוב הראשי."""
+    from phoenix import gateway, understand
+    monkeypatch.setattr(gateway, "OPEN_BASE", 0.3)
+    plan = {S38: (0.0, DEADLINE), S36: (0.05, "understood")}
+    calls = hedge_world(monkeypatch, plan)
+    for _ in range(2):
+        assert understand.try_understand("שאלה").llm == S36
+    assert gateway.breaker(S38).state == gateway.OPEN
+    calls.clear()
     start = time.perf_counter()
-    assert understand.try_understand("שאלה").llm == "3.6"
-    assert set(asked) == {"gemini-3.8-flash", "gemini-3.6-flash"} and time.perf_counter() - start < 0.25  # בלי המתנה
-    time.sleep(0.6)  # הבקשה של 3.8 שננטשה מסיימת ונרשמת עכשיו - לא בתוך הבדיקה הבאה
-
-
-def test_one_slow_answer_does_not_change_the_primary_model(monkeypatch, strong_state):
-    understand = strong_state
-    hedge_world(monkeypatch, {"gemini-3.8-flash": (0.4, "3.8"), "gemini-3.6-flash": (0.05, "3.6")})
-    monkeypatch.setattr(understand.config, "UNDERSTAND_HEDGE_AFTER", 0.25)
-    understand.try_understand("שאלה")
-    time.sleep(0.5)
-    assert not understand.strong_is_slow()
-
-
-def test_the_strong_model_becomes_primary_again_after_a_fast_answer(monkeypatch, strong_state):
-    understand = strong_state
-    understand._note_strong(15.0, True)
-    understand._note_strong(1.0, False)  # נכשל
-    assert understand.strong_is_slow()
-    understand._note_strong(0.05, True)  # בדיקה חוזרת: ענה מהר
-    assert not understand.strong_is_slow()
+    assert understand.try_understand("שאלה").llm == S36
+    assert [n for n, _ in calls] == [S36] and time.perf_counter() - start < 0.25  # 3.8 מדולג - בלי המתנה
+    time.sleep(0.4)                       # עבר זמן הפתיחה
+    plan[S38] = (0.0, "understood")       # 3.8 חזר
+    calls.clear()
+    understand.try_understand("שאלה")     # בקשת הניסיון ל-3.8 (ו-3.6 מתחיל יחד איתה)
+    assert S38 in {n for n, _ in calls} and gateway.breaker(S38).state == gateway.CLOSED
+    time.sleep(0.1)                       # הבקשה ל-3.6 שהתחילה יחד עם בקשת הניסיון מסיימת כאן
+    calls.clear()
+    assert understand.try_understand("שאלה").llm == S38 and [n for n, _ in calls] == [S38]
 
 
 # ---------------------------------------------------------------- המשפט מהאתר כשאין תשובה ממודל בזמן (21/10)
@@ -1797,20 +1710,6 @@ def test_the_chat_links_open_on_the_quote_and_the_dev_line_keeps_the_clean_url(m
     assert app.message_from_answer(a)["sources"][0][1] == page + "#:~:text=abc"
 
 
-def test_the_backup_model_does_not_rest_after_a_timeout():
-    """21/10: Cohere איטי פעם אחת (timeout) נח 5 דקות, והשאלות הבאות קיבלו את הציטוט מהאתר בלי לנסות אותו."""
-    from phoenix.fallback import Provider
-
-    def slow(*args, **kwargs):
-        raise TimeoutError("no answer within 15s")
-    backup, other = Provider("cohere:x", slow, overload_rest=0), Provider("groq:y", slow)
-    for p in (backup, other):
-        with pytest.raises(fallback.AllProvidersFailed):
-            fallback.run_chain("llm", [p], retries=0)
-    assert not fallback.is_resting(backup) and fallback.is_resting(other)
-    fallback._resting_until.pop("groq:y", None)
-
-
 def test_cohere_thinking_budget_is_sent_for_the_plus_model(monkeypatch):
     """21/10: command-a-plus חשב 4,082 טוקנים (12-25 ש'); עם תקציב 300 - 4-5 ש'."""
     from phoenix import config
@@ -1834,41 +1733,22 @@ def test_cohere_thinking_budget_is_sent_for_the_plus_model(monkeypatch):
 
 # ---------------------------------------------------------------- 21/10 ערב: פתרון לכל הבעיות
 def test_one_gemini_call_per_answer_with_the_backup_as_the_parallel_partner(monkeypatch):
-    """בלי מירוץ 3.6+3.8: צד Gemini אחד (כל המפתחות לפי הסדר) ומודל הגיבוי. חצי מכסה בשלב התשובה."""
-    failed = fallback.AllProvidersFailed("llm", ["503"])
-    asked = backup_race(monkeypatch, {"gemini:a#1": (0.3, VALID), "cohere:x": (0.0, VALID)}, after=0.0, preferred=1.0)
-    monkeypatch.setattr(A.config, "GEMINI_RACE", False)
-    monkeypatch.setattr(llm, "free_keys", lambda *args, **kwargs: ["gemini:a#1", "gemini:a#2", "gemini:b#1"])
-    monkeypatch.setattr(llm, "race_pair", lambda *args, **kwargs: pytest.fail("בלי מירוץ Gemini כשהוא כבוי"))
+    """בלי מירוץ 3.6+3.8: Gemini אחד ומודל הגיבוי - קריאה אחת לכל אחד."""
+    asked = fake_race(monkeypatch, {"gemini:a#1": (0.3, VALID), "cohere:x": (0.0, VALID)}, after=0.0, prefer=1.0)
     assert A.respond("איך מגישים תביעה?", RACE_HIT, parallel=True).llm == "gemini:a#1"
-    assert sorted(asked) == ["cohere:x", "gemini:a#1"]  # קריאה אחת ל-Gemini (הצד מתחיל ב-a#1) + הגיבוי
-    del failed
+    assert sorted(asked) == ["cohere:x", "gemini:a#1"]
 
 
-def test_quota_exhaustion_is_shared_with_every_process(monkeypatch):
-    """מכסה יומית שנגמרה נכתבת למאגר המשותף - כל תהליך ושני האתרים לא מנסים את המפתח שוב עד האיפוס."""
-    shared = []
-    monkeypatch.setattr(fallback, "QUOTA_HOOK", lambda name, until: shared.append((name, until)))
-    monkeypatch.setattr(fallback, "_resting_until", {})
-
-    def exhausted(*args):
-        raise FakeApiError(429, "You exceeded your current quota. quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'"
-                                ", retryDelay': '3600s'")  # כמו ההודעה האמיתית של Gemini
-    with pytest.raises(fallback.AllProvidersFailed):
-        fallback.run_chain("llm", [fallback.Provider("gemini:m#3", exhausted, group="gemini:m", key="gemini#3")],
-                           retries=0)
-    assert [name for name, _ in shared] == ["gemini:m#3"] and shared[0][1] > time.time() + 3000
-
-
-def test_shared_exhausted_keys_are_loaded_and_skipped(monkeypatch):
-    from phoenix import store
-    until = time.time() + 600
-    monkeypatch.setattr(fallback, "_resting_until", {})
-    monkeypatch.setattr(store, "read", lambda *cmd: ["gemini:gemini-3.6-flash#4", f"{until:.0f}",
-                                                     "gemini:gemini-3.8-flash#1", "123"])  # השני כבר עבר - לא נטען
-    assert llm.load_shared_rests() == 1
-    assert fallback.resting().get("gemini:gemini-3.6-flash#4", 0) > 500
-    assert "gemini:gemini-3.8-flash#1" not in fallback.resting()
+def test_a_daily_quota_is_checked_again_after_ten_minutes_not_a_day():
+    """מכסה יומית (או מפתח ששודרג לתשלום באמצע היום): המפסק פתוח עד 10 דקות, ואז בקשת ניסיון - לא 22 שעות כמו
+    שה-retryDelay של Gemini אמר (נבדק 19/10: המכסה התאפסה הרבה קודם)."""
+    from phoenix import gateway
+    b = gateway.breaker("gemini:gemini-3.6-flash#1")
+    exhausted = FakeApiError(429, "You exceeded your current quota. quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'"
+                                  ", retryDelay': '81000s'")  # כמו ההודעה האמיתית של Gemini
+    assert fallback.classify(exhausted) == fallback.QUOTA
+    b.failed(fallback.classify(exhausted), fallback.retry_after(exhausted))
+    assert 590 < b.snapshot()["open_for"] <= 720
 
 
 def test_any_number_of_gemini_keys_is_read(monkeypatch):
@@ -1888,19 +1768,6 @@ def test_site_quote_is_never_a_heading_or_a_one_word_match():
     assert A.site_quote("מה המספר של מוקד תביעות רכב ורכוש, ומתי הוא פתוח?", [hit]) is None
     one = Hit("d", page, "x", "", "אפשר לבדוק את מצב התביעה באזור האישי באתר בכל שעה.")
     assert A.site_quote("איך מגישים תביעה בביטוח בריאות?", [one]) is None  # רק "תביעה" משותפת
-
-
-def test_the_backup_rests_seconds_not_a_minute_on_a_per_minute_limit():
-    """21/10 ערב: Cohere Trial (20 לדקה) נח דקה שלמה אחרי 429, וכל שאלה באותה דקה קיבלה ציטוט מהאתר."""
-    from phoenix.fallback import Provider
-
-    def limited(*args):
-        raise FakeApiError(429, "You are using a Trial key, which is limited to 20 API calls / minute.")
-    backup = Provider("cohere:x", limited, overload_rest=0, rate_limit_rest=10)
-    with pytest.raises(fallback.AllProvidersFailed):
-        fallback.run_chain("llm", [backup], retries=0)
-    assert 0 < fallback.resting()["cohere:x"] <= 10
-    fallback._resting_until.pop("cohere:x", None)
 
 
 def test_generic_calls_never_use_the_backup_model(monkeypatch):
@@ -2031,17 +1898,3 @@ def test_cohere_understanding_uses_the_small_thinking_budget(monkeypatch):
     call([{"role": "user", "content": "x"}], "", 0, low_thinking=True)
     call([{"role": "user", "content": "x"}], "", 0)
     assert sent == [config.COHERE_LOW_THINKING_BUDGET, config.COHERE_THINKING_BUDGET] == [100, 300]
-
-
-def test_understanding_through_the_backup_asks_for_low_thinking(monkeypatch):
-    from phoenix import config, understand
-    seen = {}
-
-    def chat(messages, names=None, low_thinking=False, **kwargs):
-        seen["low"] = low_thinking
-        raise fallback.AllProvidersFailed("llm", ["x"])
-    monkeypatch.setattr(understand.llm, "chat", chat)
-    monkeypatch.setattr(config, "UNDERSTAND_BACKUP", "cohere:command-a-plus-05-2026")
-    with pytest.raises(fallback.AllProvidersFailed):
-        understand.understand("שאלה", models=["cohere:command-a-plus-05-2026"])
-    assert seen["low"] is True

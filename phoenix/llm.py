@@ -4,7 +4,8 @@
     result = chat([{"role": "user", "content": "שאלה"}], system="הוראות")
     result.text, result.provider
 
-אם הספק הראשון ב-config.LLM_CHAIN נחסם או נופל, עוברים לבא בתור.
+כל קריאה עוברת בשער המודלים (gateway.py): לכל שלב נתיב משלו (config.ROUTES) - מודל ראשי ואחריו גיבויים,
+עם מפסק זרם לכל מודל. מפתח Gemini אחד (config.LLM_GEMINI_KEY), בלי סבב מפתחות.
 
 מטמון (חיסכון במכסה): תשובה של מודל נשמרת ב-data/cache/llm.json לפי ההוראות (system), ההודעות (השאלה
 והקטעים) וההגדרות. אותה בקשה בדיוק - התשובה מהמטמון, בלי לשלוח שוב. כל שינוי בהוראות או בקטעים הוא
@@ -24,8 +25,8 @@ from typing import Any, Callable
 import httpx
 from google.genai import types
 
-from . import config, fallback
-from .fallback import EmptyResult, Provider, is_resting, run_chain
+from . import config, fallback, gateway
+from .fallback import EmptyResult, Provider
 
 OPENAI_COMPATIBLE_URLS = {
     "groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -47,6 +48,7 @@ class ChatResult:
     provider: str         # הספק שענה בפועל, למשל "gemini:gemini-3.6-flash"
     data: Any = None      # התוצאה של parse (אם ביקשו), למשל JSON מפוענח
     cached: bool = False  # התשובה הגיעה מהמטמון, בלי קריאה למודל
+    route: str = ""       # כשנשאל יותר ממודל אחד: מי נשאל ("gemini-3.6-flash (מפתח 1) מול cohere: ...")
 
 
 def _read_cache_file() -> dict[str, dict]:
@@ -179,70 +181,22 @@ def _make(provider, model):
 
 
 def _providers() -> list[Provider]:
-    """השרשרת לפי הסדר ב-config.LLM_CHAIN. כל מודל של Gemini - בכל המפתחות (קודם כל המפתחות של המודל
-    הראשון, אחר כך של השני): מכסה של מפתח אחד נגמרה - ממשיכים באותו מודל במפתח הבא."""
+    """הספקים לפי הסדר ב-config.LLM_CHAIN: כל מודל במפתח אחד (config.LLM_GEMINI_KEY) - בלי סבב מפתחות. השער
+    (gateway.py) בוחר ביניהם לפי הנתיב של כל שלב."""
     providers = []
     for p, m in config.LLM_CHAIN:
         if p == "gemini":
-            providers += [Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
-                          for n, _ in config.GEMINI_KEYS]
+            n = config.LLM_GEMINI_KEY
+            providers.append(Provider(f"gemini:{m}#{n or 1}", _gemini(m, n or 1), enabled=n is not None,
+                                      group=f"gemini:{m}", key=f"gemini#{n or 1}"))
         else:
             key = config.COHERE_CHAT_KEY if p == "cohere" else config.API_KEYS[p]
-            # מודל הגיבוי (Cohere): timeout או 5xx לא מוציאים אותו ל-5 דקות - הוא רשת הביטחון כש-Google לא עונה (21/10)
-            backup = f"{p}:{m}" == config.BACKUP_LLM
-            # 21/10 ערב: Cohere Trial - 20 קריאות לדקה. כש-Google בעומס הוא היחיד שעונה, ו-429 שהשבית אותו לדקה שלמה
-            # הפך כל שאלה באותה דקה לציטוט מהאתר. עכשיו - 10 שניות.
-            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key), overload_rest=0 if backup else None,
-                                      rate_limit_rest=BACKUP_RATE_LIMIT_REST if backup else None))
+            providers.append(Provider(f"{p}:{m}", _make(p, m), enabled=bool(key)))
     return providers
 
 
-BACKUP_RATE_LIMIT_REST = 10.0
 PROVIDERS = _providers()
 ALL_NAMES = [p.name for p in PROVIDERS]  # לפני כל סינון (ממשק בדיקות, smoke --providers) - לדוחות
-
-
-# זיכרון משותף של מפתחות שהמכסה היומית שלהם נגמרה (21/10): hash ב-Upstash, ספק -> עד מתי. נכתב מיד כשמכסה נגמרת
-# (fallback.QUOTA_HOOK), ונקרא בכל שאלה בצ'אט - בפעם הראשונה בתהליך מיד (עד 1.5 ש'), אחר כך ברקע פעם בדקה.
-SHARED_RESTS = "rest:quota"
-SHARED_RESTS_SYNC = 60.0
-_rests_synced = 0.0
-
-
-def share_quota_rest(name: str, until: float) -> None:
-    from . import store
-    store.write(["HSET", SHARED_RESTS, name, f"{until:.0f}"], ["EXPIRE", SHARED_RESTS, 30 * 3600])
-
-
-def load_shared_rests() -> int:
-    """המפתחות שנגמרה להם המכסה (מכל תהליך ומכל אתר) נחים כאן עד האיפוס. מחזיר כמה נטענו."""
-    from . import store
-    flat = store.read("HGETALL", SHARED_RESTS) or []
-    loaded, now = 0, time.time()
-    for name, until in zip(flat[::2], flat[1::2]):
-        try:
-            until = float(until)
-        except (TypeError, ValueError):
-            continue
-        if until > now and fallback._resting_until.get(name, 0) < until:
-            fallback._resting_until[name] = until
-            loaded += 1
-    return loaded
-
-
-def sync_shared_rests() -> None:
-    global _rests_synced
-    now = time.time()
-    if now - _rests_synced < SHARED_RESTS_SYNC:
-        return
-    first, _rests_synced = _rests_synced == 0.0, now
-    if first:
-        load_shared_rests()
-    else:
-        threading.Thread(target=load_shared_rests, daemon=True).start()
-
-
-fallback.QUOTA_HOOK = share_quota_rest
 
 
 def describe(name: str | None) -> str:
@@ -267,98 +221,78 @@ def _from_cache(key: str, parse: Callable[[str], Any] | None) -> ChatResult | No
     return ChatResult(hit["text"], hit["provider"], data, cached=True)
 
 
-def lookup(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
-           parse: Callable[[str], Any] | None = None, low_thinking: bool = False) -> ChatResult | None:
-    """תשובה מהמטמון בלבד (בלי קריאה), עם אותו מפתח כמו chat - לפני ששולחים לשני מודלים במקביל."""
+def lookup(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None = None,
+           parse: Callable[[str], Any] | None = None, low_thinking: bool = False, **_) -> ChatResult | None:
+    """תשובה מהמטמון בלבד (בלי קריאה), עם אותו מפתח כמו chat - כדי לדעת מראש אם יהיה שלב "מנסח תשובה"."""
     key = cache_key(messages, system, temperature, json_mode, only, low_thinking)
     return _from_cache(key, parse) if CACHE_MODE == "on" else None
 
 
-def remember(messages: list[dict], system: str, temperature: float, json_mode: bool, only: list[str] | None,
-             result: ChatResult, low_thinking: bool = False):
-    """שומר במטמון את התשובה שנבחרה (בבקשות במקביל - רק של המנצח)."""
-    if CACHE_MODE != "off":
-        _cache_put(cache_key(messages, system, temperature, json_mode, only, low_thinking),
-                   {"text": result.text, "provider": result.provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
+def _lanes(route: str | None, names: list[str] | None, only: list[str] | None,
+           low_thinking: bool) -> list[tuple[Provider, bool, int]]:
+    """[(ספק, חשיבה נמוכה, דרגה)] לפי הסדר. names (מודל קבוע בבדיקות) קודם ל-route; בלי שניהם - only, או כל השרשרת
+    בלי מודל הגיבוי (הקריאות שלו שמורות להבנה ולתשובה). ספק בלי מפתח - לא בנתיב."""
+    if names is not None:
+        by_name = {p.name: p for p in PROVIDERS}
+        lanes = [(by_name[n], low_thinking, 0) for n in names if n in by_name]
+    elif route is not None:
+        lanes = [(p, low_thinking or low, tier) for target, low, tier in config.route(route)
+                 for p in PROVIDERS if target in (p.name, p.group)]
+    elif only:
+        lanes = [(p, low_thinking, 0) for p in PROVIDERS if p.name.split(":")[0] in only]
+    else:
+        lanes = [(p, low_thinking, 0) for p in PROVIDERS if p.name != config.BACKUP_LLM]
+    return [lane for lane in lanes if lane[0].enabled]
 
 
-def race_pair(models: list[str] | None = None, service: str = "gemini") -> list[list[str]]:
-    """שני מודלים שונים שאליהם נשלחת אותה שאלה במקביל: לכל אחד - כל המפתחות שלו לפי הסדר, ובמודל השני
-    מתחילים ממפתח אחר מהראשון (אם יש). רק צירופים שלא "נחים". רק מודל אחד זמין (השאר נחים בגלל עומס) - אותו
-    מודל בשני מפתחות שונים במקביל, כך ש-503 בודד או תשובה איטית במפתח אחד לא מעכבים. אין אף מפתח פנוי שני - רשימה ריקה.
-    models: המודלים המועדפים, לפי הסדר (config.RACE_LLMS); מודל מהם לא זמין - הבא בתור מהשרשרת.
-    מודל הגיבוי מחוץ ל-Google (config.BACKUP_LLM) לא כאן - answer._race מפעיל אותו לפי כלל המעבר."""
-    return _gemini_pair(models, service)
-
-
-def free_keys(service: str = "gemini") -> list[str]:
-    """כל הצירופים מפתח+מודל של השירות שלא נחים, לפי סדר השרשרת (צד יחיד במירוץ כשאין זוג)."""
-    return [p.name for p in PROVIDERS if p.name.startswith(service + ":") and p.enabled and not is_resting(p)]
-
-
-def ready(name: str) -> bool:
-    """ספק מסוים (למשל config.BACKUP_LLM) קיים בשרשרת, יש לו מפתח, והוא לא נח."""
-    return any(p.name == name and p.enabled and not is_resting(p) for p in PROVIDERS)
-
-
-def _gemini_pair(models: list[str] | None, service: str) -> list[list[str]]:
-    groups: dict[str, list[Provider]] = {}
-    for p in PROVIDERS:
-        if p.name.startswith(service + ":") and p.enabled and not is_resting(p):
-            groups.setdefault(p.group or p.name, []).append(p)
-    if len(groups) == 1:
-        keys = next(iter(groups.values()))
-        return [[p.name for p in keys], [p.name for p in keys[1:] + keys[:1]]] if len(keys) > 1 else []
-    if len(groups) < 2:
-        return []
-    preferred = [g for g in (f"{service}:{m}" for m in models or []) if g in groups]
-    first, second = [groups[g] for g in preferred + [g for g in groups if g not in preferred]][:2]
-    if len(second) > 1 and second[0].key == first[0].key:
-        second = second[1:] + second[:1]
-    return [[p.name for p in first], [p.name for p in second]]
+def policy(route: str | None, hedge: bool) -> gateway.Policy:
+    """בצ'אט (hedge) - לפי הנתיב: אחרי כמה שניות מתחיל הבא בתור, ועד מתי תשובה של המודל הראשי עדיפה. בסקריפטים -
+    בזה אחר זה, בסבלנות (config.patient)."""
+    return gateway.Policy(hedge_after=config.HEDGE_AFTER_SECONDS if hedge else None,
+                          prefer_until=config.PREFER_SECONDS.get(route or "", 0.0) if hedge else 0.0,
+                          margin=config.PREFER_MARGIN.get(route or "", 0.5), timeout=config.QUERY_TIMEOUT,
+                          retries=config.LLM_RETRIES, max_wait=config.LLM_MAX_WAIT)
 
 
 def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_mode: bool = False,
          parse: Callable[[str], Any] | None = None, only: list[str] | None = None,
          names: list[str] | None = None, cache: bool = True, low_thinking: bool = False,
-         on_error: Callable[[str, str], None] | None = None) -> ChatResult:
-    """messages: [{"role": "user" | "assistant", "content": "..."}]
+         route: str | None = None, hedge: bool | None = None,
+         rank: Callable[[ChatResult], int] | None = None) -> ChatResult:
+    """messages: [{"role": "user" | "assistant", "content": "..."}]. כל הקריאות עוברות בשער המודלים (gateway.py).
 
     json_mode: לבקש JSON (ב-Gemini גם ברמת ה-API; אצל השאר לפי הפרומפט).
-    parse: מפענח/בודק את התשובה. אם הוא זורק ValueError (למשל JSON שבור) - התשובה נחשבת
-           פגומה ועוברים לספק הבא.
-    only: רק ספקים מהסוגים האלה, למשל ["groq", "openrouter"].
-    names: רק הספקים האלה, בסדר הזה (בקשה אחת מתוך שתיים במקביל).
-    cache: False - בלי לקרוא מהמטמון ובלי לכתוב אליו (בבקשות במקביל רק המנצח נשמר, ב-remember).
-    low_thinking: ב-Gemini - רמת החשיבה הנמוכה שהמודל מקבל (config.LOW_THINKING). לשאר הספקים אין משמעות.
-    on_error(ספק, סוג התקלה): נקרא מיד על כל ניסיון שנכשל (503, מכסה, timeout...) - כלל המעבר ל-Cohere בצ'אט.
+    parse: מפענח/בודק את התשובה. אם הוא זורק ValueError (למשל JSON שבור) - התשובה פגומה, והמודל הבא בנתיב.
+    route: שם הנתיב ב-config.ROUTES ("understand", "answer", "helper") - המודלים, לפי הסדר.
+    only: רק ספקים מהסוגים האלה, למשל ["groq", "openrouter"] (השופט בבדיקות).
+    names: רק הספקים האלה, בסדר הזה - מודל קבוע בבדיקות (eval_answers.pin_models); קודם ל-route.
+    hedge: True - הראשי לבד, ושאר הנתיב יחד אחרי HEDGE_AFTER_SECONDS בלי תשובה או מיד אחרי תקלה; False - בזה אחר זה.
+           ברירת המחדל: בצ'אט (יש מגבלת זמן לשאלה) - True; בסקריפטים - False.
+    rank(תשובה) -> 0 טובה, יותר - פחות טובה: תשובה שנפסלה בבדיקות מפעילה את הבא בנתיב, והטובה ביותר נבחרת.
+    cache: False - בלי לקרוא מהמטמון ובלי לכתוב אליו. נשמרת רק התשובה שנבחרה.
+    low_thinking: ב-Gemini - רמת החשיבה הנמוכה שהמודל מקבל (config.LOW_THINKING); ב-Cohere - תקציב חשיבה קטן.
     """
     key = cache_key(messages, system, temperature, json_mode, only, low_thinking)
     if cache and CACHE_MODE == "on" and (hit := _from_cache(key, parse)):
         return hit
+    if hedge is None:
+        hedge = fallback.time_left() is not None and config.PARALLEL_LLM
 
-    if names is not None:
-        by_name = {p.name: p for p in PROVIDERS}
-        providers = [by_name[n] for n in names if n in by_name]
-    else:  # קריאה כללית (בדיקת נושא, השלמת שאלת המשך) - בלי מודל הגיבוי: הקריאות שלו שמורות לתשובות ולהבנה
-        providers = [p for p in PROVIDERS if (p.name.split(":")[0] in only if only else p.name != config.BACKUP_LLM)]
-
-    def checked(p: Provider) -> Provider:
-        def call(messages, system, temperature):
-            extra = {"low_thinking": True} if low_thinking and p.name.startswith(("gemini:", "cohere:")) else {}
+    def lane(p: Provider, low: bool, tier: int) -> gateway.Lane:
+        def call() -> ChatResult:
+            extra = {"low_thinking": True} if low and p.name.startswith(("gemini:", "cohere:")) else {}
             text = p.call(messages, system, temperature, json_mode=json_mode, timeout=config.QUERY_TIMEOUT, **extra)
-            if parse is None:
-                return text, None
             try:
-                return text, parse(text)
+                return ChatResult(text, p.name, parse(text) if parse else None)
             except ValueError as exc:
                 raise EmptyResult(f"unusable response: {exc}") from exc
-        return Provider(p.name, call, p.enabled, p.group, p.key)  # עם הקבוצות: עומס נח במודל, מפתח לא תקין - במפתח
+        return gateway.Lane(p.name, call, tier)
 
-    # הלקוחה מחכה לתשובה: מודל שלא עונה תוך QUERY_TIMEOUT או חסום - עוברים מיד לבא (config).
-    (text, data), provider = run_chain("llm", [checked(p) for p in providers], messages, system, temperature,
-                                       retries=config.QUERY_RETRIES, max_wait=config.QUERY_MAX_WAIT,
-                                       deadline=config.QUERY_TIMEOUT, on_error=on_error)
+    lanes = [lane(*spec) for spec in _lanes(route, names, only, low_thinking)]
+    picked = gateway.run(route or "llm", lanes, policy(route, hedge), rank=rank)
+    result = picked.value
+    if len(picked.started) > 1:
+        result.route = " מול ".join(describe(n) for n in picked.started)
     if cache and CACHE_MODE != "off":
-        _cache_put(key, {"text": text, "provider": provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
-    return ChatResult(text, provider, data)
+        _cache_put(key, {"text": result.text, "provider": result.provider, "saved": time.strftime("%Y-%m-%d %H:%M")})
+    return result

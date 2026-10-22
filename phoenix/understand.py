@@ -9,17 +9,12 @@
 האימות אחרי התשובה (ציטוט, מספרים, דליפה) - הקוד ממשיך לאמת כל תשובה. אם הקריאה נכשלת (אין מודל, JSON לא
 תקין) - הכללים הישנים בקוד, כגיבוי (rules_fallback).
 """
-import collections
-import contextvars
 import json
 import logging
-import queue
-import threading
-import time
 from dataclasses import dataclass, field
 
 from . import config, llm
-from .fallback import AllProvidersFailed, OutOfTime, time_budget, time_left
+from .fallback import AllProvidersFailed, time_budget, time_left
 
 log = logging.getLogger("phoenix")
 
@@ -139,122 +134,13 @@ def _message(question: str, history: list[dict]) -> str:
     return (f"השיחה עד עכשיו:\n{convo}\n\n" if convo else "") + f"ההודעה האחרונה של הלקוח:\n{question}"
 
 
-def understand(question: str, history: list[dict] = (), models: list[str] | None = None) -> Understanding:
-    """הבנת השאלה - רק במודלים החזקים (config.UNDERSTAND_LLMS לפי הסדר, בכל המפתחות). כולם לא זמינים - חריגה,
-    והקוד עובר לכללים (שנבדקו על כל קובץ השאלות), ולא למודל גיבוי חלש: איכות לפני מהירות.
-    models: רק המודלים האלה (בקשת הגיבוי בצ'אט - _hedged). שם עם ספק ("cohere:command-a-03-2025") - הספק הזה בלבד."""
-    names = [p.name for name in models or config.UNDERSTAND_LLMS for p in llm.PROVIDERS
-             if (p.name == name if ":" in name else p.group == f"gemini:{name}")]
-    hedge = models == [config.UNDERSTAND_HEDGE]  # בקשת הגיבוי בצ'אט (3.6) - הגדרת חשיבה משלה
-    low = config.UNDERSTAND_HEDGE_LOW_THINKING if hedge else config.UNDERSTAND_LOW_THINKING
-    if config.UNDERSTAND_BACKUP and models == [config.UNDERSTAND_BACKUP]:
-        low = True  # Cohere בהבנה: תקציב חשיבה קטן (COHERE_LOW_THINKING_BUDGET) - 2.5 ש' במקום 4-8
+def understand(question: str, history: list[dict] = (), hedge: bool | None = None) -> Understanding:
+    """הבנת השאלה בנתיב "understand" (config.ROUTES): 3.8 בחשיבה רגילה, ואחריו 3.6 בחשיבה נמוכה ומודל הגיבוי - דרך
+    שער המודלים. hedge: בצ'אט - הבא בנתיב מתחיל אחרי HEDGE_AFTER_SECONDS בלי תשובה, או מיד אחרי תקלה, והתשובה של
+    Gemini עדיפה עד PREFER_SECONDS["understand"]; בבדיקות - בזה אחר זה. כולם נכשלו - חריגה, והקוד עובר לכללים."""
     reply = llm.chat([{"role": "user", "content": _message(question, list(history))}], system=UNDERSTAND_PROMPT,
-                     temperature=0, json_mode=True, parse=parse_understanding, names=names,
-                     low_thinking=low and not config.LEGACY.get())  # מדידת "לפני" - חשיבה רגילה, כמו לפני סעיף 6ג
+                     temperature=0, json_mode=True, parse=parse_understanding, route="understand", hedge=hedge)
     return Understanding(**reply.data, source="model", llm=reply.provider)
-
-
-# כלל המודל הראשי (החלטת הבעלים, 20/10): המודל החזק (3.8) הוא הראשי כל עוד הוא עונה תוך STRONG_OK_SECONDS. פעמיים ברצף
-# שהוא לא ענה בזמן (או נכשל) - מודל הגיבוי (3.6) הוא הראשי: הוא מתחיל יחד איתו (בלי ההמתנה של 3 שניות), והתשובה התקינה
-# הראשונה קובעת - לא מחכים למודל השני. אחרי STRONG_SLOW_REST שניות המודל החזק נבדק שוב: ענה בזמן - חוזר להיות הראשי.
-# בשלב התשובה המירוץ כבר כך: שני המודלים מתחילים יחד, והתשובה הראשונה שעוברת את הבדיקות מוצגת (answer._race).
-STRONG_OK_SECONDS, STRONG_SLOW_STREAK, STRONG_SLOW_REST = 10.0, 2, 300.0
-_strong_recent: collections.deque = collections.deque(maxlen=STRONG_SLOW_STREAK)
-_strong_slow_until = 0.0
-_strong_lock = threading.Lock()
-
-
-def _note_strong(seconds: float, ok: bool) -> None:
-    """בקשת הבנה שהסתיימה במודל החזק: ענה תוך STRONG_OK_SECONDS - תקין; אחרת (איטי, נכשל, או נחתך בזמן) - איטי."""
-    global _strong_slow_until
-    slow = not ok or seconds >= STRONG_OK_SECONDS
-    with _strong_lock:
-        _strong_recent.append(slow)
-        if len(_strong_recent) == STRONG_SLOW_STREAK and all(_strong_recent):
-            _strong_slow_until = time.time() + STRONG_SLOW_REST
-        elif not slow:
-            _strong_slow_until = 0.0
-
-
-def strong_is_slow() -> bool:
-    return time.time() < _strong_slow_until
-
-
-def _hedged(question: str, history: list[dict], limit: float) -> Understanding:
-    """בצ'אט: המודלים החזקים (UNDERSTAND_LLMS בלי מודל הגיבוי) קודם. אין תשובה תוך UNDERSTAND_HEDGE_AFTER שניות,
-    או שהם נכשלו מהר - אותה בקשה גם למודל הגיבוי (3.6), והתשובה התקינה הראשונה של Gemini קובעת. בדרך כלל 3.8 עונה
-    תוך ~2.6 שניות, ואין בקשה שנייה; בעומס - הבנה אמיתית תוך ~6 שניות, במקום 8 שניות המתנה וכללי הקוד.
-    יחד עם 3.6 מתחיל גם המודל שמחוץ ל-Google (UNDERSTAND_BACKUP, 21/10). ההבנה שלו נבחרת רק אם 3.8 ו-3.6 נכשלו, או ש-Gemini
-    לא ענה תוך UNDERSTAND_BACKUP_GRACE שניות מתחילת בקשת הגיבוי (או עד חצי שנייה לפני סוף הזמן של ההבנה)."""
-    first = [m for m in config.UNDERSTAND_LLMS if m != config.UNDERSTAND_HEDGE]
-    backup = config.UNDERSTAND_BACKUP if config.UNDERSTAND_BACKUP and llm.ready(config.UNDERSTAND_BACKUP) else ""
-    results: queue.Queue = queue.Queue()
-
-    def worker(models):
-        began = time.perf_counter()
-        try:
-            results.put((models, understand(question, history, models), None))
-            ok = True
-        except Exception as exc:  # noqa: BLE001 - כשל בצד אחד לא מפיל את השני
-            results.put((models, None, exc))
-            ok = False
-        if models == first:  # גם אם כבר ויתרנו עליו: כמה זמן לקח למודל החזק (כלל המודל הראשי, למטה)
-            _note_strong(time.perf_counter() - began, ok)
-
-    def start(models):  # עם הזמן של השאלה (contextvars לא עוברים ל-thread חדש לבד)
-        threading.Thread(target=contextvars.copy_context().run, args=(worker, models), daemon=True).start()
-
-    with time_budget(limit):
-        start(first)
-        gemini_running, backup_running, hedged, hedged_at, held, errors = 1, False, False, 0.0, None, []
-
-        def hedge():
-            nonlocal gemini_running, backup_running, hedged, hedged_at
-            start([config.UNDERSTAND_HEDGE])
-            if backup:
-                start([backup])
-            gemini_running, backup_running = gemini_running + 1, bool(backup)
-            hedged, hedged_at = True, time.perf_counter()
-
-        delay = 0.0 if strong_is_slow() else config.UNDERSTAND_HEDGE_AFTER
-        if delay <= 0:  # המודל החזק איטי: הגיבוי מתחיל יחד איתו, והראשון שתקין קובע
-            hedge()
-        hedge_at = time.perf_counter() + delay
-        while gemini_running or backup_running:
-            now, left = time.perf_counter(), time_left() or 0.0
-            if held and (not gemini_running or now - hedged_at >= config.UNDERSTAND_BACKUP_GRACE or left <= 0.5):
-                return held
-            waits = [left]
-            if not hedged:
-                waits.append(max(hedge_at - now, 0.0))
-            if held:
-                waits += [max(hedged_at + config.UNDERSTAND_BACKUP_GRACE - now, 0.01), max(left - 0.5, 0.01)]
-            try:
-                models, got, exc = results.get(timeout=max(min(waits), 0.01))
-            except queue.Empty:
-                if not hedged and (time_left() or 0) > 0.5:  # החזק לא ענה בזמן - גם מודלי הגיבוי
-                    hedge()
-                    continue
-                if held or (time_left() or 0) > 0.05:
-                    continue
-                raise OutOfTime("understand", errors + ["no understanding in time"]) from None
-            if models == [backup]:
-                backup_running = False
-                if got:
-                    held = got  # מחכים ל-Gemini לפי הכלל (בתחילת הלולאה)
-                else:
-                    errors.append(str(exc)[:150])
-                continue
-            gemini_running -= 1
-            if got:
-                return got
-            errors.append(str(exc)[:150])
-            if not hedged:  # החזק נכשל מהר (למשל 503) - הגיבוי מיד, בלי לחכות
-                hedge()
-        if held:
-            return held
-    raise AllProvidersFailed("understand", errors)
 
 
 def try_understand(question: str, history: list[dict] = ()) -> Understanding | None:
@@ -266,10 +152,8 @@ def try_understand(question: str, history: list[dict] = ()) -> Understanding | N
     try:
         if limit is None:
             return understand(question, history)
-        if config.UNDERSTAND_HEDGE and not config.LEGACY.get():  # מדידת "לפני" - בלי בקשת הגיבוי
-            return _hedged(question, history, limit)
-        with time_budget(limit):
-            return understand(question, history)
+        with time_budget(limit):  # מדידת "לפני" (legacy) - בלי מקביליות
+            return understand(question, history, hedge=config.PARALLEL_LLM and not config.LEGACY.get())
     except AllProvidersFailed as exc:  # כולל OutOfTime
         log.warning("understanding failed, using the code rules: %s", str(exc)[:200])
         return None

@@ -1,4 +1,5 @@
-"""מנגנון הגיבוי המשותף לכל המטרות (מודל שפה, אמבדינגים, Rerank, איסוף).
+"""מנגנון הגיבוי לווקטורים, ל-Rerank ולאיסוף (מודלי השפה - בשער המודלים, gateway.py, שמשתמש בכלים שכאן:
+סיווג תקלות, זמן כולל לשאלה, מגבלת זמן אמיתית).
 
 run_chain מנסה ספק אחרי ספק לפי הסדר. ספק = מודל + מפתח (ב-Gemini יש כמה מפתחות). ספק שנחסם "נח"
 לזמן מה, כדי שלא נבזבז עליו זמן בכל בקשה:
@@ -7,6 +8,7 @@ run_chain מנסה ספק אחרי ספק לפי הסדר. ספק = מודל + �
   - עומס (503/504) או חריגת זמן: המודל נח 5 דקות בכל המפתחות, ועוברים מיד למודל הבא - בלי המתנה.
     בסקריפטי הבדיקות (config.patient) - כמו לפני כן: ניסיון חוזר אחד, ואז רק הצירוף מפתח+מודל נח 30 שניות.
   - מפתח לא תקין: המפתח נח בכל המודלים.
+  - כולם נחים: מנסים בכל זאת את מי שחוזר הכי מוקדם - אף בקשה לא נגמרת בלי ניסיון.
 """
 import collections
 import contextlib
@@ -46,9 +48,6 @@ PATIENT_OVERLOAD_REST = 30
 FAST_OVERLOAD_REST = 60
 FAST_OVERLOAD_LIMIT = 2  # 21/10: היה 4 - כל 503 נספר במכסה, ועם מודל הגיבוי אין סיבה לשרוף עוד מפתחות
 FAST_OVERLOAD_GROUP_REST = 60
-# מכסה יומית שנגמרה (QUOTA): נקרא עם (שם, עד מתי) - llm שומר ב-Upstash, וכל התהליכים ושני האתרים לא מנסים שוב את
-# המפתח הזה עד האיפוס (21/10: כל הפעלה מחדש עברה על 20 מפתחות ריקים, אחד אחרי השני, ולא נשאר זמן לתשובה).
-QUOTA_HOOK: "Callable[[str, float], None] | None" = None
 COOLDOWN_SECONDS = {
     RATE_LIMIT: 60,
     QUOTA: 3600,
@@ -118,14 +117,15 @@ class Provider:
     enabled: bool = True      # False כשאין מפתח ב-.env
     group: str = ""           # המודל בכל המפתחות ("gemini:gemini-3.8-flash"): עומס (503/504) מנוחה לכולם
     key: str = ""             # המפתח בכל המודלים ("gemini#2"): מפתח לא תקין - מנוחה לכולם
-    overload_rest: float | None = None  # עומס/timeout: כמה שניות לנוח במקום OVERLOAD_REST (0 - בלי מנוחה; מודל הגיבוי)
-    rate_limit_rest: float | None = None  # מגבלה לדקה (429): לכל היותר כמה שניות לנוח (מודל הגיבוי - 10, לא דקה)
+
+
+def rest_ends(p: Provider) -> float:
+    """עד מתי הספק בהפסקה: הצירוף מפתח+מודל, המודל (עומס) או המפתח (לא תקין) - המאוחר מביניהם (0 - לא בהפסקה)."""
+    return max((_resting_until.get(k, 0) for k in (p.name, p.group, p.key) if k), default=0)
 
 
 def is_resting(p: Provider) -> bool:
-    """הצירוף מפתח+מודל, המודל (עומס) או המפתח (לא תקין) עכשיו בהפסקה."""
-    now = time.time()
-    return any(_resting_until.get(k, 0) > now for k in (p.name, p.group, p.key) if k)
+    return rest_ends(p) > time.time()
 
 
 def _status_code(exc: Exception) -> int | None:
@@ -146,6 +146,11 @@ def _error_text(exc: Exception) -> str:
     return text
 
 
+# Gemini מחזיר על מפתח שגוי או שפג תוקפו 400 (INVALID_ARGUMENT, reason API_KEY_INVALID) - לא 401/403. בלי זה טעות
+# הקלדה במפתח בתשלום הייתה נראית כמו "בקשה שגויה" רגילה.
+BAD_KEY = re.compile(r"API_KEY_(?:INVALID|EXPIRED)|API key (?:not valid|expired)", re.IGNORECASE)
+
+
 def classify(exc: Exception) -> str:
     if isinstance(exc, EmptyResult):
         return EMPTY
@@ -158,7 +163,7 @@ def classify(exc: Exception) -> str:
         return QUOTA if long_term else RATE_LIMIT
     if code == 402:
         return QUOTA
-    if code in (401, 403):
+    if code in (401, 403) or (code == 400 and BAD_KEY.search(_error_text(exc))):
         return AUTH
     if code == 404:
         return NOT_FOUND
@@ -218,10 +223,17 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
     on_error(שם הספק, סוג התקלה): נקרא מיד על כל ניסיון שנכשל, לפני המעבר לספק הבא."""
     errors = []
     fast_overloads: collections.Counter = collections.Counter()  # עומס מהיר לכל מודל, בבקשה הזו
+    # כולם בהפסקה - לא מוותרים מראש (22/10 16:41: "לא הצלחתי לאמת" אחרי 0 שניות של ניסיון): מנסים את מי שחוזר הכי
+    # מוקדם. לא ספק שנח "עד הפעלה מחדש" (מפתח לא תקין, מודל לא קיים) - הוא ייכשל בוודאות.
+    enabled = [p for p in providers if p.enabled]
+    finite = [p for p in enabled if rest_ends(p) != float("inf")]
+    forced = (min(finite, key=rest_ends) if finite and all(is_resting(p) for p in enabled) else None)
+    if forced:
+        log.warning("%s: every provider is resting - trying %s anyway", purpose, forced.name)
     for p in providers:
         if not p.enabled:
             continue
-        if is_resting(p):
+        if is_resting(p) and p is not forced:
             errors.append(f"{p.name}: resting")
             continue
         for attempt in range(retries + 1):
@@ -257,10 +269,6 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                     continue
                 if cooldown and kind in COOLDOWN_SECONDS:
                     rest = PATIENT_OVERLOAD_REST if overload and not OVERLOAD_MEMORY else COOLDOWN_SECONDS[kind]
-                    if overload and p.overload_rest is not None:  # מודל הגיבוי: תשובה איטית אחת לא מוציאה אותו מהמשחק
-                        rest = p.overload_rest
-                    if kind == RATE_LIMIT and p.rate_limit_rest is not None:  # מגבלה לדקה: חוזרים אחרי כמה שניות
-                        rest = min(rest, p.rate_limit_rest)
                     reset = retry_after(exc)
                     if kind in (RATE_LIMIT, QUOTA) and reset:  # הספק אומר מתי הוא פנוי - לנוח בדיוק עד אז
                         rest = min(max(reset, 1), 86400)
@@ -276,8 +284,6 @@ def run_chain(purpose: str, providers: list[Provider], *args, retries: int = 1, 
                             rest = FAST_OVERLOAD_GROUP_REST  # עומס על המודל: נח בכל המפתחות
                     if rest > 0:
                         _resting_until[target] = time.time() + rest
-                        if kind == QUOTA and QUOTA_HOOK:
-                            QUOTA_HOOK(target, _resting_until[target])
                 errors.append(f"{p.name}: {kind}: {str(exc)[:200]}")
                 log.warning("%s: %s failed (%s: %s), moving to next provider", purpose, p.name, kind, str(exc)[:200])
                 break

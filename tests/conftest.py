@@ -25,4 +25,10 @@ def no_backup_llm(monkeypatch):
     """בלי מודל הגיבוי מחוץ ל-Google (Cohere) - הבדיקות לא תלויות במפתח שב-.env. בדיקות הגיבוי מדליקות אותו בעצמן."""
     from phoenix import config
     monkeypatch.setattr(config, "BACKUP_LLM", "")
-    monkeypatch.setattr(config, "UNDERSTAND_BACKUP", "")
+
+
+@pytest.fixture(autouse=True)
+def fresh_circuits(monkeypatch):
+    """כל בדיקה מתחילה עם כל המפסקים סגורים (שער המודלים זוכר תקלות בין בקשות)."""
+    from phoenix import gateway
+    monkeypatch.setattr(gateway, "_breakers", {})

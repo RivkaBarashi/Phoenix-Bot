@@ -68,10 +68,14 @@ def _gemini_keys() -> list[tuple[int, str]]:
 
 
 GEMINI_KEYS: list[tuple[int, str]] = _gemini_keys()
+# מודלי השפה - מפתח Gemini אחד, בלי סבב מפתחות: GEMINI_API_KEY (מספר 1; אם הוא ריק - הראשון שיש). ביום הבדיקות
+# משדרגים את הפרויקט של המפתח הזה לתשלום, ושום דבר בקוד לא משתנה. LLM_GEMINI_KEY=<מספר> - מפתח אחר (למשל לפיתוח).
+# המאגר (GEMINI_KEYS) נשאר רק לווקטורים לשאלה (embeddings.py).
+LLM_GEMINI_KEY: int | None = (int(os.getenv("LLM_GEMINI_KEY")) if os.getenv("LLM_GEMINI_KEY", "").strip().isdigit()
+                              else GEMINI_KEYS[0][0] if GEMINI_KEYS else None)
 
-# מודל שפה לתשובות, לפי סדר. בחינמי של Gemini לכל מודל מכסה יומית נפרדת, ולמודלי Flash
-# היא רק 20 בקשות ביום (נבדק 16/10, מתאפסת בחצות שעון פסיפיק) - לכן כמה דגמי Flash ברצף,
-# ואחריהם Flash-Lite ו-Gemma. ספק שנגמרה לו המכסה "נח" עד האיפוס, והבא בתור עונה.
+# כל מודלי השפה שהבוט מכיר. מי עונה בכל שלב ובאיזה סדר - ROUTES (למטה), דרך שער המודלים (gateway.py). השרשרת המלאה
+# משמשת רק קריאה בלי נתיב (בדיקת ספקים), ו-Groq/OpenRouter - רק את השופט בבדיקות.
 # בלי gemini-3.5-flash: מאחוריו עונה gemini-3.6-flash (נבדק 19/10 - model_version בתשובה, ומכסה משותפת),
 # כך שהוא רק ניסיון כפול על אותה מכסה, ובבקשות במקביל - אותו מודל פעמיים.
 LLM_CHAIN = [
@@ -87,8 +91,8 @@ LLM_CHAIN = [
     ("openrouter", "google/gemma-4-31b-it:free"),
 ]
 # מודל הגיבוי מחוץ ל-Google (21/10: gemini-3.8-flash החזיר 504 בכל 20 המפתחות, ו-38/81 שאלות בריצה הסופית נשארו בלי
-# תשובה). מקבל את ההקשר המלא (5 קטעים) ואת אותן בדיקות. בצ'אט הוא המתחרה השני במירוץ התשובה (מול 3.6) ונכנס לגיבוי
-# של הבנת השאלה; Google לא עונה - הוא עונה. נמדד 21/10 על פרומפט התשובה האמיתי: command-a-03-2025 - 10.6 ש',
+# תשובה). מקבל את ההקשר המלא (5 קטעים) ואת אותן בדיקות. בדרגת הגיבוי של נתיב התשובה ושל נתיב ההבנה (ROUTES);
+# Google לא עונה - הוא עונה. נמדד 21/10 על פרומפט התשובה האמיתי: command-a-03-2025 - 10.6 ש',
 # command-a-plus - 9.9 ש', command-r-plus - 46 ש'; שעה אחר כך command-a - 37-43 ש' (Trial בעומס) ו-command-a-plus - 8.6 ש'.
 # לכן command-a-plus. Groq לא מתאים (8K טוקנים לדקה, ההקשר ~11K). ריק - בלי גיבוי.
 BACKUP_LLM = os.getenv("BACKUP_LLM", "cohere:command-a-plus-05-2026").strip()
@@ -102,18 +106,46 @@ COHERE_THINKING_MODELS = ("command-a-plus", "command-a-reasoning")
 if BACKUP_LLM:
     LLM_CHAIN.append(tuple(BACKUP_LLM.split(":", 1)))
 
-# שלב הבנת השאלה (understand.py): המודל הכי איכותי שיש לנו קודם (Pro לא זמין בחינמי), ואחריו השרשרת הרגילה
-UNDERSTAND_TIMEOUT: float | None = float(os.getenv("UNDERSTAND_TIMEOUT", "8"))  # בצ'אט; הבדיקות - בלי מגבלה
-UNDERSTAND_LLMS = [m.strip() for m in os.getenv("UNDERSTAND_LLMS", "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash").split(",")]
-# בצ'אט - בקשת גיבוי להבנה: המודלים החזקים קודם; אין תשובה תוך UNDERSTAND_HEDGE_AFTER שניות (או כשל מהיר) - אותה
-# בקשה גם ל-UNDERSTAND_HEDGE, והתשובה התקינה הראשונה קובעת. נבדק 20/10 בעומס אצל Google: 3.8 ו-3.7 - 504 אחרי 30
-# שניות, 3.6 - 2.7 שניות. בלי הגיבוי כל שאלה חיכתה 8 שניות ועברה לכללי הקוד. ריק - בלי גיבוי.
-UNDERSTAND_HEDGE = os.getenv("UNDERSTAND_HEDGE", "gemini-3.6-flash").strip()
-UNDERSTAND_HEDGE_AFTER = float(os.getenv("UNDERSTAND_HEDGE_AFTER", "3"))
-# יחד עם בקשת הגיבוי - גם למודל שמחוץ ל-Google (BACKUP_LLM), כך ש-Google שלא עונה לא משאיר את השאלה לכללי הקוד.
-# הכלל (21/10): ההבנה שלו נבחרת רק אם 3.8 ו-3.6 נכשלו, או ש-3.6 לא ענה תוך UNDERSTAND_BACKUP_GRACE שניות מתחילת הגיבוי.
-UNDERSTAND_BACKUP = BACKUP_LLM
-UNDERSTAND_BACKUP_GRACE = float(os.getenv("UNDERSTAND_BACKUP_GRACE", "3"))
+# שער המודלים (gateway.py): לכל שלב נתיב - מודל ראשי, ואחריו גיבויים לפי הסדר. "|" - מכאן דרגת גיבוי: תשובה שלהם מחכה
+# למודלים שלפני ה-"|" (PREFER_SECONDS). "~low" - חשיבה נמוכה (LOW_THINKING; ב-Cohere - COHERE_LOW_THINKING_BUDGET).
+# "BACKUP" - BACKUP_LLM (ריק - בלי). כל נתיב אפשר להחליף במשתנה סביבה.
+# - הבנת השאלה: 3.8 בחשיבה רגילה (החלטת הבעלים 20/10 - פחות טעויות ניסוח); תקלה או 3 ש' בלי תשובה - 3.6 בחשיבה נמוכה
+#   (2.7 ש' בעומס, כש-3.8 החזיר 504 אחרי 30 ש') ומודל הגיבוי מחוץ ל-Google, יחד.
+# - תשובה: 3.6 (המודל שנמדד באיכות), ומודל הגיבוי מחוץ ל-Google.
+# - קריאות עזר (בדיקת נושא, השלמת שאלת המשך, ניסוח מחדש, ניסיון התיקון): Gemini בלבד, כמו קודם.
+ROUTES = {
+    "understand": os.getenv("UNDERSTAND_ROUTE", "gemini:gemini-3.8-flash, gemini:gemini-3.6-flash~low | BACKUP~low"),
+    "answer": os.getenv("ANSWER_ROUTE", "gemini:gemini-3.6-flash | BACKUP"),
+    "helper": os.getenv("HELPER_ROUTE", "gemini:gemini-3.6-flash, gemini:gemini-3.8-flash"),
+}
+
+
+def route(name: str) -> list[tuple[str, bool, int]]:
+    """[(ספק או מודל, חשיבה נמוכה, דרגה)] לפי הסדר. נקרא בכל קריאה - שינוי של BACKUP_LLM (גם בבדיקות) נכנס מיד."""
+    lanes = []
+    for tier, group in enumerate(ROUTES[name].split("|")):
+        for part in group.split(","):
+            target, _, extra = part.strip().partition("~")
+            target = BACKUP_LLM if target == "BACKUP" else target
+            if target:
+                lanes.append((target, extra.strip() == "low", tier))
+    return lanes
+
+
+# בצ'אט: הראשי לבד; אחרי HEDGE_AFTER_SECONDS בלי תשובה, או מיד כשהוא נתקל בתקלה (שגיאה, תשובה שנפסלה, מפסק פתוח) - כל
+# שאר הנתיב מתחיל יחד.
+HEDGE_AFTER_SECONDS = float(os.getenv("HEDGE_AFTER_SECONDS", "3"))
+# תשובה טובה של גיבוי מחכה למודל מוקדם יותר בנתיב עד כמה שניות מההתחלה (Cohere לבד - 2 שגויות ב-45 שאלות, Gemini - 0):
+# בתשובה - 12 ש' (21/10); בהבנה - 6 ש' (3 עד הגיבוי + 3 חסד, 21/10). ולא קרוב יותר מ-PREFER_MARGIN לסוף הזמן.
+PREFER_SECONDS = {"answer": float(os.getenv("ANSWER_PREFER_SECONDS", "12")),
+                  "understand": float(os.getenv("UNDERSTAND_PREFER_SECONDS", "6"))}
+PREFER_MARGIN = {"answer": 1.5, "understand": 0.5}
+# ניסיון חוזר באותו מודל - רק על תקלה מהירה (429 לדקה, 503), ורק אם ההמתנה עד LLM_MAX_WAIT (בצ'אט המודל הבא כבר רץ).
+LLM_RETRIES = 1
+LLM_MAX_WAIT = 2.0
+
+# שלב הבנת השאלה (understand.py): עד UNDERSTAND_TIMEOUT שניות בצ'אט, ואחריו כללי הקוד; הבדיקות - בלי מגבלה
+UNDERSTAND_TIMEOUT: float | None = float(os.getenv("UNDERSTAND_TIMEOUT", "8"))
 
 # אמבדינגים: לכל ספק אינדקס משלו (וקטורים של מודלים שונים לא ניתנים להשוואה).
 EMBED_CHAIN = [
@@ -166,19 +198,9 @@ QUERY_MAX_WAIT = 0.0
 # זמן כולל לשאלה אחת בצ'אט - כל השלבים יחד (השלמת שאלת המשך, חיפוש, Rerank, מודל). כל ניסיון אצל ספק מקבל
 # רק את מה שנשאר; כשנשארות פחות מ-3 שניות - הודעה ידידותית, בלי ניסיון נוסף. (הבדיקות לא מוגבלות.)
 QUESTION_TIMEOUT = float(os.getenv("QUESTION_TIMEOUT", "20"))
-# 20 השניות הן מגבלה קשיחה. בצ'אט כל שאלה נשלחת במקביל לשני מודלי Flash חזקים (RACE_LLMS, כל אחד במפתח אחר),
-# והתשובה הראשונה שעוברת את כל הבדיקות מוצגת - מודל עמוס או איטי לא מעכב את התשובה. שורף כפול מכסה בשלב
-# התשובה. מודל מהזוג לא זמין - הבא בתור מ-LLM_CHAIN. הבדיקות (eval) תמיד מודל אחד.
-# כלל המעבר ל-BACKUP_LLM בשלב התשובה (החלטת הבעלים, 21/10): Google החזיר תקלה (503, מכסה, 504/timeout) או שאין מפתח
-# Gemini פנוי - הגיבוי מתחיל מיד; Google רק איטי - הגיבוי מתחיל במקביל אחרי BACKUP_AFTER_SECONDS. Gemini קודם: תשובה תקינה
-# שלו עד GEMINI_PREFERRED_SECONDS (מתחילת שלב התשובה) - היא מוצגת; אחרי זה - התשובה התקינה הראשונה שיש.
-BACKUP_AFTER_SECONDS = float(os.getenv("BACKUP_AFTER_SECONDS", "3"))
-GEMINI_PREFERRED_SECONDS = float(os.getenv("GEMINI_PREFERRED_SECONDS", "12"))
+# 20 השניות הן מגבלה קשיחה. בצ'אט כל קריאה למודל עוברת בנתיב שלה במקביל מדורג (HEDGE_AFTER_SECONDS, למעלה): מודל עמוס
+# או איטי לא מעכב את התשובה. false - בזה אחר זה גם בצ'אט (מתג חירום). הבדיקות (eval) תמיד בזה אחר זה.
 PARALLEL_LLM = os.getenv("PARALLEL_LLM", "true").strip().lower() in ("1", "true", "yes", "on")
-# 21/10 (פתרון לכל הבעיות): בלי שני מודלי Gemini במקביל. שניהם של Google - כש-Google נפל שניהם נכשלו יחד, והמכסה
-# נגמרה פי שניים. במקום זה קריאת Gemini אחת (כל המפתחות, 3.6 -> 3.7 -> 3.8), ובמקביל מודל הגיבוי מחברה אחרת לפי כלל
-# המעבר. זו גם התצורה שנמדדה באיכות (ה-eval: 3.6 לבד). true - שני מודלי Gemini כמו קודם (RACE_LLMS).
-GEMINI_RACE = os.getenv("GEMINI_RACE", "false").strip().lower() in ("1", "true", "yes", "on")
 # "עובדות קודם, ואז התשובה" (21/10, לפי ההנחיה של Anthropic: לחלץ קודם ציטוטים מילה במילה, ולענות רק מהם). נמצא
 # בבדיקה: ב-33 מתוך 35 תשובות חלקיות הפרט החסר היה בקטעים שהמודל קיבל - המודל השמיט אותו ("עד 5 משפטים"). בגרסה
 # הזו המודל מעתיק קודם כל משפט רלוונטי (evidence), ואז כותב תשובה שכוללת את כולם; והקוד מוסיף עובדה מאומתת עם
@@ -192,21 +214,15 @@ SITE_QUOTE_ONLY_UNDERSTOOD = os.getenv("SITE_QUOTE_ONLY_UNDERSTOOD", "true").str
 # הסופית, הסט הנסתר וה-A/B) - 7 טעויות חמורות (שגויה / המציא / injection שלא נחסם), ובמקומם "העמוד והפניה" - 0. המחיר:
 # 6 מלאות ו-30 חלקיות נהיות "לא הצלחתי לאמת". אין מודל - תמיד העמוד הרלוונטי והפניה לשירות הלקוחות.
 SITE_QUOTE = os.getenv("SITE_QUOTE", "false").strip().lower() in ("1", "true", "yes", "on")
-RACE_LLMS = [m.strip() for m in os.getenv("RACE_LLMS", "gemini-3.6-flash,gemini-3.8-flash").split(",") if m.strip()]
 # בצ'אט: החיפוש על השאלה כמו שנכתבה מתחיל במקביל להבנת השאלה. ניסוח עצמאי שונה מהותית (פחות מ-70% מילים
 # משותפות, סוג ביטוח אחר, שאלה מפוצלת, תרגום) - מחפשים שוב עליו. שאלת המשך שתלויה בשיחה - בלי חיפוש מוקדם.
 PARALLEL_SEARCH = os.getenv("PARALLEL_SEARCH", "true").strip().lower() in ("1", "true", "yes", "on")
 SAME_SEARCH_JACCARD = 0.7
 # חשיבה: הרמה הנמוכה ביותר שכל מודל מקבל (נבדק 20/10: 3.6 - MINIMAL; 3.7 ו-3.8 דוחים MINIMAL - LOW). שלב ההבנה
-# לפי UNDERSTAND_LOW_THINKING / UNDERSTAND_HEDGE_LOW_THINKING למטה. בתשובה - רק עם ANSWER_LOW_THINKING, אחרי בדיקת איכות.
+# לפי "~low" בנתיב שלו (ROUTES). בתשובה - רק עם ANSWER_LOW_THINKING, אחרי בדיקת איכות.
+# נבדק 20/10, הבנה בלבד על 75 השאלות, 3.6: נמוכה - שגויה 1/75, חציון 3.5 ש'; רגילה - שגויה 1/48, חציון 10.5 ש'.
 LOW_THINKING = {"gemini-3.6-flash": "MINIMAL", "gemini-3.7-flash": "LOW", "gemini-3.8-flash": "LOW"}
 ANSWER_LOW_THINKING = os.getenv("ANSWER_LOW_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
-# שלב ההבנה: חשיבה נמוכה לכל מודל (UNDERSTAND_LOW_THINKING), או רק למודל הגיבוי (UNDERSTAND_HEDGE_LOW_THINKING).
-# נבדק 20/10, הבנה בלבד על 75 השאלות, 3.6: נמוכה - שגויה 1/75, חציון 3.5 ש'; רגילה - שגויה 1/48, חציון 10.5 ש'.
-# 3.8 לא נבדק בחשיבה נמוכה (עומס אצל Google כל 20/10), ולכן לפי החלטת הבעלים: 3.8 (המודל הראשי) בחשיבה רגילה, כדי לא
-# לקחת סיכון על טעויות ניסוח בשאלות המנוסחות; מודל הגיבוי (3.6, אחרי 3 שניות) בחשיבה נמוכה - הוא שומר על הזמן.
-UNDERSTAND_LOW_THINKING = os.getenv("UNDERSTAND_LOW_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
-UNDERSTAND_HEDGE_LOW_THINKING = os.getenv("UNDERSTAND_HEDGE_LOW_THINKING", "true").strip().lower() in ("1", "true", "yes", "on")
 # מדידת "לפני ואחרי" על אותו שרת (סעיף 6ה): ?dev=1&legacy=1 עונה בלי שיפורי הזמנים - בלי מרוץ, בלי חיפוש מוקדם,
 # חשיבה רגילה בהבנה, תיקון כבר מ-5 שניות, ובלי מטמון. לשאלה אחת בלבד (contextvar) - לא משנה לאף אחד אחר.
 LEGACY: contextvars.ContextVar[bool] = contextvars.ContextVar("legacy", default=False)
@@ -224,8 +240,9 @@ def legacy_mode(on: bool):
 def patient(timeout: float = 60, retries: int = 1, max_wait: float = 10):
     """לסקריפטים בלבד (eval_*.py): המתנה ארוכה יותר לכל ספק, ועל עומס (503) - ניסיון חוזר באותו מודל במקום
     לדלג עליו 5 דקות (זיכרון העומס הוא לצ'אט - fallback.OVERLOAD_MEMORY)."""
-    global QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT, EMBED_QUERY_TIMEOUT
+    global QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT, EMBED_QUERY_TIMEOUT, LLM_RETRIES, LLM_MAX_WAIT
     QUERY_TIMEOUT, QUERY_RETRIES, QUERY_MAX_WAIT = timeout, retries, max_wait
+    LLM_RETRIES, LLM_MAX_WAIT = retries, max_wait
     EMBED_QUERY_TIMEOUT = timeout
     from . import fallback  # כאן ולא למעלה: fallback לא תלוי ב-config, וזה המקום היחיד שמשנה אותו
     fallback.OVERLOAD_MEMORY = False

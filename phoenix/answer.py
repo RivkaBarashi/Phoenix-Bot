@@ -18,12 +18,10 @@ import concurrent.futures
 import contextvars
 import json
 import logging
-import queue
 import re
 import sys
-import threading
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from . import answer_cache, bm25, config, llm
@@ -33,13 +31,8 @@ from .search import Hit, SearchResult, search
 from .understand import Understanding, try_understand
 
 CONTEXT_CHUNKS = 5
-# Gemini מקבל 5 קטעים מלאים (~11K טוקנים). שאר המודלים הם גיבוי עם מגבלת גודל בקשה
-# (Groq בחינם: ~8K טוקנים, החזיר 413) - הם מקבלים 3 קטעים מקוצרים: השורות שהכי קשורות לשאלה.
-FULL_CONTEXT_LLMS = ["gemini"]
-# תשובה ללקוחה - רק ממודל חזק (Gemini Flash). Groq/OpenRouter עונים מ-3 קטעים מקוצרים (מגבלת הטוקנים שלהם), ובבדיקה
-# רק עליהם עברו 3/5 - לכן הם לא כותבים תשובות. הם נשארו בשרשרת לשופט בבדיקות ולשלב ההבנה (סיווג, לא טקסט ללקוחה).
-COMPACT_LLMS: list[str] = []
-COMPACT_CHUNKS, COMPACT_CHARS = 3, 1500
+# כל מודל בנתיב התשובה (config.ROUTES["answer"]) מקבל את 5 הקטעים המלאים (~11K טוקנים). תשובה ללקוחה - רק ממודל חזק:
+# Groq/OpenRouter (מגבלת טוקנים, עונים מקטעים מקוצרים; בבדיקה עברו 3/5) נשארו רק לשופט בבדיקות.
 CONTACT_URL = "https://www.fnx.co.il/customer-service/contact-us/"
 KINDS = {"answer", "not_on_site", "personal", "off_topic"}
 
@@ -297,7 +290,7 @@ class Answer:
     timings: dict[str, float] = field(default_factory=dict)  # שניות לכל שלב (vector, bm25, rerank, llm, total)
     pages: int = 0             # כמה עמודים שונים נבדקו בחיפוש (לשורה בסוף התשובה בצ'אט)
     warning: str = ""          # מצב זהיר (אף מדרג לא זמין, אין סף) - ליומן ולפרטים הטכניים
-    race: str = ""            # בקשות במקביל: אילו מודלים (ומפתחות) - למצב מפתחת וליומן
+    race: str = ""            # כשנשאל יותר ממודל אחד בנתיב: אילו - למצב מפתחת וליומן
     early_search: str = ""    # החיפוש המוקדם (במקביל להבנה): reused / redone, או "" כשלא היה - ליומן ולמצב מפתחת
     personal_votes: int = 0   # כמה מודלי תשובה ענו "אישי" (במירוץ - מתוך כמה שענו); answered - כמה ענו בכלל
     answered: int = 0
@@ -399,7 +392,7 @@ def is_off_topic(question: str) -> bool:
 
     def ask():
         return llm.chat([{"role": "user", "content": question}], system=TOPIC_PROMPT, temperature=0,
-                        json_mode=True, parse=parse)
+                        json_mode=True, parse=parse, route="helper")
     left = time_left()
     try:
         if left is None:
@@ -424,7 +417,7 @@ def no_yes_no_opening(answer_text: str, texts: list[str]) -> tuple[str, str]:
         return answer_text, ""
     try:
         rephrased = llm.chat([{"role": "user", "content": answer_text}], system=REPHRASE_PROMPT, temperature=0,
-                             only=FULL_CONTEXT_LLMS).text.strip()  # טקסט ללקוחה - רק ממודל חזק
+                             route="helper").text.strip()  # טקסט ללקוחה - רק ממודל חזק (Gemini)
         if rephrased and not YES_NO_START.match(rephrased) and not unsupported_numbers(rephrased, texts):
             return rephrased, "rephrased"
     except AllProvidersFailed:
@@ -681,7 +674,7 @@ def standalone_question(question: str, history: list[dict]) -> str:
     convo = "\n".join(f"{'לקוח' if m['role'] == 'user' else 'בוט'}: {m['content']}" for m in history[-4:])
     try:
         reply = llm.chat([{"role": "user", "content": f"{convo}\nלקוח: {question}"}],
-                         system=CONDENSE_PROMPT, temperature=0)
+                         system=CONDENSE_PROMPT, temperature=0, route="helper")
         return reply.text.strip().split("\n")[0][:300] or question
     except AllProvidersFailed:
         last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
@@ -699,32 +692,6 @@ def _user_message(question: str, standalone: str, history: list[dict], hits: lis
     blocks.append(f"[C] פרטי התקשרות | {CONTACT_URL}\n{contact_text()}")
     parts.append("קטעים מהאתר:\n\n" + "\n\n".join(blocks))
     return "\n\n".join(parts)
-
-
-def _ask_model(question: str, standalone: str, history: list[dict], hits: list[Hit],
-               on_stage=None) -> llm.ChatResult:
-    """קודם Gemini עם 5 קטעים מלאים; אם אף מודל של Gemini לא זמין - מודל הגיבוי מחוץ ל-Google (config.BACKUP_LLM)
-    עם אותם 5 קטעים מלאים; ואחריו (אם הוגדרו) הגיבויים החלשים, עם 3 קטעים מקוצרים."""
-    def ask(context: list[Hit], providers: list[str]) -> llm.ChatResult:
-        messages = [{"role": "user", "content": _user_message(question, standalone, history, context)}]
-        request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=providers,
-                       low_thinking=config.ANSWER_LOW_THINKING)
-        if on_stage and not llm.lookup(messages, parse=parse_reply, **request):
-            on_stage("compose")
-        return llm.chat(messages, parse=parse_reply, **request)
-    try:
-        return ask(hits, FULL_CONTEXT_LLMS)
-    except AllProvidersFailed:
-        if config.BACKUP_LLM:
-            try:
-                return ask(hits, [config.BACKUP_LLM.split(":")[0]])
-            except AllProvidersFailed:
-                if not COMPACT_LLMS:
-                    raise
-        if not COMPACT_LLMS:  # בלי גיבויים - הודעת התקלה הקיימת (respond)
-            raise
-        compact = [replace(h, text=focus(h.text, standalone, COMPACT_CHARS)) for h in hits[:COMPACT_CHUNKS]]
-        return ask(compact, COMPACT_LLMS)
 
 
 def _as_list(value) -> list:
@@ -746,128 +713,53 @@ def _cited(raw_sources, hits: list[Hit]) -> list[tuple[str, str]]:
     return out
 
 
-# תשובה שהבדיקות פסלו (או החליפו בטקסט האישי הקבוע): בבקשות במקביל מחכים לתשובה של המודל השני
-# המירוץ מול מודל הגיבוי: כמה שניות לפני סוף הזמן של השאלה תשובה תקינה של הגיבוי מוצגת, גם אם Gemini עוד עובד.
-# נבדק 21/10 על 45 שאלות: Cohere לבד - 2 שגויות (Gemini - 0), ולפעמים יותר מ-60 ש' - לכן Gemini קודם (כלל המעבר ב-config).
-BACKUP_WAIT_MARGIN = 1.5
+# תשובה שהבדיקות פסלו: המודל הבא בנתיב מתחיל מיד, וכל תשובה נבדקת בנפרד - הטובה ביותר מוצגת
 REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not_on_site", "empty_answer",
             "leak_guard", "personal_generic")
+GOOD, HELD, REJECTED_RANK = 0, 1, 2
 
 
-def _race(question: str, standalone: str, history: list[dict], hits: list[Hit], finish,
-          on_stage=None, hold=None) -> "Answer | None":
-    """אותה שאלה לשני מודלי Gemini שונים במקביל, כל אחד במפתח אחר, ומודל הגיבוי מחוץ ל-Google (config.BACKUP_LLM) לפי
-    כלל המעבר: Google החזיר תקלה (503, מכסה, 504/timeout) או שאין מפתח Gemini פנוי - הגיבוי מתחיל מיד; Google רק איטי -
-    אחרי BACKUP_AFTER_SECONDS. תשובה תקינה של Gemini מוצגת מיד. תשובה תקינה של הגיבוי מחכה ל-Gemini עד
-    GEMINI_PREFERRED_SECONDS מתחילת השלב (או עד ש-Gemini נכשל, או עד BACKUP_WAIT_MARGIN לפני סוף הזמן); אחרי זה - התשובה
-    התקינה הראשונה שיש. כל התשובות עוברות את אותן בדיקות בדיוק (finish). תשובה שנפסלה - מחכים לאחרות.
-    hold(outcome): תשובה שלא מנצחת כל עוד מודל אחר עובד (תשובה "אישית" כששלב ההבנה אמר info) - מחכים לאחרים;
-    כולם כאלה (או נכשלו) - היא מוחזרת, עם personal_votes.
-    None: אין מודלים זמינים, או שכולם נכשלו בלי שהגיבוי נוסה - ממשיכים בשרשרת הרגילה. הגיבוי נוסה ונכשל - AllProvidersFailed."""
+def _compose(question: str, standalone: str, history: list[dict], hits: list[Hit], finish,
+             on_stage=None, hold=None, parallel: bool = False) -> "Answer":
+    """שלב התשובה, בנתיב "answer" של שער המודלים (gateway.py): 3.6, ואחריו מודל הגיבוי מחוץ ל-Google. כל תשובה עוברת
+    את אותן בדיקות בדיוק (finish) ומדורגת: עברה - טובה; "אישית" לשאלת מידע (hold) - מחכים לאחרות; נפסלה - המודל הבא
+    בנתיב מתחיל מיד, ואם אין טובה יותר - היא מוחזרת (ו-respond מנסה לתקן). בצ'אט (parallel) הגיבוי מתחיל מיד על
+    תקלה של 3.6 או אחרי HEDGE_AFTER_SECONDS בלי תשובה, ותשובה טובה שלו מחכה ל-3.6 עד PREFER_SECONDS["answer"]. בבדיקות -
+    בזה אחר זה. אף מודל לא ענה - AllProvidersFailed / OutOfTime."""
     messages = [{"role": "user", "content": _user_message(question, standalone, history, hits)}]
-    request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, only=FULL_CONTEXT_LLMS,
+    request = dict(system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, route="answer",
                    low_thinking=config.ANSWER_LOW_THINKING)
-    if cached := llm.lookup(messages, parse=parse_reply, **request):  # כבר נענתה - בלי שום בקשה
-        return finish(cached)
-    pair = llm.race_pair(config.RACE_LLMS) if config.GEMINI_RACE else []
-    sides = pair or ([free] if (free := llm.free_keys()) else [])  # קריאת Gemini אחת: כל המפתחות, 3.6 -> 3.7 -> 3.8
-    backup = config.BACKUP_LLM if config.BACKUP_LLM and llm.ready(config.BACKUP_LLM) else ""
-    if len(sides) < 2 and not backup:
-        return None
-    if on_stage:
+    if on_stage and not llm.lookup(messages, parse=parse_reply, **request):
         on_stage("compose")
-    results: queue.Queue = queue.Queue()
-    trouble = threading.Event()  # Google החזיר תקלה - הגיבוי מתחיל מיד
+    seen: list[tuple[llm.ChatResult, Answer]] = []
 
-    def worker(names: list[str], gemini: bool):
-        try:
-            reply = llm.chat(messages, parse=parse_reply, names=names, cache=False,
-                             on_error=(lambda name, kind: trouble.set()) if gemini else None, **request)
-            results.put((gemini, reply, None))
-        except Exception as exc:  # תקלה בצד אחד לא מפילה את האחרים
-            if gemini:
-                trouble.set()
-            results.put((gemini, None, exc))
-
-    def start(names: list[str], gemini: bool):  # עם הזמן הכולל של השאלה (contextvars לא עוברים ל-thread חדש לבד)
-        threading.Thread(target=contextvars.copy_context().run, args=(worker, names, gemini), daemon=True).start()
-
-    began = time.perf_counter()
-    for names in sides:
-        start(names, True)
-    racers = " מול ".join([llm.describe(names[0]) for names in sides] + ([llm.describe(backup)] if backup else []))
-    gemini_running, backup_running, backup_started = len(sides), False, False
-    held_backup, rejected, errors, held, votes, answered = None, None, [], None, 0, 0
-
-    def accept(pick):
-        llm.remember(messages, result=pick[0], **request)  # רק המנצח נשמר במטמון
-        return pick[1]
-
-    while gemini_running or backup_running or (backup and not backup_started):
-        now, left = time.perf_counter(), time_left()
-        if backup and not backup_started and (trouble.is_set() or not gemini_running
-                                              or now - began >= config.BACKUP_AFTER_SECONDS):
-            start([backup], False)
-            backup_running = backup_started = True
-        if held_backup and (not gemini_running or now - began >= config.GEMINI_PREFERRED_SECONDS
-                            or (left is not None and left <= BACKUP_WAIT_MARGIN)):
-            return accept(held_backup)
-        if left is not None and left <= 0.05:
-            raise OutOfTime("llm", [str(e)[:150] for e in errors] + [f"parallel ({racers}): out of time"])
-        waits = [left] if left is not None else []
-        if backup and not backup_started:  # בודקים שוב כל 0.1 ש' אם Google החזיר תקלה
-            waits.append(min(0.1, max(began + config.BACKUP_AFTER_SECONDS - now, 0.01)))
-        if held_backup:
-            waits.append(max(began + config.GEMINI_PREFERRED_SECONDS - now, 0.01))
-            if left is not None:
-                waits.append(max(left - BACKUP_WAIT_MARGIN, 0.01))
-        try:
-            gemini, reply, error = results.get(timeout=max(min(waits), 0.01) if waits else None)
-        except queue.Empty:
-            continue
-        if gemini:
-            gemini_running -= 1
-        else:
-            backup_running = False
-        if reply is None:
-            errors.append(error)
-            continue
+    def rank(reply: llm.ChatResult) -> int:
         if on_stage:
             on_stage("verify")
-        outcome = finish(reply)  # אותן בדיקות בדיוק, על כל תשובה בנפרד
-        outcome.race = f"במקביל: {racers}"
-        answered += 1
-        votes += outcome.kind == "personal"
-        if hold and hold(outcome):  # "אישי" לשאלת מידע - לא מנצח; מחכים לאחרים (עד מגבלת הזמן)
-            held = held or (reply, outcome)
-            continue
-        if outcome.reason.startswith(REJECTED):
-            rejected = rejected or (reply, outcome)
-            continue
-        if gemini:
-            return accept((reply, outcome))
-        held_backup = (reply, outcome)  # הגיבוי תקין - מחכים ל-Gemini לפי הכלל (בתחילת הלולאה)
-    if held_backup:
-        return accept(held_backup)
-    if held:  # כל המודלים שענו אמרו "אישי" (או שהאחרים נכשלו/נפסלו) - התשובה האישית, ו-respond מחליט על תיקון
-        held[1].personal_votes, held[1].answered = votes, answered
-        return held[1]
-    if rejected:  # כל התשובות נפסלו (או נפסלו ונכשלו) - הראשונה, כמו במודל אחד
-        llm.remember(messages, result=rejected[0], **request)
-        return rejected[1]
-    if any(isinstance(e, OutOfTime) for e in errors):
-        raise next(e for e in errors if isinstance(e, OutOfTime))
-    if backup_started:  # גם הגיבוי נוסה ונכשל - בלי לנסות שוב בשרשרת (המשפט מהאתר / ההודעה הרגילה)
-        raise AllProvidersFailed("llm", [str(e)[:150] for e in errors])
-    log.warning("parallel: both failed (%s), continuing with the chain", " | ".join(str(e)[:120] for e in errors))
-    return None
+        outcome = finish(reply)
+        seen.append((reply, outcome))
+        if hold and hold(outcome):
+            return HELD
+        return REJECTED_RANK if outcome.reason.startswith(REJECTED) else GOOD
+
+    reply = llm.chat(messages, parse=parse_reply, hedge=parallel, rank=rank, **request)
+    outcome = next((o for r, o in seen if r is reply), None)
+    if outcome is None:  # מהמטמון - בלי בדיקה בדרך
+        if on_stage and not reply.cached:
+            on_stage("verify")
+        outcome = finish(reply)
+    outcome.personal_votes = sum(o.kind == "personal" for _, o in seen) or int(outcome.kind == "personal")
+    outcome.answered = len(seen) or 1
+    if reply.route:
+        outcome.race = f"במקביל: {reply.route}"
+    return outcome
 
 
 def respond(question: str, result: SearchResult, history: list[dict] = (), threshold: float | None = None,
             standalone: str | None = None, parallel: bool = False, on_stage=None,
             understanding: "Understanding | None" = None) -> Answer:
     """ההחלטה והתשובה, מתוך תוצאות חיפוש קיימות. threshold=0 = תמיד לשאול את המודל (לכיול).
-    parallel: אותה שאלה לשני מודלים במקביל (רק בצ'אט; הבדיקות - מודל אחד, בזה אחר זה).
+    parallel: נתיב התשובה במקביל מדורג (רק בצ'אט; הבדיקות - בזה אחר זה).
     on_stage: חיווי שלבים בצ'אט - נקרא בתחילת כל שלב. בלי (בבדיקות) - שום דבר לא משתנה.
     understanding: התוצאה של הבנת השאלה - ממנה "אישית" והמונח שנבדק באתר. בלי (הקריאה נכשלה) - כללי הקוד."""
     ranker = result.reranker.split(":")[0]  # cohere / local / none
@@ -996,7 +888,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                     {"role": "user", "content": REPAIR_PROMPT.format(problem=repair_note(outcome.reason))}]
         try:
             fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
-                             only=FULL_CONTEXT_LLMS, low_thinking=config.ANSWER_LOW_THINKING)
+                             route="helper", low_thinking=config.ANSWER_LOW_THINKING)
         except AllProvidersFailed:
             return unverified(outcome)
         finally:
@@ -1040,7 +932,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                     {"role": "user", "content": GENERAL_NOTE}]
         try:
             fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
-                             only=FULL_CONTEXT_LLMS, low_thinking=config.ANSWER_LOW_THINKING)
+                             route="helper", low_thinking=config.ANSWER_LOW_THINKING)
         except AllProvidersFailed:
             return own_reply_as_info(outcome)
         finally:
@@ -1060,10 +952,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         return general and outcome.kind == "personal"
 
     try:  # שכבה 2
-        if parallel and (raced := _race(question, standalone, history, hits, finish, on_stage, hold)):
-            timings["llm"] = time.perf_counter() - start
-            return general_question(settle(raced))
-        reply = _ask_model(question, standalone, history, hits, on_stage)
+        composed = _compose(question, standalone, history, hits, finish, on_stage, hold, parallel)
     except AllProvidersFailed as exc:
         timings["llm"] = time.perf_counter() - start
         if personal:  # שאלה אישית לא צריכה מודל: הטקסט האישי הקבוע + הפניה, ולא "תקלה זמנית"
@@ -1083,11 +972,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         return Answer(f"{UNVERIFIED_TEXT} {GENERIC_REFERRAL}\n\n{format_sources(urls)}", "unverified",
                       f"no_model:{'timeout' if isinstance(exc, OutOfTime) else 'unavailable'}", urls, **base)
     timings["llm"] = time.perf_counter() - start
-    if on_stage and not reply.cached:
-        on_stage("verify")
-    single = finish(reply)
-    single.personal_votes, single.answered = int(single.kind == "personal"), 1  # מודל אחד (בלי מירוץ)
-    return general_question(settle(single))
+    return general_question(settle(composed))
 
 
 _EARLY = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="early-search")
@@ -1170,7 +1055,6 @@ def answer(question: str, history: list[dict] = (), on_stage=None, cache: bool =
         greeting.timings["total"] = time.perf_counter() - start
         return greeting
     history = list(history)
-    llm.sync_shared_rests()  # מפתחות שהמכסה שלהם נגמרה בתהליך אחר או באתר השני - לא מנסים אותם שוב
     with time_budget(config.QUESTION_TIMEOUT):  # כל השאלה - כל השלבים יחד - עד QUESTION_TIMEOUT שניות
         if on_stage:
             on_stage("understand")
