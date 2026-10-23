@@ -2632,3 +2632,27 @@ def test_answer_structure_rule_is_off_until_measured():
     assert not A.config.ANSWER_STRUCTURE and A.ANSWER_STRUCTURE_RULE.split("\n")[0] not in A.SYSTEM_PROMPT
     prompt = A.with_answer_structure(A.SYSTEM_PROMPT_FACTS)
     assert prompt.count("המשפט הראשון עונה ישירות") == 1 and prompt.index("4. ניסוח") < prompt.index("5. referral")
+
+
+def test_eval_clarity_judge_is_separate_and_parsed_strictly(monkeypatch):
+    import eval_answers
+    assert eval_answers.CLARITY_PROMPT != eval_answers.JUDGE_PROMPT  # פסק הדין שנמדד לא משתנה
+    assert eval_answers.parse_clarity('{"direct": true, "clear": false, "reason": "x"}')["clear"] is False
+    with pytest.raises(ValueError):
+        eval_answers.parse_clarity('{"direct": "yes", "clear": true}')
+    monkeypatch.setattr(llm, "chat", lambda *a, **k: llm.ChatResult("{}", "groq:x", {"direct": True, "clear": True}))
+    assert eval_answers.clarity("q", "a") == {"clear": "yes", "direct": "yes", "clarity_reason": ""}
+
+
+def test_eval_pinning_never_pins_the_verifier_or_the_judges(monkeypatch):
+    """--llm מקבע את מודל התשובה; הבודק של העיגון והשופטים - בנתיב שלהם (אחרת מודל התשובה היה בודק את עצמו)."""
+    import eval_answers
+    seen = []
+    monkeypatch.setattr(llm, "chat", lambda messages, *a, names=None, **k: seen.append(names) or llm.ChatResult("x", "m"))
+    monkeypatch.setattr(llm, "PROVIDERS", [fallback.Provider("gemini:gemini-3.6-flash#1", lambda *a, **k: "",
+                                                             group="gemini:gemini-3.6-flash", key="gemini#1")])
+    eval_answers.pin_models(None, "gemini-3.6-flash")
+    llm.chat([], system=grounding.GROUNDING_PROMPT)
+    llm.chat([], system=eval_answers.CLARITY_PROMPT)
+    llm.chat([], system=A.SYSTEM_PROMPT)
+    assert seen == [None, None, ["gemini:gemini-3.6-flash#1"]]

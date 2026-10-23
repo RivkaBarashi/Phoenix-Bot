@@ -57,6 +57,11 @@ def main():
     for label, rows in (("השתפרה", r["better"]), ("נפגעה", r["worse"])):
         for n in rows:
             print(f"  {label} [{n}] {before[n]['verdict']} -> {after[n]['verdict']}: {before[n]['question'][:70]}")
+    for column, label in (("clear", "ברורות"), ("direct", "פותחות בתשובה עצמה")):  # ב5, כשהריצה עם --clarity
+        counted = [(sum(rows[n].get(column) == "yes" for n in rows), sum(rows[n].get(column) in ("yes", "no") for n in rows))
+                   for rows in (before, after)]
+        if counted[0][1] or counted[1][1]:
+            print(f"{label}: {counted[0][0]}/{counted[0][1]} -> {counted[1][0]}/{counted[1][1]}")
     print("כלל ההחלטה (יותר נכונות, ולא יותר שגויות): " + ("להפעיל" if r["adopt"] else "לא להפעיל"))
 
 

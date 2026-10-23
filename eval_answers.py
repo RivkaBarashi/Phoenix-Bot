@@ -26,7 +26,7 @@ from pathlib import Path
 import eval_retrieval
 from eval_retrieval import QUESTIONS, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
 from phoenix import answer as answer_layer
-from phoenix import config, embeddings, eval_history, llm, stats, usage
+from phoenix import config, embeddings, eval_history, grounding, llm, stats, usage
 from phoenix.answer import respond
 from phoenix.fallback import CALLS, FAILED, AllProvidersFailed
 from phoenix.search import RRF_K, SearchResult
@@ -60,6 +60,33 @@ PERSONAL_JUDGE_PROMPT = """אתה בודק תשובות של בוט שירות �
 - wrong: יש עובדה שסותרת את התשובה הצפויה או שהומצאה, או שהבוט קובע משהו על הפוליסה האישית
   (למשל "כן, אתם מכוסים") או נותן סכום/יתרה אישיים.
 החזר JSON בלבד: {"verdict": "correct" | "partial" | "wrong", "reason": "משפט קצר"}"""
+
+
+# ב5 (23/10): בהירות - נבדקת בנפרד מהנכונות (קריאה נפרדת, --clarity), כדי לא לשנות את פסק הדין שכבר נמדד.
+CLARITY_PROMPT = """אתה בודק עד כמה תשובה של בוט שירות לקוחות של חברת ביטוח ברורה ללקוח - לא אם היא נכונה (זה נבדק בנפרד).
+- direct: המשפט הראשון עונה ישירות על השאלה - "כן" / "לא", הסכום, הזמן או מה עושים - ולא פתיח או חזרה על השאלה.
+  בשאלה על מידע אישי (כיסוי, יתרה, מצב תביעה) - הפניה ברורה לאן לפנות היא תשובה ישירה.
+- clear: לקוח רגיל מבין מהתשובה מה התשובה ומה לעשות, בלי לפתוח את הקישור: עברית פשוטה, בלי מונחים לא מוסברים,
+  שלבים כרשימה, ובלי פרטים שלא קשורים לשאלה.
+החזר JSON בלבד: {"direct": true | false, "clear": true | false, "reason": "משפט קצר"}"""
+
+
+def parse_clarity(text: str) -> dict:
+    data = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    if not isinstance(data.get("direct"), bool) or not isinstance(data.get("clear"), bool):
+        raise ValueError(f"bad clarity: {str(data)[:80]}")
+    return data
+
+
+def clarity(question: str, got: str) -> dict:
+    """{"clear": "yes"/"no"/"n/a", "direct": ..., "clarity_reason": ...} - לעמודות בקובץ התוצאות."""
+    try:
+        r = llm.chat([{"role": "user", "content": f"שאלה: {question}\n\nתשובת הבוט: {got}"}], system=CLARITY_PROMPT,
+                     temperature=0, json_mode=True, parse=parse_clarity, only=JUDGE_PROVIDERS)
+    except AllProvidersFailed:
+        return {"clear": "n/a", "direct": "n/a", "clarity_reason": "השופט לא זמין"}
+    return {"clear": "yes" if r.data["clear"] else "no", "direct": "yes" if r.data["direct"] else "no",
+            "clarity_reason": r.data.get("reason", "")}
 
 
 def parse_verdict(text: str) -> dict:
@@ -96,7 +123,8 @@ def pin_models(understand: str | None, answer: str | None) -> dict[str, list[str
 
     def pinned_chat(messages, *args, names=None, cache=True, **kwargs):
         system = kwargs.get("system")
-        if system in (JUDGE_PROMPT, PERSONAL_JUDGE_PROMPT):
+        # השופטים והבודק של העיגון - בנתיב שלהם, לא במודל הקבוע (אחרת מודל התשובה היה בודק את עצמו)
+        if system in (JUDGE_PROMPT, PERSONAL_JUDGE_PROMPT, CLARITY_PROMPT, grounding.GROUNDING_PROMPT):
             return chat(messages, *args, names=names, cache=cache, **kwargs)
         if system == UNDERSTAND_PROMPT:
             return chat(messages, *args, names=pins["understand"] or names, cache=cache, **kwargs)
@@ -294,6 +322,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--index", default=config.EMBEDDER, choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.PROVIDERS)))
     parser.add_argument("--no-judge", action="store_true")
+    parser.add_argument("--clarity", action="store_true", help="ב5: גם שופט בהירות (קריאה נוספת לכל תשובה)")
     parser.add_argument("--questions", default=str(QUESTIONS), help="קובץ השאלות (למשל data/questions_holdout.csv)")
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
     parser.add_argument("--category", help="רק הסוגים האלה: " + ", ".join(TYPES))
@@ -419,6 +448,9 @@ def main():
             before = model_calls()
             rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text, personal=True)
             calls["judge"] = model_calls() - before
+        if args.clarity and a.kind in ("answer", "personal"):  # ב5: בהירות - בנפרד מהנכונות
+            rec.update(clarity(row["question"], a.text))
+        rec["grounding"] = a.grounding
         rec["personal_rule"] = u.personal if u else answer_layer.is_personal_question(question)
         below = rec["top"] < config.RERANK_THRESHOLD and not rec["personal_rule"]
         topic_requests = 0
@@ -509,7 +541,7 @@ def main():
     out = config.ROOT / "data" / (f"eval_answers_{args.index}" + (f"_{question_set}" if question_set else "")
                                   + ("_partial" if partial else "") + ".csv")
     fields = ["n", "type", "question", "intent", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",
-              "chat_s", "chat_calls", "sources", "answer"]
+              "chat_s", "chat_calls", "sources", "answer", "grounding", "clear", "direct", "clarity_reason"]
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
