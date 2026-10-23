@@ -251,9 +251,13 @@ INJECTION_RULES = os.getenv("INJECTION_RULES", "true").strip().lower() in ("1", 
 GROUNDING = os.getenv("GROUNDING", "false").strip().lower() in ("1", "true", "yes", "on")
 GROUNDING_MIN_SECONDS = float(os.getenv("GROUNDING_MIN_SECONDS", "5"))
 ANSWER_STRUCTURE = os.getenv("ANSWER_STRUCTURE", "false").strip().lower() in ("1", "true", "yes", "on")
+# אימות קפדני (23/10, תיקון חורים שנמצאו בבדיקה): ציטוט "כמעט מילה במילה" נבדק במשפט אחד ולפי הסדר, ומילים שהופכות
+# משמעות ("לא", "רק", "עד") זהות בציטוט ובאתר (קודם "מכוסים" עבר מול "לא מכוסים"); ומספר שכתוב במילים ("שלושים") נבדק
+# כמו מספר בספרות. דלוק: סוגר חורים שבהם תשובה שגויה הוצגה כמאומתת. false - ההתאמה הישנה (למדידה מול הגרסה הקודמת).
+STRICT_VERIFICATION = os.getenv("STRICT_VERIFICATION", "true").strip().lower() in ("1", "true", "yes", "on")
 # כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
 BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
-                  "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE",
+                  "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE", "STRICT_VERIFICATION",
                   "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.

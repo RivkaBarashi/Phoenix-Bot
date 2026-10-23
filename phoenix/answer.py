@@ -16,6 +16,7 @@
 """
 import concurrent.futures
 import contextvars
+import difflib
 import json
 import logging
 import re
@@ -661,8 +662,65 @@ def with_missing_facts(answer_text: str, evidence: list[str], texts: list[str]) 
     return answer_text + "".join(f"\n• {tidy_codes(f)}" for f in facts) if facts else answer_text
 
 
+# --- אימות ציטוטים (config.STRICT_VERIFICATION, 23/10) ---
+# ההתאמה החלקית הישנה בדקה רק שהמילים של הציטוט קיימות איפשהו בקטע (בלי סדר): "נזקי מים מהגג מכוסים" עבר מול "נזקי
+# מים מהגג לא מכוסים", וגם משפט שהורכב ממילים של משפטים שונים. עכשיו: משפט אחד (או שניים צמודים) בקטע, לפי הסדר, ומילים
+# שהופכות משמעות - זהות בציטוט ובקטע שהוא תואם.
+MEANING_WORDS = {"לא", "אין", "אינו", "אינה", "אינם", "אינן", "אינך", "אינני", "ללא", "בלי", "אסור", "למעט", "חוץ",
+                 "מלבד", "רק", "בלבד", "עד", "לפחות", "מעל", "מתחת", "יותר", "פחות", "מקסימום", "מינימום", "אלא",
+                 "not", "no", "without", "except", "only", "up", "least", "over", "under"}
+QUOTE_SPLIT = re.compile(r"\n+|(?<=[.!?:;])\s+")
+
+
+PREFIX_LETTERS = "ושבכלמה"  # "ולא", "שאין", "ועד" - אותה מילה עם אות תחילית
+PDF_MARK = "(pdf, עמוד"    # תחילת קטע מ-PDF (chunk / pdf_pages): סדר המילים בשורה לא אמין (חילוץ מימין לשמאל)
+
+
+def _meaning(tokens: list[str]) -> set[str]:
+    """המילים שהופכות משמעות בטקסט, גם עם אות תחילית ("ולא" -> "לא")."""
+    out = set()
+    for w in tokens:
+        for cut in range(0, 3):
+            if cut and (len(w) <= cut + 1 or any(c not in PREFIX_LETTERS for c in w[:cut])):
+                break
+            if w in ("מלא", "הלא"):  # "כיסוי מלא" - לא שלילה
+                break
+            if w[cut:] in MEANING_WORDS:
+                out.add(w[cut:])
+                break
+    return out
+
+
+def _close_quote(q: list[str], text: str) -> bool:
+    """כמעט מילה במילה: 90% ממילות הציטוט, לפי הסדר, בתוך משפט אחד (או עד 3 צמודים); כל המספרים; ובקטע התואם - בדיוק
+    אותן מילים שהופכות משמעות ("לא", "רק", "עד"), ולא יותר מכמה מילים שהציטוט דילג עליהן. ב-PDF סדר המילים בשורה
+    משובש בחילוץ, ולכן שם - 90% מהמילים בתוך עד 4 שורות צמודות (בלי סדר), עם אותה בדיקה של מילים שהופכות משמעות."""
+    pdf = PDF_MARK in text[:200].lower()
+    segments = [WORD.findall(s.lower()) for s in (text.split("\n") if pdf else QUOTE_SPLIT.split(text)) if s.strip()]
+    for size in range(1, (4 if pdf else 3) + 1):
+        for i in range(len(segments) - size + 1):
+            window = [w for segment in segments[i:i + size] for w in segment]
+            if pdf:
+                present = set(window)
+                if sum(w in present for w in q) / len(q) < 0.9:
+                    continue
+                region = window
+            else:
+                blocks = [b for b in difflib.SequenceMatcher(None, q, window, autojunk=False).get_matching_blocks()
+                          if b.size]
+                if not blocks or sum(b.size for b in blocks) / len(q) < 0.9:
+                    continue
+                region = window[blocks[0].b:blocks[-1].b + blocks[-1].size]
+                if len(region) > len(q) + max(2, len(q) // 10):
+                    continue  # המילים מפוזרות על פני הרבה מילים אחרות - לא אותו משפט
+            if all(w in region for w in q if w.isdigit()) and _meaning(region) == _meaning(q):
+                return True
+    return False
+
+
 def quote_found(quote: str, texts: list[str]) -> bool:
-    """הציטוט מופיע באחד הטקסטים - מילה במילה, או כמעט (90% מהמילים, וכל המספרים)."""
+    """הציטוט מופיע באחד הטקסטים - מילה במילה, או כמעט (STRICT_VERIFICATION: _close_quote; בלי - 90% מהמילים
+    באותו קטע וכל המספרים, כמו קודם)."""
     q = WORD.findall(quote.lower())
     if len(q) < 2:
         return False
@@ -670,10 +728,34 @@ def quote_found(quote: str, texts: list[str]) -> bool:
         t = WORD.findall(text.lower())
         if f" {' '.join(q)} " in f" {' '.join(t)} ":
             return True
+        if config.STRICT_VERIFICATION:
+            if _close_quote(q, text):
+                return True
+            continue
         present = set(t)
         if sum(w in present for w in q) / len(q) >= 0.9 and all(w in present for w in q if w.isdigit()):
             return True
     return False
+
+
+# מספר שנכתב במילים ("תוך שלושים יום") לא נבדק בכלל בבדיקת המספרים. בלי 1 ו-2 ("אחד הדברים", "שני הצדדים" - לא מספרים)
+HEBREW_NUMBERS = {"שלוש": 3, "שלושה": 3, "ארבע": 4, "ארבעה": 4, "חמש": 5, "חמישה": 5, "שש": 6, "שישה": 6, "שבע": 7,
+                  "שבעה": 7, "שמונה": 8, "תשע": 9, "תשעה": 9, "עשר": 10, "עשרה": 10, "עשרים": 20, "שלושים": 30,
+                  "ארבעים": 40, "חמישים": 50, "שישים": 60, "שבעים": 70, "שמונים": 80, "תשעים": 90, "מאה": 100,
+                  "מאתיים": 200, "אלף": 1000, "אלפיים": 2000}
+
+
+def _word_numbers(text: str) -> list[str]:
+    """מספרים שכתובים במילים, כספרות ("בשלושים" -> "30"). עד שתי אותיות תחילית (ו, ב, ל, מ, ה, ש, כ)."""
+    out = []
+    for word in WORD.findall(text):
+        for cut in range(0, min(3, len(word) - 1)):
+            if cut and word[cut - 1] not in "ובלמהשכ":
+                break
+            if (value := HEBREW_NUMBERS.get(word[cut:])) is not None:
+                out.append(str(value))
+                break
+    return out
 
 
 def customer_numbers(question: str, history: list[dict] = ()) -> set[str]:
@@ -683,16 +765,21 @@ def customer_numbers(question: str, history: list[dict] = ()) -> set[str]:
 
 
 def unsupported_numbers(answer: str, texts: list[str]) -> list[str]:
-    """מספרים בתשובה שלא מופיעים באף קטע (למשל טלפון או סכום שהמודל המציא)."""
+    """מספרים בתשובה שלא מופיעים באף קטע (למשל טלפון או סכום שהמודל המציא). STRICT_VERIFICATION: גם מספרים במילים -
+    בתשובה ובקטעים ("שלושים יום" בתשובה עובר רק אם 30 או "שלושים" באתר)."""
     allowed = set()
     for text in texts:
         for n in NUMBER.findall(text):
             allowed.add(re.sub(r"\D", "", n))
             allowed.update(re.findall(r"\d+", n))
+        if config.STRICT_VERIFICATION:
+            allowed.update(_word_numbers(text))
     bad = []
     for n in NUMBER.findall(answer):
         if re.sub(r"\D", "", n) not in allowed and not all(g in allowed for g in re.findall(r"\d+", n)):
             bad.append(n)
+    if config.STRICT_VERIFICATION:
+        bad += [n for n in _word_numbers(answer) if n not in allowed and n not in bad]
     return bad
 
 

@@ -136,6 +136,71 @@ def test_quote_too_short_or_absent_fails():
     assert not A.quote_found("הפיצוי מחושב לפי מחירון לוי יצחק", [TEXT])
 
 
+ROOF = "נזקי מים שנגרמו מחדירת מי גשמים דרך הגג לא מכוסים בפוליסה. נזקי צנרת מכוסים לפי הפוליסה."
+
+
+@pytest.mark.parametrize("quote", [
+    "נזקי מים שנגרמו מחדירת מי גשמים דרך הגג מכוסים בפוליסה",       # "לא" הושמט - המשמעות התהפכה
+    "נזקי גשמים מכוסים לפי הפוליסה",                                 # מילים משני משפטים שונים
+    "מכוסים בפוליסה נזקי מים שנגרמו מחדירת מי גשמים דרך הגג לא",     # אותן מילים, סדר אחר
+])
+def test_a_quote_that_changes_the_meaning_is_not_found(quote):
+    """23/10: ההתאמה החלקית בדקה רק שהמילים קיימות בקטע, בלי סדר - כל אלה עברו כ"ציטוט מאומת"."""
+    assert not A.quote_found(quote, [ROOF])
+
+
+@pytest.mark.parametrize("quote", [
+    "נזקי מים שנגרמו מחדירת מי גשמים דרך הגג לא מכוסים בפוליסה",      # מילה במילה
+    "נזקי מים שנגרמו מחדירת מי הגשמים דרך הגג לא מכוסים בפוליסה",     # מילה אחת בנטייה אחרת
+    "דרך הגג לא מכוסים בפוליסה. נזקי צנרת מכוסים לפי הפוליסה",        # על פני שני משפטים צמודים
+])
+def test_a_faithful_quote_is_still_found(quote):
+    assert A.quote_found(quote, [ROOF])
+
+
+@pytest.mark.parametrize("qualifier_change", [("עד 30 יום", "30 יום"), ("רק בימים א'-ה'", "בימים א'-ה'")])
+def test_a_dropped_qualifier_is_not_a_quote(qualifier_change):
+    site, quote = (f"התשלום מועבר {qualifier_change[0]} מקבלת המסמכים לחברה בדואר",
+                   f"התשלום מועבר {qualifier_change[1]} מקבלת המסמכים לחברה בדואר")
+    assert not A.quote_found(quote, [site])
+
+
+def test_full_is_not_a_negation():
+    assert A._meaning(["כיסוי", "מלא"]) == set() and A._meaning(["ולא", "שאין", "ועד"]) == {"לא", "אין", "עד"}
+
+
+def test_a_negation_with_a_prefix_letter_counts_too():
+    site = "התשלום יועבר רק אחרי שהשמאי יבדוק את הרכב, ולא לפני כן, בהתאם לתנאי הפוליסה המלאים"
+    assert not A.quote_found("התשלום יועבר רק אחרי שהשמאי יבדוק את הרכב, לפני כן, בהתאם לתנאי הפוליסה המלאים", [site])
+    assert A.quote_found("התשלום יועבר רק אחרי שהשמאי יבדוק את הרכב ולא לפני כן בהתאם לתנאי הפוליסה המלאה", [site])
+
+
+PDF_PAGE = ("חוברת כללים לבירור ויישוב תביעות (PDF, עמוד 6)\n\nמענה לפניות תובע\n.א 3\n"
+            "הפניקס תשיב בכתב לכל פניה בכתב של תובע, בהקדם האפשרי\nימים ממועד קבלת הפניה.30 -ולא יאוחר מ\n.ב 3\n"
+            "הפניקס תעביר לתובע, לפי בקשתו, העתק מן הפוליסה, בהקדם\nימי עסקים ממועד קבלת הבקשה.14 -האפשרי ולא יאוחר מ")
+
+
+def test_a_quote_from_a_pdf_with_scrambled_line_order_is_found_but_not_a_flipped_one():
+    """ב-PDF החילוץ הופך סדר מילים בשורה ("ימים ממועד קבלת הפניה.30 -ולא יאוחר מ") - ציטוט נכון של המשפט נמצא;
+    ציטוט שהשמיט את "ולא" - לא."""
+    good = "הפניקס תשיב בכתב לכל פניה בכתב של תובע, בהקדם האפשרי ולא יאוחר מ-30 ימים ממועד קבלת הפניה"
+    assert A.quote_found(good, [PDF_PAGE])
+    assert not A.quote_found(good.replace("ולא ", ""), [PDF_PAGE])
+    assert not A.quote_found(good.replace("30", "60"), [PDF_PAGE])
+
+
+def test_numbers_written_in_words_are_checked_too():
+    assert A.unsupported_numbers("התשובה ניתנת תוך ארבעים יום", [TEXT]) == ["40"]
+    assert A.unsupported_numbers("התשובה ניתנת תוך שלושים יום", [TEXT]) == []        # 30 באתר
+    assert A.unsupported_numbers("תוך 30 יום", ["תוך שלושים יום מקבלת המסמכים"]) == []
+    assert A.unsupported_numbers("אחד המסמכים ושני הצדדים", [TEXT]) == []            # 1 ו-2 במילים - לא נבדקים
+
+
+def test_the_old_quote_matching_is_still_available(monkeypatch):
+    monkeypatch.setattr(A.config, "STRICT_VERIFICATION", False)
+    assert A.quote_found("נזקי מים שנגרמו מחדירת מי גשמים דרך הגג מכוסים בפוליסה", [ROOF])  # החור, למדידה
+
+
 # ---------------------------------------------------------------- כללים נוספים מהסבב האחרון
 
 @pytest.mark.parametrize("question, depends", [
@@ -2585,7 +2650,7 @@ def test_the_verifier_down_leaves_the_answer_with_the_code_checks(monkeypatch):
 
 
 def test_a_verifier_that_skips_most_sentences_counts_as_unavailable(monkeypatch):
-    text = " ".join(f"משפט טענה מספר {w} בלי מקור." for w in ("אחד", "שניים", "שלוש"))
+    text = " ".join(f"משפט טענה {w} בלי מקור." for w in ("ראשון", "נוסף", "אחרון"))
     grounding_world(monkeypatch, reply_with(f"{FORM} {text}"), [{"n": 1, "verdict": "unsupported", "quote": ""}])
     assert A.respond("איך מגישים תביעה?", RACE_HIT).grounding.startswith("unavailable")
 
