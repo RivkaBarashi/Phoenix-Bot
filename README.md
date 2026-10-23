@@ -61,7 +61,8 @@
 - ממצאים מהדרך: [docs/findings.md](docs/findings.md).
 - הענף הזה (`feature/stable-v2`), לפי האפיון: שער המודלים – [docs/gateway.md](docs/gateway.md); תשובות חלקיות, זיכרון
   של כל השיחה ומספרים של הלקוחה – [docs/answers-and-memory.md](docs/answers-and-memory.md); ניסיון עקיפה, תשובה ברורה,
-  בדיקת עיגון לכל טענה, תיקוני אימות וסט שאלות חדש – [docs/b4-b5-grounding.md](docs/b4-b5-grounding.md). כל שינוי
+  בדיקת עיגון לכל טענה, תיקוני אימות וסט שאלות חדש – [docs/b4-b5-grounding.md](docs/b4-b5-grounding.md). ספי הדירוג, "המונח לא באתר", "לא הצלחתי לאמת", שתי שאלות בהודעה ומה נשאר עד יום הבדיקות –
+  [docs/before-paid-tests.md](docs/before-paid-tests.md). כל שינוי
   שמשנה תשובה – מאחורי מתג, ונמדד (A/B) לפני שהוא נדלק.
 
 **20 שניות לשאלה בצ'אט – מגבלה קשיחה:**
