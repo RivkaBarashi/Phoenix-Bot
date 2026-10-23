@@ -118,6 +118,8 @@ ROUTES = {
     "understand": os.getenv("UNDERSTAND_ROUTE", "gemini:gemini-3.8-flash, gemini:gemini-3.6-flash~low | BACKUP~low"),
     "answer": os.getenv("ANSWER_ROUTE", "gemini:gemini-3.6-flash, gemini:gemini-3.8-flash | BACKUP"),
     "helper": os.getenv("HELPER_ROUTE", "gemini:gemini-3.6-flash, gemini:gemini-3.8-flash"),
+    # בדיקת העיגון (GROUNDING): 3.8 - מודל אחר מזה שבדרך כלל עונה (3.6), כך שהבודק לא "מאשר את עצמו"
+    "verify": os.getenv("VERIFY_ROUTE", "gemini:gemini-3.8-flash, gemini:gemini-3.6-flash | BACKUP"),
 }
 
 
@@ -242,9 +244,16 @@ CONTEXT_CHARS = int(os.getenv("CONTEXT_CHARS", "24000"))  # היום: 5 קטעי
 # ב4 (23/10): ניסיון עקיפה נתפס בכללים בקוד לפני כל מודל (answer.INJECTION_RULES) - רצפה גם כשהמודלים למטה. דלוק: הכללים
 # דטרמיניסטיים ונמדדו בלי API - 0 חסימות שגויות על 194 השאלות הלגיטימיות שיש לנו ועל רשימת ניסוחים מסוכנים בבדיקות.
 INJECTION_RULES = os.getenv("INJECTION_RULES", "true").strip().lower() in ("1", "true", "yes", "on")
+# ב5 + עיגון (23/10). GROUNDING: בדיקת עיגון לכל טענה (grounding.py) - כל משפט בתשובה צריך ציטוט מהאתר, והקוד מאמת את
+# הציטוט. משפט לא נתמך - יורד, ונאמר במפורש שחלק מהתשובה לא אומת ("תשובה חלקית מאומתת", במקום "לא הצלחתי לאמת"); גם
+# תשובה שהבדיקות בקוד פסלו (מספר / ציטוט) - מה שמאומת בה מוצג. קריאה נוספת (~3-5 ש', ~סנט); פחות מ-GROUNDING_MIN_SECONDS
+# לשאלה - בלי הבדיקה (נרשם). ANSWER_STRUCTURE: המשפט הראשון עונה ישירות (כן/לא, סכום, זמן, פעולה). כבויים עד A/B.
+GROUNDING = os.getenv("GROUNDING", "false").strip().lower() in ("1", "true", "yes", "on")
+GROUNDING_MIN_SECONDS = float(os.getenv("GROUNDING_MIN_SECONDS", "5"))
+ANSWER_STRUCTURE = os.getenv("ANSWER_STRUCTURE", "false").strip().lower() in ("1", "true", "yes", "on")
 # כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
 BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
-                  "INJECTION_RULES",
+                  "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE",
                   "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.
