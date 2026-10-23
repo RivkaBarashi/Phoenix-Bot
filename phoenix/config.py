@@ -239,8 +239,12 @@ CONTEXT_FLEX = os.getenv("CONTEXT_FLEX", "false").strip().lower() in ("1", "true
 CONTEXT_MAX_CHUNKS = int(os.getenv("CONTEXT_MAX_CHUNKS", "8"))
 CONTEXT_PAGES = os.getenv("CONTEXT_PAGES", "false").strip().lower() in ("1", "true", "yes", "on")
 CONTEXT_CHARS = int(os.getenv("CONTEXT_CHARS", "24000"))  # היום: 5 קטעים ~11K תווים
+# ב4 (23/10): ניסיון עקיפה נתפס בכללים בקוד לפני כל מודל (answer.INJECTION_RULES) - רצפה גם כשהמודלים למטה. דלוק: הכללים
+# דטרמיניסטיים ונמדדו בלי API - 0 חסימות שגויות על 194 השאלות הלגיטימיות שיש לנו ועל רשימת ניסוחים מסוכנים בבדיקות.
+INJECTION_RULES = os.getenv("INJECTION_RULES", "true").strip().lower() in ("1", "true", "yes", "on")
 # כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
 BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
+                  "INJECTION_RULES",
                   "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.

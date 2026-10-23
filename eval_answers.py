@@ -343,10 +343,15 @@ def main():
         # כמו בצ'אט: הבנת השאלה (קריאה אחת) מחליטה - ברכה, לא קשורה, ניסיון לשנות הוראות, שאלת הבהרה - ומנסחת
         # את השאלה לחיפוש. נכשלה - כללי הקוד, כמו קודם.
         before, start = model_calls(), time.perf_counter()
-        u = answer_layer.try_understand(row["question"])
+        # כמו בצ'אט (ב4): ניסיון עקיפה שהכללים בקוד תופסים - לפני כל מודל
+        rule = answer_layer.injection_rule(row["question"]) if config.INJECTION_RULES else None
+        u = None if rule else answer_layer.try_understand(row["question"])
         understand_calls, understand_s = model_calls() - before, time.perf_counter() - start
         pre = None  # החלטה לפני החיפוש: (החלטה, סיבה, הטקסט שמוצג)
-        if u:
+        if rule:
+            question = row["question"]
+            pre = ("off_topic", f"rule_injection:{rule}", answer_layer.OFF_TOPIC_TEXT)
+        elif u:
             question = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
             if u.intent in ("greeting", "thanks"):
                 pre = ("greeting", f"understand_{u.intent}",
@@ -363,7 +368,8 @@ def main():
             decision, reason, text = pre
             records.append({"n": n, "type": row["type"], "question": row["question"], "top": 0.0,
                             "decision": decision, "reason": reason, "pre_search": True,
-                            "intent": u.intent if u else "rules", "llm": "", "sources": "", "answer": text,
+                            "intent": u.intent if u else ("injection_rule" if rule else "rules"), "llm": "",
+                            "sources": "", "answer": text,
                             "verdict": "", "judge_reason": "", "cited_correct": "",
                             "timings": {"understand": understand_s}, "chat_s": understand_s,
                             "chat_calls": understand_calls, "chat_requests": understand_calls,
