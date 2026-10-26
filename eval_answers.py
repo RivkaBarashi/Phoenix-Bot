@@ -306,6 +306,13 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
             "stopped": "yes" if stopped else ""}
 
 
+# העמודות של קובץ הפירוט (גם eval_batches.py ו-ab_compare.py קוראים אותו). parts/buttons - הודעה עם כמה שאלות;
+# personal_rule, topic_off, pre_search, chat_path - מה ש-outcome צריך כדי לחשב מהקובץ את מה שהצ'אט מציג.
+CSV_FIELDS = ["n", "type", "question", "intent", "top", "decision", "reason", "verdict", "judge_reason",
+              "cited_correct", "llm", "chat_s", "chat_calls", "sources", "answer", "grounding", "clear", "direct",
+              "clarity_reason", "parts", "buttons", "personal_rule", "topic_off", "pre_search", "chat_path"]
+
+
 def multi_record(n: int, row: dict, u, understand_s: float, understand_calls: int, judged: bool,
                  clear: bool) -> dict:
     """MULTI_ANSWER: הודעה עם כמה שאלות - כמו בצ'אט (answer._answer_understood): לכל שאלה חיפוש, סף, תשובה ובדיקות
@@ -357,6 +364,9 @@ def main():
     parser.add_argument("--only", help="רק השאלות האלה, לפי מספר: 3,7,12")
     parser.add_argument("--category", help="רק הסוגים האלה: " + ", ".join(TYPES))
     parser.add_argument("--fresh", action="store_true", help="לשאול את המודלים מחדש, בלי המטמון")
+    parser.add_argument("--out", help="קובץ הפירוט (ברירת מחדל: data/eval_answers_<index>...csv) - לריצה בחבילות")
+    parser.add_argument("--no-history", action="store_true",
+                        help="בלי שורה ב-eval_history.csv (חבילה של eval_batches.py - השורה היא של הריצה כולה)")
     parser.add_argument("--reranker", default="cohere", choices=list(config.RERANK_THRESHOLDS),
                         help="המדרג שנבדק, עם הסף שלו (local - לכיול המדרג המקומי)")
     parser.add_argument("--llm", help="מודל Gemini אחד קבוע לכל השלבים (למשל gemini-3.6-flash) - קיצור לשני הבאים")
@@ -581,19 +591,19 @@ def main():
 
     question_set = Path(args.questions).stem.removeprefix("questions").strip("_")  # "" או "holdout"
     partial = args.only or args.category or stopped
-    out = config.ROOT / "data" / (f"eval_answers_{args.index}" + (f"_{question_set}" if question_set else "")
-                                  + ("_partial" if partial else "") + ".csv")
-    fields = ["n", "type", "question", "intent", "top", "decision", "reason", "verdict", "judge_reason", "cited_correct", "llm",
-              "chat_s", "chat_calls", "sources", "answer", "grounding", "clear", "direct", "clarity_reason"]
+    out = Path(args.out) if args.out else config.ROOT / "data" / (
+        f"eval_answers_{args.index}" + (f"_{question_set}" if question_set else "") + ("_partial" if partial else "")
+        + ".csv")
     with open(out, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
-    print(f"\nפירוט מלא: {out.relative_to(config.ROOT)}")
+    print(f"\nפירוט מלא: {out}")
 
     print("\n" + usage.report())
-    history = eval_history.append(**run_metrics(records, args, version, partial, stopped))
-    print(f"\nנוספה שורה להיסטוריית הריצות: {history.relative_to(config.ROOT)}")
+    if not args.no_history:
+        history = eval_history.append(**run_metrics(records, args, version, partial, stopped))
+        print(f"\nנוספה שורה להיסטוריית הריצות: {history.relative_to(config.ROOT)}")
     if stopped:
         print(f"\n!!! הריצה נעצרה באמצע ({streak.error}) - התוצאות חלקיות, הפירוט למעלה.")
         sys.exit(2)

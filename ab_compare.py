@@ -30,7 +30,10 @@ def mcnemar_p(b: int, c: int) -> float:
 
 
 def compare(before: dict[str, dict], after: dict[str, dict]) -> dict:
-    common = [n for n in before if n in after and before[n]["verdict"] in RANK and after[n]["verdict"] in RANK]
+    # eval_batches.py מסמן תקלת תשתית (עמודת infra): אף מודל לא ענה, ההבנה נכשלה... - לא טעות של הבוט, ולא נספרת
+    broken = [n for n in before if n in after and (before[n].get("infra") or after[n].get("infra"))]
+    common = [n for n in before if n in after and n not in broken
+              and before[n]["verdict"] in RANK and after[n]["verdict"] in RANK]
     better = [n for n in common if RANK[after[n]["verdict"]] > RANK[before[n]["verdict"]]]
     worse = [n for n in common if RANK[after[n]["verdict"]] < RANK[before[n]["verdict"]]]
 
@@ -41,7 +44,7 @@ def compare(before: dict[str, dict], after: dict[str, dict]) -> dict:
     b = sum(RANK[before[n]["verdict"]] == 2 and RANK[after[n]["verdict"]] < 2 for n in common)
     c = sum(RANK[after[n]["verdict"]] == 2 and RANK[before[n]["verdict"]] < 2 for n in common)
     return {"questions": len(common), "better": better, "worse": worse, "correct": correct, "wrong": wrong,
-            "p": mcnemar_p(b, c), "adopt": correct[1] > correct[0] and wrong[1] <= wrong[0]}
+            "p": mcnemar_p(b, c), "adopt": correct[1] > correct[0] and wrong[1] <= wrong[0], "infra": broken}
 
 
 def main():
@@ -50,7 +53,8 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     before, after = load(sys.argv[1]), load(sys.argv[2])
     r = compare(before, after)
-    print(f"{r['questions']} שאלות עם פסק דין בשתי הריצות")
+    print(f"{r['questions']} שאלות עם פסק דין בשתי הריצות"
+          + (f" | {len(r['infra'])} לא נספרו - תקלת תשתית באחת הריצות: {', '.join(r['infra'])}" if r["infra"] else ""))
     print(f"נכונות מלאות: {r['correct'][0]} -> {r['correct'][1]} | שגויות: {r['wrong'][0]} -> {r['wrong'][1]}")
     print(f"השתפרו: {len(r['better'])} | נפגעו: {len(r['worse'])} | McNemar p = {r['p']:.3f}"
           + ("  (לא מובהק - כדאי לחזור על הריצה)" if r["p"] >= 0.05 else ""))
