@@ -1309,6 +1309,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                 else outcome.text.rsplit("\n\nהמקור", 1)[0])  # "המקור:" / "המקורות:" - format_sources
         parts = grounding.units(body)
         passages = [(str(i), h.text) for i, h in enumerate(hits, 1)] + [("C", contact_text())]
+        pages = {str(i): h.url for i, h in enumerate(hits, 1)} | {"C": CONTACT_URL}  # כתבה כללית מול מוצר (כלל 4)
         texts = [text for _, text in passages]
         status = [_self_evident(u.text, texts) for u in parts]  # True / "claim" (לבדוק) / "exempt"
         # הקטעים שהמשפטים שנשארים מבוססים עליהם - למונח בתשובה שניצלה (term_not_cited למטה)
@@ -1316,7 +1317,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                    for t in texts if exact_quote(" ".join(u.text.split()), t)]
         to_check = [u.text for u, s in zip(parts, status) if s == "claim"]
         if to_check:
-            checked = grounding.check(standalone, to_check, passages, quote_found, _numbers)
+            checked = grounding.check(standalone, to_check, passages, quote_found, _numbers, pages)
             if not checked.available:
                 if not salvage:
                     outcome.grounding = f"unavailable:{checked.detail}"

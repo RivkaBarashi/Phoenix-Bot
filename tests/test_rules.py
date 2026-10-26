@@ -2838,10 +2838,20 @@ def test_no_salvage_when_the_kept_sentences_come_from_a_passage_without_the_term
 def test_the_verifier_reports_the_passages_that_support_each_kept_sentence(monkeypatch):
     claims = {1: {"verdict": "supported", "quote": TRACTOR}, 2: {"verdict": "unsupported", "quote": ""},
               3: {"verdict": "supported", "quote": "ציטוט שלא קיים בשום קטע בכלל"}}
-    monkeypatch.setattr(grounding, "ask_verifier", lambda question, passages, sentences: claims)
+    monkeypatch.setattr(grounding, "ask_verifier", lambda question, passages, sentences, pages=None: claims)
     passages = [("1", f"תביעות\n\n{SENTENCE}"), ("2", f"טרקטורונים\n\n{TRACTOR}")]
     checked = grounding.check("q", ["א", "ב", "ג"], passages, A.quote_found, A._numbers)
     assert checked.supported == [True, False, False] and checked.quoted == [passages[1][1]]
+
+
+def test_the_verifier_sees_each_page_address_and_the_product_rule(monkeypatch):
+    """כלל 4: "הפניקס מציעה X" - רק מקטע על מוצר של הפניקס. כותרת של כתבה לא אומרת שהיא כתבה ("שלושה סוגי רכב"), ולכן
+    הבודק מקבל את כתובת העמוד ליד כל קטע (car_information / travel_information - כתבות)."""
+    sent = grounding_world(monkeypatch, reply_with(f"{FORM} {QUAKE}"), [{"n": 1, "verdict": "unsupported", "quote": ""}])
+    A.respond("איך מגישים תביעה?", TWO_HITS)
+    message = sent["verify"][0]
+    assert f"[1] {A.CONTACT_URL}\n" in message and f"[2] {ATV_PAGE}\n" in message and f"[C] {A.CONTACT_URL}\n" in message
+    assert "מוצר או שירות של הפניקס" in grounding.GROUNDING_PROMPT and "information" in grounding.GROUNDING_PROMPT
 
 
 def test_the_site_sentence_needs_the_term_in_its_page(monkeypatch, terms_in_cited):
