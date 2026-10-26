@@ -26,7 +26,7 @@ from pathlib import Path
 import eval_retrieval
 from eval_retrieval import QUESTIONS, TYPES, FailureStreak, best_rank, run_search, same_page, select_rows
 from phoenix import answer as answer_layer
-from phoenix import config, embeddings, eval_history, grounding, llm, stats, usage
+from phoenix import config, embeddings, eval_history, grounding, llm, stats, thresholds, usage
 from phoenix.answer import respond
 from phoenix.fallback import CALLS, FAILED, AllProvidersFailed
 from phoenix.search import RRF_K, SearchResult
@@ -345,6 +345,7 @@ def main():
 
     selected = select_rows(args.questions, args.only, args.category)
     version = hashlib.sha1(answer_layer.SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:8]
+    print(thresholds.summary() + "".join(f"\n  ! {line}" for line in thresholds.warnings()))
     print(f"אינדקס: {args.index} | Rerank: {args.reranker} | סף נוכחי: {config.RERANK_THRESHOLD} | "
           f"{len(selected)} שאלות מ-{Path(args.questions).name} | גרסת הוראות {version} | "
           f"מטמון: {'בלי (--fresh)' if args.fresh else 'בלי, לתשובות (מודל קבוע)' if pins.get('answer') else 'כן'}")

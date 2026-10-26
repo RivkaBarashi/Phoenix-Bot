@@ -12,7 +12,7 @@ import collections
 import sys
 from pathlib import Path
 
-from phoenix import conversation_log, stats, store
+from phoenix import config, conversation_log, stats, store
 
 STAGES = ["total", "understand", "condense", "search", "vector", "bm25", "rerank", "search_wait", "llm", "repair",
           "topic"]
@@ -21,11 +21,26 @@ STAGE_NAMES = {"total": "סה\"כ", "understand": "הבנת השאלה", "conden
                "search_wait": "המתנה לחיפוש המוקדם", "llm": "מודל התשובה", "repair": "ניסיון תיקון",
                "topic": "בדיקת נושא"}
 FEEDBACK = {"up": "👍", "down": "👎", None: "בלי משוב"}
+NEAR_MARGIN = 0.05  # "קרוב לסף": עד כמה מתחתיו
 
 
 def short(text: str, n: int = 110) -> str:
     text = " ".join((text or "").split())
     return text if len(text) <= n else text[:n] + "..."
+
+
+def near_threshold(entries: list[dict], margin: float = NEAR_MARGIN) -> list[tuple[dict, float]]:
+    """שאלות שנחסמו בסף ("לא מופיע באתר" בלי לשאול את המודל) בהפרש קטן ממנו - החשודות ביותר כחסימה בטעות
+    (docs/before-paid-tests.md, סעיף 1). מול הסף של היום: אם הסף ירד מאז, הציון יכול להיות כבר מעליו. (רשומה, סף)."""
+    out = []
+    for e in entries:
+        ranker = (e.get("reranker") or "").split(":")[0]
+        if e.get("reason") != "below_threshold" or e.get("top_score") is None or ranker not in config.RERANK_THRESHOLDS:
+            continue
+        threshold = config.RERANK_THRESHOLDS[ranker]
+        if e["top_score"] >= threshold - margin:
+            out.append((e, threshold))
+    return sorted(out, key=lambda pair: pair[1] - pair[0]["top_score"])
 
 
 def main():
@@ -96,6 +111,13 @@ def main():
         print(f"\n=== 'לא מופיע באתר' - מה חיפשו ({len(missing)}, האחרונות) ===")
         for e in missing[-15:]:
             print(f"   {e['question']}" + (f"  (כלומר: {e['standalone']})" if e.get("standalone") else ""))
+
+    if near := near_threshold(entries):
+        print(f"\n=== נחסמו בסף בהפרש של עד {NEAR_MARGIN} - לבדוק אם יש להן תשובה באתר ({len(near)}) ===")
+        for e, threshold in near[:15]:
+            today = "  <- היום הייתה עוברת" if e["top_score"] >= threshold else ""
+            print(f"   {e['top_score']:.3f} (סף {threshold}) {e['question']}"
+                  + (f"  (כלומר: {e['standalone']})" if e.get("standalone") else "") + today)
 
 
 if __name__ == "__main__":

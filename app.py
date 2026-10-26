@@ -45,7 +45,7 @@ import streamlit as st
 
 from phoenix import answer as bot
 from phoenix import answer_cache
-from phoenix import bm25, config, conversation_log, embeddings, hours, index, llm, store
+from phoenix import bm25, config, conversation_log, embeddings, hours, index, llm, store, thresholds
 from phoenix import chat_design as design
 
 if getattr(design, "UI_VERSION", 0) < 4:  # Streamlit Cloud: אחרי git pull app.py נטען מחדש, אבל מודול שכבר יובא - לא
@@ -118,6 +118,7 @@ def load_bot() -> dict:
         vectors[p.name] = col.count() if col is not None else 0
     for number, _ in config.GEMINI_KEYS:  # לקוח לכל מפתח Gemini
         config.gemini_client(number)
+    thresholds.log_warnings()  # סף שהתיישן (אינדקס / מודל דירוג) - אזהרה ביומן, בלי שינוי התנהגות
     return {"chunks": len(chunks), "vectors": vectors, "llms": [p.name for p in llm.PROVIDERS if p.enabled]}
 
 
@@ -341,7 +342,7 @@ def loaded_line(loaded: dict) -> str:
     by_index = {name.split(":")[0]: count for name, count in loaded["vectors"].items() if count}  # מפתח לכל ספק - אינדקס אחד
     vectors = " · ".join(f"וקטורים {name} {count:,}" for name, count in by_index.items())
     return (f"נטען: {loaded['chunks']:,} קטעים · {vectors} · מפתחות Gemini: {', '.join(map(str, keys)) or '-'} · "
-            f"קוד {answer_cache.code_version()} · אינדקס {answer_cache.index_version()}")  # טביעות: אותן מקומית ובענן
+            f"קוד {answer_cache.code_version()} · אינדקס {answer_cache.index_version()} · {thresholds.summary()}")
 
 
 def dev_mode() -> bool:

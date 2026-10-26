@@ -4,6 +4,7 @@
 """
 import contextlib
 import contextvars
+import json
 import os
 import re
 import sys
@@ -189,6 +190,22 @@ RERANK_THRESHOLDS = {
     # ב-0.65: 30/31 שאלות עם תשובה נשארו (אחת סורבה בטעות, 0.644), 20/20 בלי תשובה סורבו.
     "voyage": float(os.getenv("RERANK_THRESHOLD_VOYAGE") or "0.65"),
 }
+# ספים מכוילים (calibrate_thresholds.py -> data/thresholds.json, 26/10): הקובץ קובע, לפני משתני הסביבה ולפני ערכי ברירת
+# המחדל שלמעלה - כך סף ישן מ-.env לא עוקף בשקט כיול חדש (thresholds.warnings מתריע כשהם סותרים). בלי הקובץ - כמו קודם.
+# הקובץ שומר גם על איזה אינדקס ואיזה מודל דירוג הסף כויל (thresholds.status): השתנו - אזהרה, והבדיקה האוטומטית נכשלת.
+THRESHOLDS_FILE = ROOT / "data" / "thresholds.json"
+
+
+def _calibrated_thresholds() -> dict[str, float]:
+    try:
+        data = json.loads(THRESHOLDS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {name: float(entry["threshold"]) for name, entry in data.items()
+            if isinstance(entry, dict) and isinstance(entry.get("threshold"), (int, float))}
+
+
+RERANK_THRESHOLDS.update(_calibrated_thresholds())
 RERANK_THRESHOLD = RERANK_THRESHOLDS["cohere"]  # הסף של המסלול הראשי (הבדיקות מכיילות מולו)
 
 # איסוף עמודים: קודם ישירות (חינם, בלי מכסה), ורק אם נכשל - שירותים חיצוניים.

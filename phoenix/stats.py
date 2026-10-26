@@ -1,5 +1,27 @@
-"""סטטיסטיקה קטנה לזמנים: ממוצע, p90 (הזמן ש-90% מהשאלות מתחתיו) ומקסימום."""
+"""סטטיסטיקה קטנה: זמנים (ממוצע, p90, מקסימום), וגבול עליון לשיעור טעויות במדגם קטן (כיול ספי ה-Rerank)."""
 import math
+
+
+def binomial_cdf(k: int, n: int, p: float) -> float:
+    """P(X <= k) כש-X ~ Binomial(n, p)."""
+    return sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k + 1))
+
+
+def clopper_pearson_upper(k: int, n: int, confidence: float = 0.95) -> float:
+    """גבול עליון (חד-צדדי, Clopper-Pearson) לשיעור אמיתי של אירוע שקרה k פעמים מתוך n: השיעור הגבוה ביותר שעוד
+    מתיישב עם התצפית ברמת ביטחון confidence. 0 מתוך 52 -> 5.6%; 1 מתוך 52 -> 8.8%. מדויק, בלי הנחת נורמליות."""
+    if n <= 0:
+        return 1.0
+    if k >= n:
+        return 1.0
+    low, high = k / n, 1.0
+    for _ in range(60):  # חיפוש בינארי: binomial_cdf יורד ככל ש-p עולה
+        mid = (low + high) / 2
+        if binomial_cdf(k, n, mid) > 1 - confidence:
+            low = mid
+        else:
+            high = mid
+    return high
 
 
 def p90(values: list[float]) -> float:
