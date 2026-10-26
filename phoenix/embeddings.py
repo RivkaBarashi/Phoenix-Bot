@@ -74,14 +74,20 @@ def _voyage(model):
 
 _FACTORIES = {"gemini": _gemini, "voyage": _voyage}
 
-PROVIDERS = [
-    # Gemini: אותו מודל בכל המפתחות - אותם וקטורים, אותו אינדקס (fnx_gemini). מכסה של מפתח נגמרה - המפתח הבא
-    provider
-    for p, m in config.EMBED_CHAIN
-    for provider in ([Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
-                      for n, _ in config.GEMINI_KEYS] if p == "gemini"
-                     else [Provider(f"{p}:{m}", _FACTORIES[p](m), enabled=bool(config.API_KEYS[p]))])
-]
+def _providers(keys: list[int]) -> list[Provider]:
+    """הספקים לפי EMBED_CHAIN. Gemini - אותו מודל בכל אחד מהמפתחות keys: אותם וקטורים, אותו אינדקס (fnx_gemini)."""
+    return [provider
+            for p, m in config.EMBED_CHAIN
+            for provider in ([Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
+                              for n in keys] if p == "gemini"
+                             else [Provider(f"{p}:{m}", _FACTORIES[p](m), enabled=bool(config.API_KEYS[p]))])]
+
+
+# הבוט: מפתח Gemini אחד, אותו מפתח של מודלי השפה (config.LLM_GEMINI_KEY) - החלטת הבעלים 27/10: החברה משלמת על מפתח, ולא
+# צריכה כמה. הבדיקות על מפתחות חינמיים (eval_batches.py) נותנות לכל חבילה מפתח אחר דרך LLM_GEMINI_KEY.
+PROVIDERS = _providers([config.LLM_GEMINI_KEY] if config.LLM_GEMINI_KEY else [])
+# בניית האינדקס בלבד (index.py): כל המפתחות - מכסה של מפתח חינמי נגמרה באמצע הבנייה, המפתח הבא ממשיך
+POOL = _providers([n for n, _ in config.GEMINI_KEYS])
 
 
 def embed_query(text: str, providers: list[str] | None = None) -> tuple[list[float], str]:

@@ -69,9 +69,9 @@ def _gemini_keys() -> list[tuple[int, str]]:
 
 
 GEMINI_KEYS: list[tuple[int, str]] = _gemini_keys()
-# מודלי השפה - מפתח Gemini אחד, בלי סבב מפתחות: GEMINI_API_KEY (מספר 1; אם הוא ריק - הראשון שיש). ביום הבדיקות
-# משדרגים את הפרויקט של המפתח הזה לתשלום, ושום דבר בקוד לא משתנה. LLM_GEMINI_KEY=<מספר> - מפתח אחר (למשל לפיתוח).
-# המאגר (GEMINI_KEYS) נשאר רק לווקטורים לשאלה (embeddings.py).
+# הבוט - מפתח Gemini אחד, בלי סבב מפתחות, למודלי השפה ולווקטור לשאלה: GEMINI_API_KEY (מספר 1; אם הוא ריק - הראשון שיש).
+# ביום הבדיקות משדרגים את הפרויקט של המפתח הזה לתשלום, ושום דבר בקוד לא משתנה. LLM_GEMINI_KEY=<מספר> - מפתח אחר (בדיקות
+# על מפתחות חינמיים: eval_batches.py נותן לכל חבילה מפתח אחר). המאגר (GEMINI_KEYS) - רק לכלים: הבדיקות ובניית האינדקס.
 LLM_GEMINI_KEY: int | None = (int(os.getenv("LLM_GEMINI_KEY")) if os.getenv("LLM_GEMINI_KEY", "").strip().isdigit()
                               else GEMINI_KEYS[0][0] if GEMINI_KEYS else None)
 

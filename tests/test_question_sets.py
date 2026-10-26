@@ -24,6 +24,21 @@ def test_thirty_by_the_type_ratio_the_same_every_time_without_changing_a_row():
     assert len({" ".join(r["question"].split()) for r in chosen}) == 30  # בלי שאלות זהות (60 ו-72 בסט הראשי)
 
 
+def test_the_second_dev_set_has_none_of_the_first_and_the_same_ratio():
+    """הסבב השני של ה-A/B (החלטת הבעלים 26/10: הריצה החוזרת על שאלות אחרות): 30 אחרות מהסט הראשי, אותו יחס בין
+    הסוגים, אף שאלה מ-dev30, והשורות כמו שהן."""
+    def texts(rows):
+        return {" ".join(r["question"].split()) for r in rows}
+    dev = Q.stratified(MAIN, Q.QUOTAS)
+    second = Q.stratified(MAIN, Q.QUOTAS, exclude=texts(dev))
+    assert len(second) == 30 and not texts(dev) & texts(second)
+    for kind, count in Q.QUOTAS.items():
+        assert sum(r["type"] == kind for r in second) == count
+    for r in second:
+        assert {k: r[k] for k in MAIN[0]} == MAIN[r["orig_n"] - 1]
+    assert [int(r["orig_n"]) for r in rows_of(Q.DATA / "questions_dev30b.csv")] == [r["orig_n"] for r in second]
+
+
 def test_multi_questions_are_built_from_approved_answers_word_for_word():
     multi = Q.multi_rows(MAIN)
     assert len(multi) == 10

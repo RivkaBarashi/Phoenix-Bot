@@ -116,8 +116,8 @@ def load_bot() -> dict:
     for p in embeddings.PROVIDERS:
         col = index.get_collection(p.name) if p.enabled else None
         vectors[p.name] = col.count() if col is not None else 0
-    for number, _ in config.GEMINI_KEYS:  # לקוח לכל מפתח Gemini
-        config.gemini_client(number)
+    if config.LLM_GEMINI_KEY:  # הלקוח של מפתח ה-Gemini היחיד של הבוט
+        config.gemini_client(config.LLM_GEMINI_KEY)
     thresholds.log_warnings()  # סף שהתיישן (אינדקס / מודל דירוג) - אזהרה ביומן, בלי שינוי התנהגות
     return {"chunks": len(chunks), "vectors": vectors, "llms": [p.name for p in llm.PROVIDERS if p.enabled]}
 

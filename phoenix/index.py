@@ -178,7 +178,7 @@ def build(jobs: list[Job]):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--only", choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.PROVIDERS)))
+    parser.add_argument("--only", choices=list(dict.fromkeys(p.name.split(":")[0] for p in embeddings.POOL)))
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     global WRITE
@@ -187,8 +187,8 @@ def main():
     chunks = [json.loads(line) for line in open(CHUNKS_FILE, encoding="utf-8")]
     ids = {c["id"] for c in chunks}
     jobs = []
-    by_collection: dict[str, list[Provider]] = {}  # אינדקס אחד לכל ספק, וכל המפתחות שלו כגיבוי
-    for p in embeddings.PROVIDERS:
+    by_collection: dict[str, list[Provider]] = {}  # אינדקס אחד לכל ספק, וכל המפתחות שלו כגיבוי (כלי בנייה - לא הבוט)
+    for p in embeddings.POOL:
         if p.enabled and not (args.only and not p.name.startswith(args.only + ":")):
             by_collection.setdefault(collection_name(p.name), []).append(p)
     for p, *spares in by_collection.values():

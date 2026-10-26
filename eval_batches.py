@@ -10,6 +10,9 @@
 חוזרים אליו. מה שנשאר תקלת תשתית מדווח בנפרד ולא נספר כטעות של הבוט: ריצה בתשלום תתקן אותו. טעות איכות (המודל ענה,
 ובטעות) - תשלום לא יתקן, וצריך לתקן את הקוד. אחרי האיפוס היומי (10:00 בשעון ישראל) ובשעות שקטות - פחות תקלות.
 
+מעבר בין מודלים - כמו בבוט: נגמרה המכסה של המודל הראשי באמצע חבילה - המודל הבא בנתיב עונה. מי ענה על כל שאלה - בעמודה
+llm ובסיכום, ו-ab_compare.py לא סופר שאלה שמודלים שונים ענו עליה בשתי הגרסאות (ההבדל של המודל, לא של המתג).
+
 הרצה (כל גרסה בריצה משלה - המתגים נקראים כשהקוד נטען):
   python eval_batches.py --questions data/questions.csv --only 1,2,5 --out data/ab_off.csv
   python eval_batches.py --questions data/questions.csv --only 1,2,5 --env TERMS_IN_CITED=true --out data/ab_on.csv
@@ -66,6 +69,11 @@ def infra(row: dict) -> str:
     return ""
 
 
+def answer_model(row: dict) -> str:
+    """מי ענה, בלי מספר המפתח ובלי "(cache)": "gemini:gemini-3.6-flash". ריק - לא נשאל מודל תשובה."""
+    return (row.get("llm") or "").removesuffix(" (cache)").partition("#")[0]
+
+
 def run_all(numbers: list[int], keys: list[int], size: int, attempts: int, run_batch) -> dict[int, dict]:
     """כל השאלות, בחבילות של size, ומפתח אחר לכל חבילה (לפי הסדר, בסבב). שאלה עם תקלת תשתית - לסוף התור: חבילה אחרת,
     מפתח אחר, עד attempts פעמים. תוצאה בלי תקלה לא מוחלפת בתקלה. run_batch(numbers, key) -> {n: row}; שאלה שחסרה
@@ -118,6 +126,9 @@ def summary(results: dict[int, dict]) -> list[str]:
         lines.append("\nתשתית (לא נספרות כטעות - ריצה חוזרת או בתשלום):")
         lines += [f"   [{r['n']}] {infra(r)} ({(r.get('reason') or '')[:50]}) {(r.get('question') or '')[:60]}"
                   for r in broken]
+    models = collections.Counter(answer_model(r) for r in rows if answer_model(r))
+    if models:
+        lines.append("\nמי ענה (מודל התשובה): " + ", ".join(f"{m}: {c}" for m, c in models.most_common()))
     keys = collections.Counter(r.get("key") for r in rows if r.get("key") is not None)
     lines.append("\nמפתחות שענו: " + ", ".join(f"{k}: {v}" for k, v in sorted(keys.items())))
     return lines
@@ -155,7 +166,7 @@ def main():
         changes[name] = value
     changes.setdefault("COHERE_MIN_INTERVAL", "6.7")  # מפתח Cohere מסוג Trial: עד 9 קריאות Rerank לדקה (מתוך 10)
     keys = parse_keys(args.keys, [number for number, _ in config.GEMINI_KEYS])
-    numbers = [n for n, _ in select_rows(args.questions, args.only, args.category)]
+    numbers =[n for n, _ in select_rows(args.questions, args.only, args.category)]
     if not numbers or not keys:
         sys.exit("אין שאלות או אין מפתחות להרצה")
     folder = ROOT / "logs" / "batches" / (args.label or Path(args.out).stem)

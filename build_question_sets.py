@@ -1,6 +1,8 @@
 """הסטים לבדיקות של יום התשלום (docs/before-paid-tests.md סעיף 5): 30 שאלות מכל סט, ו-10 הודעות עם כמה שאלות.
 
 - data/questions_dev30.csv: 30 מהסט הראשי (questions.csv) - התשובות הצפויות שלו כבר אושרו. לפיתוח ול-A/B.
+- data/questions_dev30b.csv: 30 אחרות מהסט הראשי, בלי אף שאלה מ-dev30 - הסבב השני של ה-A/B (החלטת הבעלים 26/10: הריצה
+  החוזרת על שאלות אחרות). שינוי שעוזר בשני הסבבים - לא מקרה של 30 שאלות מסוימות.
 - data/questions_final30.csv: 30 מהסט החדש (questions_v2.csv) - הבוט לא מכיר אותן. לבדיקה הסופית; צריך אישור.
 - data/questions_multi.csv: 10 הודעות עם 2-3 שאלות (MULTI_ANSWER), בנויות משאלות של הסט הראשי: התשובה הצפויה היא
   התשובות שכבר אושרו, מילה במילה, חלק אחרי חלק. צריך לאשר רק את ניסוח ההודעה.
@@ -55,12 +57,14 @@ def read(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def stratified(rows: list[dict], quotas: dict[str, int], seed: int = SEED) -> list[dict]:
-    """מכל סוג - quotas[סוג] שאלות בהגרלה עם זרע קבוע, בלי כפולות (אותו נוסח), לפי הסדר בקובץ המקור."""
+def stratified(rows: list[dict], quotas: dict[str, int], seed: int = SEED,
+               exclude: set[str] = frozenset()) -> list[dict]:
+    """מכל סוג - quotas[סוג] שאלות בהגרלה עם זרע קבוע, בלי כפולות (אותו נוסח), לפי הסדר בקובץ המקור. exclude - נוסחים
+    שכבר בסט אחר (אחרי " ".join(split()))."""
     rng = random.Random(seed)
     chosen = []
     for kind, count in quotas.items():
-        seen, pool = set(), []
+        seen, pool = set(exclude), []
         for n, row in enumerate(rows, 1):
             text = " ".join(row["question"].split())
             if row["type"] == kind and text not in seen:
@@ -218,7 +222,9 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     main_rows, new_rows = read(DATA / "questions.csv"), read(DATA / "questions_v2.csv")
     dev, final, multi = stratified(main_rows, QUOTAS), stratified(new_rows, QUOTAS), multi_rows(main_rows)
-    for name, rows in (("questions_dev30.csv", dev), ("questions_final30.csv", final), ("questions_multi.csv", multi)):
+    second = stratified(main_rows, QUOTAS, exclude={" ".join(r["question"].split()) for r in dev})
+    for name, rows in (("questions_dev30.csv", dev), ("questions_dev30b.csv", second), ("questions_final30.csv", final),
+                       ("questions_multi.csv", multi)):
         write(DATA / name, rows)
         print(f"data/{name}: {len(rows)} שאלות")
     review(Path(args.review), final, multi)

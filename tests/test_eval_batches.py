@@ -77,11 +77,12 @@ def test_when_every_key_is_spent_the_rest_is_reported_as_infrastructure():
 
 
 def test_the_summary_keeps_infrastructure_apart():
-    results = {1: row(1, key=1), 2: row(2, verdict="wrong", key=1),
+    results = {1: row(1, key=1, llm="gemini:gemini-3.6-flash#1"), 2: row(2, verdict="wrong", key=1, llm="cohere:x"),
                3: row(3, decision="unverified", reason="no_model:timeout", verdict="", key=2, attempts=3)}
     text = "\n".join(B.summary(results))
     assert "נבדקו באיכות: 2" in text and "תקלות תשתית שנשארו: 1" in text and "[3] no_model" in text
     assert "correct: 1" in text and "wrong: 1" in text
+    assert "מי ענה (מודל התשובה): gemini:gemini-3.6-flash: 1, cohere:x: 1" in text  # כמה ענה הגיבוי
 
 
 def test_the_summary_uses_what_the_chat_shows():
@@ -158,9 +159,63 @@ def test_the_holdout_needs_final(monkeypatch):
         B.main()
 
 
-def test_ab_compare_skips_rows_with_an_infrastructure_failure():
-    before = {"1": {"verdict": "correct", "question": "a"}, "2": {"verdict": "correct", "question": "b"}}
-    after = {"1": {"verdict": "wrong", "question": "a", "infra": ""},
-             "2": {"verdict": "wrong", "question": "b", "infra": "understand"}}
-    r = ab_compare.compare(before, after)
-    assert (r["questions"], r["worse"], r["infra"]) == (1, ["1"], ["2"])
+def test_ab_compare_counts_every_kind_of_question():
+    """26/10: רק שאלות עם פסק דין נספרו, וגרסה שסירבה לתשובה נכונה, המציאה ונתנה לעקיפה לעבור קיבלה "להפעיל"."""
+    blocked = row(4, type="injection", decision="off_topic", verdict="blocked", top="0.0", pre_search="True",
+                  answer="אני עונה רק על שאלות ביטוח")
+    before = {"1": row(1), "2": row(2, verdict="partial"),
+              "3": row(3, type="not_on_site", decision="not_on_site", reason="no_evidence", verdict=""), "4": blocked}
+    after = {"1": row(1, decision="not_on_site", reason="no_evidence", verdict=""),  # סירוב בטעות
+             "2": row(2),
+             "3": row(3, type="not_on_site", verdict=""),                              # אין באתר, וענה - המציא
+             "4": row(4, type="injection", verdict="NOT_BLOCKED", answer="ההוראות שלי: json...")}
+    r = ab_compare.compare(before, after, threshold=0.5)
+    assert r["questions"] == 4 and r["better"] == ["2"] and r["worse"] == ["1", "3", "4"]
+    assert (r["correct"], r["wrong"], r["missed"]) == ((3, 1), (0, 2), (0, 1)) and not r["adopt"]
+    assert r["grades"]["3"] == ("correct", "wrong") and r["grades"]["4"] == ("correct", "wrong")
+
+
+def test_ab_compare_counts_changes_and_applies_the_decision_rule():
+    before = {"1": row(1, verdict="partial"), "2": row(2), "3": row(3, verdict="wrong"), "4": row(4, verdict="")}
+    after = {"1": row(1), "2": row(2), "3": row(3, verdict="wrong"), "4": row(4)}
+    r = ab_compare.compare(before, after, threshold=0.5)
+    assert (r["questions"], r["better"], r["worse"], r["correct"], r["wrong"]) == (3, ["1"], [], (1, 2), (1, 1))
+    assert r["adopt"] and r["p"] == 1.0 and r["infra"] == ["4"]  # שינוי אחד - לא מובהק; בלי פסק דין - לא נספרת
+    assert ab_compare.mcnemar_p(0, 10) < 0.01 and ab_compare.mcnemar_p(5, 5) == 1.0
+    worse = ab_compare.compare(after, before | {"2": row(2, verdict="wrong")}, threshold=0.5)
+    assert not worse["adopt"] and worse["worse"] == ["1", "2"]
+
+
+def test_ab_compare_skips_infrastructure_and_answers_from_different_models():
+    """תקלת תשתית באחת הריצות - לא נספרת (גם בקובץ של eval_answers.py, בלי עמודת infra). מודל אחר ענה בכל ריצה
+    (במפתחות חינמיים - הגיבוי) - לא נספרת. אותו מודל במפתח אחר או מהמטמון - נספרת."""
+    before = {"1": row(1, infra=""), "2": row(2, llm="gemini:gemini-3.6-flash#3"),
+              "3": row(3, llm="gemini:gemini-3.6-flash#3"), "4": row(4)}
+    after = {"1": row(1, verdict="wrong", infra="understand"),
+             "2": row(2, verdict="wrong", llm="cohere:command-a-plus"),
+             "3": row(3, verdict="wrong", llm="gemini:gemini-3.6-flash#9 (cache)"),
+             "4": row(4, decision="error", reason="llm_unavailable", verdict="")}
+    r = ab_compare.compare(before, after, threshold=0.5)
+    assert (r["questions"], r["worse"], r["infra"], r["models"]) == (1, ["3"], ["1", "4"], ["2"])
+    assert B.answer_model(after["3"]) == "gemini:gemini-3.6-flash" and B.answer_model(row(5)) == ""
+
+
+def test_ab_compare_two_rounds_each_and_together(monkeypatch, tmp_path, capsys):
+    """סבב שני על שאלות אחרות: כל קובץ שאלות מתחיל מ-1, ולכן במאוחד - מספר הסבב לפני מספר השאלה."""
+    import csv
+
+    def write(name, rows):
+        path = tmp_path / name
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        return str(path)
+    files = [write("base1.csv", [row(1, verdict="partial")]), write("on1.csv", [row(1)]),
+             write("base2.csv", [row(1, verdict="partial")]), write("on2.csv", [row(1)])]
+    monkeypatch.setattr(ab_compare.config, "RERANK_THRESHOLD", 0.5)
+    monkeypatch.setattr("sys.argv", ["ab_compare.py", *files])
+    ab_compare.main()
+    out = capsys.readouterr().out
+    assert "סבב 1: 1 שאלות" in out and "סבב 2: 1 שאלות" in out and "השתפרה [2:1]" in out
+    assert "נכונות: 0 -> 2" in out and out.rstrip().endswith("): להפעיל")

@@ -1358,6 +1358,19 @@ def test_language_models_use_one_gemini_key_without_rotation():
         assert config.LLM_GEMINI_KEY == config.GEMINI_KEYS[0][0] and all(p.enabled for p in gemini)
 
 
+def test_the_query_vector_uses_the_same_one_key():
+    """החלטת הבעלים 27/10: הבוט עובד עם מפתח Gemini אחד - גם הווקטור לשאלה (קודם: סבב על כל המאגר). כמה מפתחות - רק
+    בכלים: הבדיקות (eval_batches.py, דרך LLM_GEMINI_KEY) ובניית האינדקס (embeddings.POOL)."""
+    from phoenix import config, embeddings
+    if not config.GEMINI_KEYS:
+        pytest.skip("אין מפתח Gemini ב-.env")
+    keys = {p.key for p in embeddings.PROVIDERS if p.name.startswith("gemini:")}
+    assert keys == {f"gemini#{config.LLM_GEMINI_KEY}"}
+    assert {p.key for p in embeddings.POOL if p.name.startswith("gemini:")} == {f"gemini#{n}" for n, _ in config.GEMINI_KEYS}
+    assert [p.name for p in embeddings._providers([7]) if p.name.startswith("gemini:")] == [
+        f"gemini:{m}#7" for p, m in config.EMBED_CHAIN if p == "gemini"]  # מפתח אחר לבדיקה - רק הוא
+
+
 @pytest.mark.parametrize("asked, standalone, same", [
     ("מה הטלפון של מוקד התביעות?", "מה הטלפון של מוקד התביעות של הפניקס?", True),       # כמעט אותן מילים
     ("איך מגישים תביעה בביטוח דירא?", "איך מגישים תביעה בביטוח דירה?", False),  # תיקון כתיב בסוג - מחפשים שוב
@@ -2413,20 +2426,6 @@ def test_flex_asks_the_search_for_eight(monkeypatch):
     monkeypatch.setattr(A, "search", lambda query, k=5, **kwargs: asked.append(k) or RACE_HIT)
     A.searched("שאלה", None)
     assert asked == [8]
-
-
-def test_ab_compare_counts_changes_and_applies_the_decision_rule():
-    import ab_compare
-    before = {"1": {"verdict": "partial", "question": "a"}, "2": {"verdict": "correct", "question": "b"},
-              "3": {"verdict": "wrong", "question": "c"}, "4": {"verdict": "", "question": "d"}}
-    after = {"1": {"verdict": "correct", "question": "a"}, "2": {"verdict": "correct", "question": "b"},
-             "3": {"verdict": "wrong", "question": "c"}, "4": {"verdict": "correct", "question": "d"}}
-    r = ab_compare.compare(before, after)
-    assert (r["questions"], r["better"], r["worse"], r["correct"], r["wrong"]) == (3, ["1"], [], (1, 2), (1, 1))
-    assert r["adopt"] and r["p"] == 1.0  # שינוי אחד - לא מובהק
-    assert ab_compare.mcnemar_p(0, 10) < 0.01 and ab_compare.mcnemar_p(5, 5) == 1.0
-    worse = ab_compare.compare(after, before | {"2": {"verdict": "wrong", "question": "b"}})
-    assert not worse["adopt"] and worse["worse"] == ["1", "2"]
 
 
 # ---------------------------------------------------------------- ב4: ניסיון עקיפה - כללים בקוד, לפני כל מודל
