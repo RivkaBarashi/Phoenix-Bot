@@ -74,6 +74,9 @@ TOO_LONG_TEXT = ("ההודעה ארוכה מדי ({chars:,} תווים). אפש�
 # --- שלב 4: לא לומר "לא מופיע באתר" כשהמידע כן באתר ורק הבדיקה פסלה את הניסוח ---
 # פסילות שאפשר לתקן: מחזירים למודל את הסיבה המדויקת, פעם אחת. נכשל שוב - "מצאתי מידע קרוב" עם קישור לעמוד.
 REPAIRABLE = ("no_source", "unverified_evidence", "unsupported_numbers", "empty_answer")
+# המונח לא בקטעים שצוטטו (config.TERMS_IN_CITED): ניסיון תיקון אחד כמו בפסילות שלמעלה (אולי המונח בקטע אחר שהמודל לא
+# ציין). לא תוקן, או שאין זמן לנסות - "לא מופיע באתר", ולא "מצאתי מידע קרוב": אולי באמת אין באתר מידע על המונח.
+RECHECKED = ("term_not_in_cited",)
 UNVERIFIED_TEXT = "מצאתי באתר מידע קרוב, אבל לא הצלחתי לאמת תשובה מדויקת. המידע נמצא בעמוד שבקישור למטה."
 REPAIR_PROMPT = ("התשובה שלך נפסלה בבדיקה אוטומטית מול האתר: {problem} תקן את זה והחזר את ה-JSON כולו מחדש, לפי "
                  "אותם כללים. אם אי אפשר לענות מהקטעים - kind = \"not_on_site\".")
@@ -100,6 +103,10 @@ def repair_note(reason: str, from_customer: list[str] = (), others: list[str] = 
     if reason.startswith("unsupported_numbers:"):
         return (f"המספרים {reason.split(':', 1)[1]} שבתשובה לא מופיעים באף קטע. כתוב רק מספרים שמופיעים בקטעים, "
                 "בדיוק כמו שהם כתובים.")
+    if reason.startswith("term_not_in_cited:"):
+        term = reason.split(":", 1)[1]
+        return (f"השאלה שואלת על \"{term}\", אבל הקטעים שציינת ב-sources לא מזכירים את זה. ציין את הקטע שמדבר על "
+                f"\"{term}\" עצמו. אם אף קטע לא מדבר עליו (רק על משהו דומה) - kind = \"not_on_site\".")
     return {"no_source": "לא ציינת ב-sources את מספר הקטע שעליו התשובה מבוססת.",
             "unverified_evidence": "המשפט ב-evidence לא נמצא מילה במילה בקטע שציינת ב-sources. העתק אותו מהקטע "
                                    "בדיוק, בלי לשנות אף מילה, או ציין את הקטע הנכון.",
@@ -786,32 +793,126 @@ def unsupported_numbers(answer: str, texts: list[str]) -> list[str]:
 FINAL_LETTERS = str.maketrans("ךםןףץ", "כמנפצ")  # "רחפן" ו"רחפנים" - אותה מילה
 
 
-@lru_cache
-def _site_prefixes() -> frozenset:
-    """כל התחילות (3 אותיות ומעלה) של כל המילים באתר, אחרי נרמול אותיות סופיות."""
-    _, index = bm25._index()
+def _prefixes(tokens) -> frozenset:
+    """כל התחילות (3 אותיות ומעלה) של המילים, אחרי נרמול אותיות סופיות."""
     prefixes = set()
-    for token in index.idf:
+    for token in tokens:
         t = token.translate(FINAL_LETTERS)
         prefixes.update(t[:k] for k in range(3, len(t) + 1))
     return frozenset(prefixes)
 
 
-def on_site(word: str) -> bool:
-    """המילה מופיעה איפשהו באתר, גם בנטייה אחרת: "שוכרת" ~ "שוכרי", "קרוואן" ~ "קרוואנים".
+@lru_cache
+def _site_prefixes() -> frozenset:
+    """כל התחילות של כל המילים באתר."""
+    _, index = bm25._index()
+    return _prefixes(index.idf)
+
+
+def _has_word(word: str, prefixes: frozenset) -> bool:
+    """המילה מופיעה בטקסט (prefixes - התחילות שלו), גם בנטייה אחרת: "שוכרת" ~ "שוכרי", "קרוואן" ~ "קרוואנים".
     אבל "טרקטורון" לא ~ "טרקטורים" ו"קורולה" לא ~ "קורונה": משווים את כל המילה חוץ מהאות האחרונה."""
     for v in bm25.variants(word.lower()):
         v = v.translate(FINAL_LETTERS)
-        if len(v) >= 3 and (v if len(v) <= 4 else v[:-1]) in _site_prefixes():
+        if len(v) >= 3 and (v if len(v) <= 4 else v[:-1]) in prefixes:
             return True
     return False
+
+
+def on_site(word: str) -> bool:
+    """המילה מופיעה איפשהו באתר (_has_word על כל האתר)."""
+    return _has_word(word, _site_prefixes())
+
+
+def _content_words(text: str) -> list[str]:
+    """המילים שנבדקות באתר: בעברית, 3 אותיות ומעלה, לא מילות קישור."""
+    return [w for w in dict.fromkeys(WORD.findall(text.lower()))
+            if len(w) >= 3 and w not in bm25.STOPWORDS and re.search(r"[א-ת]", w)]
 
 
 def terms_not_on_site(question: str) -> list[str]:
     """מילים מהשאלה שלא מופיעות בשום מקום באתר. שאלה על דבר שהאתר לא מזכיר - התשובה לא יכולה
     לבוא מהאתר, גם אם המודל מצא משהו דומה (נבדק: "טרקטורון" נענה מתוך מאמר על טרקטורים)."""
-    return [w for w in dict.fromkeys(WORD.findall(question.lower()))
-            if len(w) >= 3 and w not in bm25.STOPWORDS and re.search(r"[א-ת]", w) and not on_site(w)]
+    return [w for w in _content_words(question) if not on_site(w)]
+
+
+# --- המונח בקטעים שצוטטו (config.TERMS_IN_CITED, docs/before-paid-tests.md סעיף 2) ---
+# מונח שהוא תחום ביטוח ("ביטוח רכב", "דירה") - כללי מדי לבדיקה: כל קטע בתחום "עונה" עליו, ואין בו פריט מסוים.
+INSURANCE_DOMAINS = frozenset(" ".join(_content_words(name))
+                              for name in [*DOMAIN_TYPES, *(n for names in INSURANCE_TYPES.values() for n in names)])
+SIMILAR_FORM = 0.75  # מילה של הלקוחה "היא" המילה המתוקנת: "חליפי" ~ "חלופי" (0.8); "סקר" לא ~ "סקי" (0.67)
+FORM_SUFFIXES = tuple(s.translate(FINAL_LETTERS) for s in ("ים", "ות", "ת", "י"))  # רבים וסמיכות
+INFLECTIONS = tuple(s.translate(FINAL_LETTERS) for s in ("ים", "ות", "י", "ה", "ת"))  # "ות" לפני "ת": "דירות" -> "דיר"
+
+
+def term_words(term: str) -> list[str]:
+    """מילות התוכן של המונח שנבדקות: בלי מילים כלליות ("שלי", "חדש") ובלי "ביטוח" / "תביעה" / "כיסוי" / "פוליסה".
+    מונח שנשאר ממנו רק תחום ביטוח - [] (אין מה לבדוק)."""
+    words = [w for w in _content_words(term) if w not in GENERIC_AFTER_INSURANCE and not INSURANCE_WORD.fullmatch(w)]
+    return [] if " ".join(words) in INSURANCE_DOMAINS else words
+
+
+def _stem(word: str) -> str:
+    """המילה (אחרי נרמול אותיות סופיות) בלי סיומת רבים / סמיכות / נקבה אחת, אם נשארות 3 אותיות: "נזקי" / "נזקים" ->
+    "נזק", "דירה" / "דירות" / "דירת" -> "דיר". "טרקטורון" ו"טרקטורים" נשארות שונות ("טרקטורון" / "טרקטור"). בלי מילון,
+    ולכן גם "רכבת" -> "רכב": הבדיקה נועדה לתפוס מונח אחר, לא כל הבדל - ומילה שלא נתפסה כאן היא כמו היום, בלי הבדיקה."""
+    for suffix in INFLECTIONS:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[:-len(suffix)]
+    return word
+
+
+@lru_cache(maxsize=4096)
+def _passage_words(text: str) -> tuple[frozenset, frozenset, frozenset]:
+    """(התחילות, המילים, הגזעים) של קטע אחד, אחרי נרמול אותיות סופיות - כמו _site_prefixes, לקטע."""
+    tokens = frozenset(t.translate(FINAL_LETTERS) for t in bm25.tokenize(text))
+    return _prefixes(tokens), tokens, frozenset(_stem(t) for t in tokens)
+
+
+def _has_term_word(word: str, prefixes: frozenset, stems: frozenset) -> bool:
+    """מילה של המונח המתוקן בקטע: כמו on_site (_has_word), או אותו גזע ("נזקי" ~ "נזק", "דירה" ~ "דירות" - מילים של
+    4 אותיות on_site משווה בשלמותן)."""
+    return _has_word(word, prefixes) or any(
+        _stem(v.translate(FINAL_LETTERS)) in stems for v in bm25.variants(word) if len(v) >= 3)
+
+
+def _customer_forms(word: str, own_words: list[str]) -> list[str]:
+    """המילה כמו שהלקוחה כתבה אותה, כששלב ההבנה תיקן אותה ("חליפי" -> "חלופי", כשבאתר כתוב "חליפי"): המילים שלה
+    שדומות למילה המתוקנת (בלי אותיות תחילית, עם נרמול אותיות סופיות)."""
+    mine = [v.translate(FINAL_LETTERS) for v in bm25.variants(word) if len(v) >= 3]
+    return [w for w in own_words
+            if max((difflib.SequenceMatcher(None, a, v.translate(FINAL_LETTERS)).ratio()
+                    for a in mine for v in bm25.variants(w) if len(v) >= 3), default=0) >= SIMILAR_FORM]
+
+
+def _has_form(word: str, tokens: frozenset) -> bool:
+    """המילה כמו שנכתבה, או עם סיומת רבים / סמיכות ("חליפי" ~ "חליפיים", "תביעה" ~ "תביעות") - בלי לקצר אותה כמו
+    _has_word: מילה עם שגיאת כתיב ("טרקטורן") לא "נמצאת" בגלל מילה אחרת שמתחילה כמוה ("טרקטורים")."""
+    for v in bm25.variants(word):
+        v = v.translate(FINAL_LETTERS)
+        if len(v) < 3:
+            continue
+        bases = [v, v[:-1]] if v.endswith("ה") else [v]  # "תביעה" -> "תביעות"
+        if v in tokens or any(base + suffix in tokens for base in bases for suffix in FORM_SUFFIXES):
+            return True
+    return False
+
+
+def term_in_passages(term: str, texts: list[str], own: str) -> bool:
+    """המונח מופיע באחד הקטעים: כל מילות התוכן שלו באותו קטע, לא בהכרח צמודות. כל מילה - בצורה המתוקנת של שלב ההבנה
+    (עם נטיות - _has_term_word), או כמו שהלקוחה כתבה אותה (own - ההודעות שלה; רק סיומות, בלי קיצור - _has_form).
+    מונח בלי מילים לבדיקה (term_words) - True."""
+    words = term_words(term)
+    if not words:
+        return True
+    own_words = _content_words(own)
+    forms = [(w, _customer_forms(w, own_words)) for w in words]
+    for text in texts:
+        prefixes, tokens, stems = _passage_words(text)
+        if all(_has_term_word(w, prefixes, stems) or any(_has_form(f, tokens) for f in alternatives)
+               for w, alternatives in forms):
+            return True
+    return False
 
 
 def own_terms_not_on_site(standalone: str, question: str, history: list[dict]) -> list[str]:
@@ -1024,8 +1125,8 @@ def _cited(raw_sources, hits: list[Hit]) -> list[tuple[str, str]]:
 
 
 # תשובה שהבדיקות פסלו: המודל הבא בנתיב מתחיל מיד, וכל תשובה נבדקת בנפרד - הטובה ביותר מוצגת
-REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not_on_site", "empty_answer",
-            "leak_guard", "personal_generic")
+REJECTED = ("no_source", "unverified_evidence", "unsupported_numbers", "term_not_on_site", "term_not_in_cited",
+            "empty_answer", "leak_guard", "personal_generic")
 GOOD, HELD, REJECTED_RANK = 0, 1, 2
 
 
@@ -1113,6 +1214,15 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             return terms_not_on_site(understanding.key_term) if understanding.key_term else []
         return own_terms_not_on_site(standalone, question, history)
 
+    def term_not_cited(texts: list[str]) -> str | None:
+        """config.TERMS_IN_CITED: המונח (key_term) לא מופיע באף קטע שהתשובה מבוססת עליו - המונח; אחרת None.
+        בלי הבנת שאלה אין מונח - רק הבדיקה לכל האתר (unknown_terms), כמו קודם."""
+        term = understanding.key_term if config.TERMS_IN_CITED and understanding else None
+        if not term:
+            return None
+        own = " ".join([question] + [m["content"] for m in history if m["role"] == "user"])
+        return None if term_in_passages(term, texts, own) else term
+
     def finish(reply: llm.ChatResult, as_info: bool = False) -> Answer:
         """הבדיקות על תשובת מודל (ציטוט, מספרים, מילים באתר, דליפה) -> מה שמוצג. בבקשות במקביל - לכל
         אחת מהתשובות בנפרד. as_info: שלב ההבנה קבע שזו שאלת מידע - "אישי" של המודל נבדק כתשובה רגילה."""
@@ -1144,6 +1254,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                 return not_on_site(f"unsupported_numbers:{','.join(bad)}", **extra)
             if missing := unknown_terms():
                 return not_on_site(f"term_not_on_site:{','.join(missing)}", **extra)
+            if term := term_not_cited([text for _, text in cited]):
+                return not_on_site(f"term_not_in_cited:{term}", **extra)
             if not answer_text:
                 return not_on_site("empty_answer", **extra)
             if leaked(answer_text):  # שכבת הגנה אחרונה: ההוראות או ה-JSON דלפו לתשובה - לא מציגים
@@ -1199,6 +1311,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         passages = [(str(i), h.text) for i, h in enumerate(hits, 1)] + [("C", contact_text())]
         texts = [text for _, text in passages]
         status = [_self_evident(u.text, texts) for u in parts]  # True / "claim" (לבדוק) / "exempt"
+        # הקטעים שהמשפטים שנשארים מבוססים עליהם - למונח בתשובה שניצלה (term_not_cited למטה)
+        support = [t for u, s in zip(parts, status) if s is True
+                   for t in texts if exact_quote(" ".join(u.text.split()), t)]
         to_check = [u.text for u, s in zip(parts, status) if s == "claim"]
         if to_check:
             checked = grounding.check(standalone, to_check, passages, quote_found, _numbers)
@@ -1208,6 +1323,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                 return outcome
             verdicts = iter(checked.supported)
             status = [next(verdicts) if s == "claim" else s for s in status]
+            support += checked.quoted
         claims = [s for s in status if s != "exempt"]
         supported = sum(s is True for s in claims)
         if supported == len(claims) and not salvage:
@@ -1227,7 +1343,9 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         cited = _cited(raw.get("sources"), hits)
         evidence = [e for e in _as_list(raw.get("evidence")) if isinstance(e, str)]
         urls = list(dict.fromkeys([url for url, _ in cited] or [hits[0].url]))
-        if salvage and (leaked(kept) or unknown_terms()):  # התשובה שנפסלה לא עברה את שאר הבדיקות - לא מצילים
+        # התשובה שנפסלה לא עברה את שאר הבדיקות - לא מצילים. המונח נבדק בקטעים שמהם אומתו המשפטים שנשארו
+        # (support): ב-sources של תשובה שנפסלה אולי אין כלום (no_source).
+        if salvage and (leaked(kept) or unknown_terms() or term_not_cited(support)):
             return outcome
         whole = supported == len(claims)  # נפסלה בבדיקות בקוד, אבל כל משפט בה מאומת מול האתר
         note = "" if whole else f"\n\n{PARTIAL_NOTE}" + (f" {GENERIC_REFERRAL}" if outcome.kind != "personal" else "")
@@ -1240,15 +1358,20 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                       race=outcome.race, grounding=f"{'ok' if whole else 'partial'}:{supported}/{len(claims)}")
 
     def settle(outcome: Answer) -> Answer:
-        """פסילה שאפשר לתקן - ניסיון אחד עם הסיבה המדויקת. נפסלה שוב (או דליפה) - unverified."""
+        """פסילה שאפשר לתקן - ניסיון אחד עם הסיבה המדויקת. נפסלה שוב (או דליפה) - unverified. המונח לא בקטעים
+        (RECHECKED) - אותו ניסיון, אבל בלי תיקון נשאר "לא מופיע באתר"."""
         if outcome.reason.startswith("leak_guard"):  # לא מחזירים למודל תשובה שדלפו בה ההוראות
             return unverified(outcome)
-        if not outcome.reason.startswith(REPAIRABLE):
+        if not outcome.reason.startswith(REPAIRABLE + RECHECKED):
             return outcome
+
+        def give_up(rejected: Answer) -> Answer:
+            return rejected if rejected.reason.startswith(RECHECKED) else unverified(rejected)
+
         left = time_left()
         min_repair = 5 if config.LEGACY.get() else MIN_REPAIR_SECONDS  # מדידת "לפני": כמו לפני סעיף 6ד
         if outcome.raw is None or (left is not None and left < min_repair):
-            return unverified(outcome)
+            return give_up(outcome)
         if on_stage:
             on_stage("compose")
         repair_start = time.perf_counter()
@@ -1259,7 +1382,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             fixed = llm.chat(messages, system=SYSTEM_PROMPT, temperature=0.1, json_mode=True, parse=parse_reply,
                              route="helper", low_thinking=config.ANSWER_LOW_THINKING)
         except AllProvidersFailed:
-            return unverified(outcome)
+            return give_up(outcome)
         finally:
             timings["repair"] = time.perf_counter() - repair_start
         if on_stage:
@@ -1341,7 +1464,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
                           "personal_no_model", [CONTACT_URL], **base)
         understood = understanding is not None and getattr(understanding, "source", "model") == "model"
         if (config.SITE_QUOTE and (understood or not config.SITE_QUOTE_ONLY_UNDERSTOOD)  # כבוי (21/10) - העמוד והפניה
-                and (quote := site_quote(standalone, hits))):  # המשפט מהאתר במקום "לוקח יותר זמן" / "תקלה זמנית"
+                and (quote := site_quote(standalone, hits))  # המשפט מהאתר במקום "לוקח יותר זמן" / "תקלה זמנית"
+                and not term_not_cited([h.text for h in hits if h.url == quote[1]])):  # ובעמוד שלו - המונח
             log.warning("no model answer (%s) - the sentence from the site instead: %s", type(exc).__name__, question[:60])
             return Answer(quote[0], "answer", "site_quote", [quote[1]], **base,
                           links={quote[1]: fragment_link(quote[1], quote[2])})

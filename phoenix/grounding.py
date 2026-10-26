@@ -14,7 +14,7 @@
 """
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from . import llm
@@ -105,6 +105,7 @@ class Check:
     supported: list[bool]   # לכל משפט שנבדק
     available: bool         # False - המודל הבודק לא ענה, או ענה על פחות מחצי מהמשפטים
     detail: str = ""
+    quoted: list[str] = field(default_factory=list)  # הקטעים שבהם נמצאו הציטוטים של המשפטים הנתמכים
 
 
 def check(question: str, sentences: list[str], passages: list[tuple[str, str]],
@@ -117,7 +118,7 @@ def check(question: str, sentences: list[str], passages: list[tuple[str, str]],
     if len(claims) < len(sentences) / 2:
         return Check([], False, f"verifier answered {len(claims)}/{len(sentences)}")
     texts = [text for _, text in passages]
-    result = []
+    result, quoted = [], []
     for n, sentence in enumerate(sentences, 1):
         claim = claims.get(n, {"verdict": "unsupported", "quote": ""})
         if claim["verdict"] == "no_claim":
@@ -126,6 +127,7 @@ def check(question: str, sentences: list[str], passages: list[tuple[str, str]],
         if claim["verdict"] != "supported":
             result.append(False)
             continue
-        found_in = [t for t in texts if quote_found(claim["quote"], [t])]
-        result.append(bool(found_in) and any(numbers(sentence) <= numbers(t) for t in found_in))
-    return Check(result, True)
+        support = [t for t in texts if quote_found(claim["quote"], [t]) and numbers(sentence) <= numbers(t)]
+        result.append(bool(support))
+        quoted += [t for t in support if t not in quoted]
+    return Check(result, True, quoted=quoted)

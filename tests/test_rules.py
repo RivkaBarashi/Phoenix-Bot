@@ -2721,3 +2721,136 @@ def test_eval_pinning_never_pins_the_verifier_or_the_judges(monkeypatch):
     llm.chat([], system=eval_answers.CLARITY_PROMPT)
     llm.chat([], system=A.SYSTEM_PROMPT)
     assert seen == [None, None, ["gemini:gemini-3.6-flash#1"]]
+
+
+# ---------------------------------------------------------------- המונח בקטעים שצוטטו (config.TERMS_IN_CITED)
+@pytest.mark.parametrize("term, passage, own, found", [
+    ("טרקטורון", "ביטוח טרקטורים חקלאיים", "יש לי טרקטורון", False),          # דבר אחר, גם אם דומה
+    ("טרקטורון", "כיסוי לטרקטורונים ולאופנועים", "יש לי טרקטורון", True),     # תחילית ורבים
+    ("רחפן", "ביטוח לרחפנים מסחריים", "", True),                               # אות סופית
+    ("נזקי צנרת", "הפוליסה מכסה נזק לצנרת בדירה", "", True),                    # סמיכות, מילים לא צמודות
+    ("תכולת דירה", "כיסוי תכולה בדירות שכורות", "", True),                      # סמיכות ונקבה ("דירה" ~ "דירות")
+    ("אופניים חשמליים", "ביטוח אופניים לילדים", "", False),                     # מילה אחת מהמונח חסרה
+    ("רכב חלופי", "שירות רכב חליפי לכל משך התיקון", "יש לכם רכב חליפי?", True),  # כמו שהלקוחה כתבה
+    ("רכב חלופי", "שירות רכב חליפי לכל משך התיקון", "יש לכם רכב חלופי?", False),  # אף צורה לא בקטע
+    ("רכב חלופי", "רכבים חליפיים לכל משך התיקון", "רכב חליפי", True),          # הצורה של הלקוחה ברבים
+    ("טרקטורון", "ביטוח טרקטורים חקלאיים", "יש לי טרקטורן", False),          # שגיאת כתיב לא "נמצאת" במילה אחרת
+    ("כיסוי סקי", "פעילות סקי וסנובורד בחו\"ל", "", True),                      # "כיסוי" לא נבדק
+    ("ביטוח רכב", "שעות הפעילות של המוקד", "", True),                           # תחום ביטוח - כללי מדי, לא נבדק
+    ("ביטוח נסיעות לחו\"ל", "שעות הפעילות של המוקד", "", True),
+    ("jet ski", "שעות הפעילות של המוקד", "", True),                              # בלי מילים בעברית - לא נבדק
+])
+def test_term_in_passages_knows_hebrew(term, passage, own, found):
+    assert A.term_in_passages(term, [passage], own) is found
+
+
+def test_every_word_of_the_term_in_the_same_passage():
+    split = ["ההשתתפות בתיקון היא לפי הפוליסה", "הוצאה עצמית של המבוטח"]
+    assert not A.term_in_passages("השתתפות עצמית", split, "")
+    assert A.term_in_passages("השתתפות עצמית", split + ["ההשתתפות העצמית בביטוח מקיף"], "")
+
+
+def test_the_site_wide_check_is_unchanged():
+    """on_site עבר לפונקציה המשותפת _has_word - אותה התנהגות: "טרקטורון" לא ~ "טרקטורים", "קרוואן" ~ "קרוואנים"."""
+    prefixes = A._prefixes(["טרקטורים", "קרוואנים", "שוכרי"])
+    assert not A._has_word("טרקטורון", prefixes)
+    assert A._has_word("קרוואן", prefixes) and A._has_word("שוכרת", prefixes)
+
+
+TRACTOR = "ביטוח טרקטורונים: הפוליסה מכסה טרקטורונים לשימוש פרטי."
+ATV_PAGE = "https://www.fnx.co.il/atv/"
+TWO_HITS = SearchResult([Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE}", score=0.95),
+                         Hit("t", ATV_PAGE, "טרקטורונים", "", f"טרקטורונים\n\n{TRACTOR}", score=0.9)],
+                        "gemini:x", "cohere:rerank-v4.0-pro")
+CITES_TRACTOR = {"kind": "answer", "answer": TRACTOR, "referral": "", "evidence": [TRACTOR], "sources": [2]}
+
+
+@pytest.fixture
+def terms_in_cited(monkeypatch):
+    """המתג דלוק, והבדיקה לכל האתר עוברת (כמו "טרקטורון" אחרי הסריקה המלאה - ברשימת ספורט מסוכן)."""
+    monkeypatch.setattr(A.config, "TERMS_IN_CITED", True)
+    monkeypatch.setattr(A, "terms_not_on_site", lambda term: [])
+    return U("האם אפשר לבטח טרקטורון?", key_term="טרקטורון")
+
+
+def test_terms_in_cited_is_off_until_measured(monkeypatch):
+    assert not A.config.TERMS_IN_CITED
+    monkeypatch.setattr(A, "terms_not_on_site", lambda term: [])
+    replies(monkeypatch, VALID)
+    a = A.respond("אפשר לבטח טרקטורון?", RACE_HIT, understanding=U("האם אפשר לבטח טרקטורון?", key_term="טרקטורון"))
+    assert (a.kind, a.reason) == ("answer", "verified")  # כמו קודם
+
+
+def test_an_answer_from_a_passage_without_the_term_gets_one_repair_then_stays_not_on_site(monkeypatch, terms_in_cited):
+    sent = replies(monkeypatch, VALID, VALID)
+    a = A.respond("אפשר לבטח טרקטורון?", TWO_HITS, understanding=terms_in_cited)
+    assert (a.kind, a.reason) == ("not_on_site", "term_not_in_cited:טרקטורון")  # לא "מצאתי מידע קרוב"
+    assert a.repaired == "term_not_in_cited:טרקטורון" and len(sent) == 2
+    note = sent[1][-1]["content"]
+    assert "\"טרקטורון\"" in note and "not_on_site" in note  # הסיבה המדויקת, ומה לעשות אם אין קטע כזה
+
+
+def test_the_repair_can_cite_the_passage_that_has_the_term(monkeypatch, terms_in_cited):
+    replies(monkeypatch, VALID, CITES_TRACTOR)
+    a = A.respond("אפשר לבטח טרקטורון?", TWO_HITS, understanding=terms_in_cited)
+    assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "term_not_in_cited:טרקטורון")
+    assert a.sources == [ATV_PAGE]
+
+
+def test_the_term_in_a_cited_passage_passes_at_once(monkeypatch, terms_in_cited):
+    sent = replies(monkeypatch, CITES_TRACTOR)
+    a = A.respond("אפשר לבטח טרקטורון?", TWO_HITS, understanding=terms_in_cited)
+    assert (a.kind, a.reason) == ("answer", "verified") and len(sent) == 1
+
+
+def test_no_time_to_repair_the_term_stays_not_on_site(monkeypatch, terms_in_cited):
+    sent = replies(monkeypatch, VALID, CITES_TRACTOR)
+    with fallback.time_budget(A.MIN_REPAIR_SECONDS - 1):
+        a = A.respond("אפשר לבטח טרקטורון?", TWO_HITS, understanding=terms_in_cited)
+    assert (a.kind, a.reason) == ("not_on_site", "term_not_in_cited:טרקטורון") and len(sent) == 1
+
+
+def test_the_term_check_skips_personal_answers_and_questions_without_understanding(monkeypatch, terms_in_cited):
+    personal = {"kind": "personal", "answer": SENTENCE, "referral": "", "evidence": [SENTENCE], "sources": [1]}
+    replies(monkeypatch, personal)
+    u = U("האם הביטוח שלי מכסה טרקטורון?", intent="personal", key_term="טרקטורון")
+    assert A.respond("הביטוח שלי מכסה טרקטורון?", TWO_HITS, understanding=u).reason == "personal"  # לא הטקסט הקבוע
+    replies(monkeypatch, VALID)
+    assert A.respond("איך מגישים תביעה?", TWO_HITS).reason == "verified"  # בלי הבנה אין key_term
+
+
+def test_a_term_rejection_is_ranked_as_rejected():
+    """בנתיב המקביל: תשובה שנפסלה על המונח - המודל הבא בנתיב מתחיל מיד (כמו כל פסילה)."""
+    assert "term_not_in_cited:טרקטורון".startswith(A.REJECTED)
+    assert not "term_not_in_cited:x".startswith(A.REPAIRABLE)  # לא "מצאתי מידע קרוב" כשלא תוקן
+
+
+def test_no_salvage_when_the_kept_sentences_come_from_a_passage_without_the_term(monkeypatch, terms_in_cited):
+    """עיגון: תשובה שנפסלה על מספר ניצלת משפט משפט - אבל רק אם המונח בקטעים שמהם אומתו המשפטים שנשארו."""
+    bad = reply_with(f"{FORM} ההחזר הוא 999 ש\"ח.")
+    grounding_world(monkeypatch, bad, [{"n": 1, "verdict": "unsupported", "quote": ""}], repair=bad)
+    a = A.respond("אפשר לבטח טרקטורון?", TWO_HITS, understanding=terms_in_cited)
+    assert a.kind == "unverified" and FORM not in a.text  # FORM - מקטע התביעות, בלי טרקטורון
+    u = U("איך ממלאים טופס תביעה?", key_term="טופס")  # המונח בקטע של המשפט שנשאר
+    assert A.respond("איך ממלאים טופס תביעה?", TWO_HITS, understanding=u).reason == "verified_partial:salvaged"
+
+
+def test_the_verifier_reports_the_passages_that_support_each_kept_sentence(monkeypatch):
+    claims = {1: {"verdict": "supported", "quote": TRACTOR}, 2: {"verdict": "unsupported", "quote": ""},
+              3: {"verdict": "supported", "quote": "ציטוט שלא קיים בשום קטע בכלל"}}
+    monkeypatch.setattr(grounding, "ask_verifier", lambda question, passages, sentences: claims)
+    passages = [("1", f"תביעות\n\n{SENTENCE}"), ("2", f"טרקטורונים\n\n{TRACTOR}")]
+    checked = grounding.check("q", ["א", "ב", "ג"], passages, A.quote_found, A._numbers)
+    assert checked.supported == [True, False, False] and checked.quoted == [passages[1][1]]
+
+
+def test_the_site_sentence_needs_the_term_in_its_page(monkeypatch, terms_in_cited):
+    monkeypatch.setattr(A.config, "SITE_QUOTE", True)
+
+    def fails(*args, **kwargs):
+        raise fallback.AllProvidersFailed("llm", ["all down"])
+    monkeypatch.setattr(llm, "chat", fails)
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+    q = "תוך כמה זמן מקבלים תשובה על תביעה?"
+    assert A.respond(q, QUOTE_HIT, understanding=U(q, key_term="טרקטורון")).reason.startswith("no_model")
+    assert A.respond(q, QUOTE_HIT, understanding=U(q, key_term="נזקי מים")).reason == "site_quote"

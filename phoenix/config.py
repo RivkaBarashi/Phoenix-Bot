@@ -272,9 +272,14 @@ ANSWER_STRUCTURE = os.getenv("ANSWER_STRUCTURE", "false").strip().lower() in ("1
 # משמעות ("לא", "רק", "עד") זהות בציטוט ובאתר (קודם "מכוסים" עבר מול "לא מכוסים"); ומספר שכתוב במילים ("שלושים") נבדק
 # כמו מספר בספרות. דלוק: סוגר חורים שבהם תשובה שגויה הוצגה כמאומתת. false - ההתאמה הישנה (למדידה מול הגרסה הקודמת).
 STRICT_VERIFICATION = os.getenv("STRICT_VERIFICATION", "true").strip().lower() in ("1", "true", "yes", "on")
+# המונח בקטעים שצוטטו (26/10, docs/before-paid-tests.md סעיף 2): אחרי הסריקה המלאה כמעט כל מילה "נמצאת איפשהו באתר"
+# ("טרקטורון" ברשימת ספורט מסוכן), ולכן הבדיקה לכל האתר כמעט לא חוסמת. דלוק: המונח ששלב ההבנה הוציא (key_term) חייב
+# להופיע בקטע שהתשובה מצטטת - כל מילות התוכן שלו באותו קטע, בצורה המתוקנת או כמו שהלקוחה כתבה. רק מחמיר: הבדיקה לכל
+# האתר נשארת לפניה. נפסלה - ניסיון תיקון אחד עם הסיבה; לא תוקנה - "לא מופיע באתר". כבוי עד A/B (כלל ג2).
+TERMS_IN_CITED = os.getenv("TERMS_IN_CITED", "false").strip().lower() in ("1", "true", "yes", "on")
 # כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
 BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
-                  "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE", "STRICT_VERIFICATION",
+                  "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE", "STRICT_VERIFICATION", "TERMS_IN_CITED",
                   "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.
