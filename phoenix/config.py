@@ -281,11 +281,16 @@ TERMS_IN_CITED = os.getenv("TERMS_IN_CITED", "false").strip().lower() in ("1", "
 # מחזיר ב-evidence מספרים במקום להעתיק טקסט, והקוד שולף את המשפטים מהקטעים - טעות העתקה (שני משפטים מחוברים, מילה
 # שהשתנתה) בלתי אפשרית, כמו ב-Citations API של Anthropic. טקסט במקום מספרים - האימות הרגיל. כבוי עד A/B (כלל ג2).
 EVIDENCE_BY_ID = os.getenv("EVIDENCE_BY_ID", "false").strip().lower() in ("1", "true", "yes", "on")
+# כמה שאלות בהודעה אחת (26/10, docs/before-paid-tests.md סעיף 4): שלב ההבנה כבר מפרק אותן (sub_questions), אבל עונים רק
+# על הראשונה והשאר כפתורים. דלוק: עד MULTI_MAX_PARTS שאלות במקביל - לכל אחת חיפוש, סף, מודל תשובה, כל הבדיקות ועיגון
+# משלה - ותשובה אחת עם חלק לכל שאלה. חלק שלא הסתיים בזמן, או שחסר בו סוג ביטוח - כפתור, כמו היום. כבוי עד A/B (כלל ג2).
+MULTI_ANSWER = os.getenv("MULTI_ANSWER", "false").strip().lower() in ("1", "true", "yes", "on")
+MULTI_MAX_PARTS = int(os.getenv("MULTI_MAX_PARTS", "3"))
 # כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
 BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
                   "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE", "STRICT_VERIFICATION", "TERMS_IN_CITED",
-                  "EVIDENCE_BY_ID", "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES",
-                  "CONTEXT_CHARS")
+                  "EVIDENCE_BY_ID", "MULTI_ANSWER", "MULTI_MAX_PARTS", "CONVERSATION_MEMORY", "CONTEXT_FLEX",
+                  "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.
 SITE_QUOTE_ONLY_UNDERSTOOD = os.getenv("SITE_QUOTE_ONLY_UNDERSTOOD", "true").strip().lower() in ("1", "true", "yes", "on")

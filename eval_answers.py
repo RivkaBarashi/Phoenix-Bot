@@ -306,10 +306,40 @@ def run_metrics(records: list[dict], args, version: str, partial, stopped: bool)
             "stopped": "yes" if stopped else ""}
 
 
+def multi_record(n: int, row: dict, u, understand_s: float, understand_calls: int, judged: bool,
+                 clear: bool) -> dict:
+    """MULTI_ANSWER: הודעה עם כמה שאלות - כמו בצ'אט (answer._answer_understood): לכל שאלה חיפוש, סף, תשובה ובדיקות
+    משלה, ותשובה אחת. הסף כאן הוא של הצ'אט (לא 0 כמו בשאר הבדיקה) והחיפוש - בשרשרת הרגילה (לא --reranker), ולכן
+    outcome מחזיר את ההחלטה כמו שהיא (chat_path). השופט בודק את התשובה כולה מול התשובה הצפויה (שמכסה את כל השאלות)."""
+    before, answered, start = model_calls(), model_answers(), time.perf_counter()
+    a = answer_layer._answer_understood(row["question"], [], u, cache=False)
+    elapsed = time.perf_counter() - start
+    calls = {"answer": model_calls() - before, "topic": 0, "judge": 0, "cache": 0, "understand": understand_calls}
+    requests = model_answers() - answered
+    rec = {"n": n, "type": row["type"], "question": row["question"], "top": a.top_score or 0.0, "decision": a.kind,
+           "reason": a.reason, "chat_path": True, "parts": len(a.parts), "buttons": len(a.more_questions),
+           "llm": a.llm or "", "sources": " ".join(a.sources), "answer": a.text, "verdict": "", "judge_reason": "",
+           "cited_correct": any(same_page(s, row["source_url"]) for s in a.sources)
+           if row["type"] == "answerable" else "",
+           "timings": a.timings | {"understand": understand_s}, "calls": calls, "intent": u.intent,
+           "grounding": a.grounding, "chat_s": understand_s + elapsed, "chat_calls": understand_calls + calls["answer"],
+           "chat_requests": understand_calls + requests}
+    if judged and (row["type"], a.kind) in (("answerable", "answer"), ("personal", "personal")):
+        before = model_calls()
+        rec["verdict"], rec["judge_reason"] = judge(row["question"], row["expected_answer"], a.text,
+                                                    personal=row["type"] == "personal")
+        calls["judge"] = model_calls() - before
+    if clear and a.kind in ("answer", "personal"):
+        rec.update(clarity(row["question"], a.text))
+    return rec
+
+
 def outcome(record: dict, threshold: float) -> str:
     """מה הבוט היה עונה בסף הזה. ברכה - תמיד ברכה (לפני החיפוש). מתחת לסף - off_topic אם בדיקת
     הנושא אמרה שזה לא קשור לביטוח (נבדקת לשאלות שמתחת לסף הנוכחי), אחרת not_on_site."""
     if record["decision"] in ("greeting", "clarify") or record.get("pre_search"):  # לפני החיפוש - לא תלוי בסף
+        return record["decision"]
+    if record.get("chat_path"):  # MULTI_ANSWER: נענתה במסלול הצ'אט, עם הסף שלו - ההחלטה כמו שהיא
         return record["decision"]
     if record["reason"].startswith("search_failed"):  # החיפוש נכשל - אין מה להציג
         return "error"
@@ -378,6 +408,7 @@ def main():
         u = None if rule else answer_layer.try_understand(row["question"])
         understand_calls, understand_s = model_calls() - before, time.perf_counter() - start
         pre = None  # החלטה לפני החיפוש: (החלטה, סיבה, הטקסט שמוצג)
+        multi = bool(u) and config.MULTI_ANSWER and len(dict.fromkeys(u.sub_questions)) > 1
         if rule:
             question = row["question"]
             pre = ("off_topic", f"rule_injection:{rule}", answer_layer.OFF_TOPIC_TEXT)
@@ -388,7 +419,7 @@ def main():
                        answer_layer.THANKS_REPLY if u.intent == "thanks" else answer_layer.GREETING_REPLY)
             elif u.intent in ("off_topic", "injection"):
                 pre = ("off_topic", f"understand_{u.intent}", answer_layer.OFF_TOPIC_TEXT)
-            elif u.needs_clarification and not u.insurance_type:
+            elif u.needs_clarification and not u.insurance_type and not multi:  # כמה שאלות - הבהרה לכל חלק לבד
                 pre = ("clarify", "no_insurance_type", answer_layer.CLARIFY_TEXT)
         else:
             question = answer_layer.split_greeting(row["question"])[0] or row["question"]
@@ -409,6 +440,17 @@ def main():
             print()
             print(f"[{n}] ({row['type']}) {row['question']}")
             print(f"    -> {decision} ({reason}, בלי חיפוש): {text}")
+            continue
+        if multi:
+            rec = multi_record(n, row, u, understand_s, understand_calls, not args.no_judge, args.clarity)
+            records.append(rec)
+            print(f"\n[{n}] ({row['type']}) {row['question']}")
+            print(f"    -> {rec['decision']} ({rec['reason'][:120]}) {rec['verdict']}  חלקים: {rec['parts']}, "
+                  f"כפתורים: {rec['buttons']}  [{rec['llm']}]")
+            print("    " + " ".join(rec["answer"].split())[:220])
+            if stopped := streak.add(n, "llm: all models failed" if rec["decision"] == "error" else None):
+                print(streak.report())
+                break
             continue
         try:
             ranked, used, reranked_by = run_search(question, args.index, timings)

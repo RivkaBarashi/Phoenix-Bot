@@ -381,6 +381,7 @@ class Answer:
     grounding: str = ""         # בדיקת העיגון (config.GROUNDING): ok / partial:3/5 / ungrounded / skipped:time / unavailable
     more_questions: list[str] = field(default_factory=list)  # שאלות נוספות שהיו באותה הודעה - כפתורים בצ'אט
     links: dict[str, str] = field(default_factory=dict)  # כתובת מקור -> קישור שנפתח על הציטוט ומדגיש אותו (Text Fragment)
+    parts: list[str] = field(default_factory=list)  # MULTI_ANSWER: השאלות שנענו כחלקים בתשובה הזו (ריק - שאלה אחת)
 
 
 @lru_cache
@@ -978,8 +979,8 @@ def focus(text: str, question: str, max_chars: int) -> str:
     return header + "\n\n" + "\n".join(units[i] for i in sorted(keep))
 
 
-def format_sources(urls: list[str]) -> str:
-    urls = list(dict.fromkeys(urls))[:3]
+def format_sources(urls: list[str], limit: int | None = 3) -> str:
+    urls = list(dict.fromkeys(urls))[:limit]
     if len(urls) == 1:
         return f"המקור: {urls[0]}"
     return "המקורות:\n" + "\n".join(f"- {u}" for u in urls)
@@ -1711,9 +1712,14 @@ def next_memory(previous: dict | None, u: "Understanding | None", result: "Answe
               "clarified": result.kind == "clarify"}
     if memory["intent"] in NON_TOPICAL:
         return memory
-    asked = result.question or (u.standalone_question if u else "")
+    asked = result.question or (u.standalone_question if u else "")  # MULTI_ANSWER: השאלה של החלק הראשון
     said = (u.insurance_type if u else None) or insurance_type(asked)
-    memory["insurance_type"] = said if u and u.topic_changed else said or memory["insurance_type"]
+    types = {insurance_type(p) for p in result.parts} - {None}  # MULTI_ANSWER: הסוגים שהחלקים מזכירים
+    if len(types) > 1:  # שני סוגים בהודעה אחת - שאלת המשך בלי סוג תשאל על איזה מהם, ולא תנחש
+        memory["insurance_type"] = None
+    else:
+        said = next(iter(types), said)
+        memory["insurance_type"] = said if u and u.topic_changed else said or memory["insurance_type"]
     memory["subject"] = conversation_log.hide_numbers(asked)[:300] if asked else memory["subject"]
     return memory
 
@@ -1739,20 +1745,32 @@ def _answer_understood(question: str, history: list[dict], u: Understanding, on_
         return Answer(OFF_TOPIC_TEXT, "off_topic", f"understand_{u.intent}", [], None, "none",
                       question=u.standalone_question, understanding=record)
     inherited = inherited_type(u, memory, question)  # ב2 (בלי זיכרון - None, כמו קודם)
+    # נושא חדש - מודל התשובה לא רואה את השיחה הקודמת; המשך - רואה אותה (רק כדי להבין, כלל 8)
+    context = [] if u.topic_changed else history
+    if config.MULTI_ANSWER and not config.LEGACY.get() and len(dict.fromkeys(u.sub_questions)) > 1:
+        if multi := _answer_parts(question, context, u, record, inherited, on_stage, early, cache):
+            return multi
     if u.needs_clarification and not u.insurance_type and not inherited:
         if not (memory or {}).get("clarified"):  # ב2: לא שואלים "על איזה ביטוח?" פעמיים ברצף
             clarify = clarification(question)
             clarify.understanding = record
             return clarify
         record["clarify_skipped"] = True
-    # נושא חדש - מודל התשובה לא רואה את השיחה הקודמת; המשך - רואה אותה (רק כדי להבין, כלל 8)
-    context = [] if u.topic_changed else history
     standalone = u.sub_questions[0] if len(u.sub_questions) > 1 else u.standalone_question
     if inherited and not has_insurance_type(standalone):
         standalone = with_insurance_type(standalone, inherited)
         record["inherited_type"] = inherited
     # מטמון: רק שאלה שלא תלויה בשיחה, עם שאלה אחת בהודעה. קריאה - לא במצב מפתחת; שמירה - רק תשובה מאומתת.
     cacheable = not context and len(u.sub_questions) <= 1 and not config.LEGACY.get()
+    result = _answer_one(question, context, standalone, u, record, on_stage, early, cache, cacheable)
+    result.more_questions = u.sub_questions[1:]
+    return result
+
+
+def _answer_one(question: str, context: list[dict], standalone: str, u: Understanding, record: dict, on_stage,
+                early: EarlySearch | None, cache: bool, cacheable: bool) -> Answer:
+    """שאלה אחת: מטמון, חיפוש, respond, ושמירה במטמון של תשובה מאומתת. גם כל חלק ב-MULTI_ANSWER (שם ב-thread, ו-on_stage
+    רק רושם את השלב - בלי Streamlit)."""
     if cacheable and cache and (hit := answer_cache.get(standalone)):
         return _from_cache(hit, record)
     if on_stage:
@@ -1762,10 +1780,149 @@ def _answer_understood(question: str, history: list[dict], u: Understanding, on_
                      parallel=config.PARALLEL_LLM and not config.LEGACY.get(), on_stage=on_stage, understanding=u)
     result.early_search = how
     result.understanding = record
-    result.more_questions = u.sub_questions[1:]
     if cacheable and (result.kind, result.reason) == ("answer", "verified"):
         answer_cache.put(standalone, _cache_record(result))
     return result
+
+
+# --- כמה שאלות בהודעה אחת (config.MULTI_ANSWER, docs/before-paid-tests.md סעיף 4) ---
+# "פירוק לשאלות משנה" (query decomposition, כמו SubQuestionQueryEngine של LlamaIndex): שלב ההבנה כבר מפרק את ההודעה
+# (sub_questions); כאן כל שאלה עוברת את כל המסלול לבד, במקביל, ומחברים לתשובה אחת. כל חלק - עם הקטעים, הציטוטים והבדיקות
+# שלו בלבד (מודל התשובה רואה רק את השאלה שלו): אין שיתוף מצב בין החלקים, ולכן אין ערבוב עובדות.
+_PARTS = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="multi-answer")  # כמה שיחות יחד
+MULTI_GRACE_SECONDS = 2.0  # אחרי הזמן לשאלה: חלק שעוד לא חזר - כפתור (הוא ממשיך ברקע, והתוצאה שלו לא מוצגת)
+PART_STAGES = ("search", "compose", "verify")  # החיווי בצ'אט - השלב של החלק האיטי ביותר
+MIXED_INTENT = "mixed"  # הודעה "אישית" עם חלק שלא נראה אישי בכללי הקוד: מודל התשובה מחליט לחלק הזה (כמו בלי הבנה)
+SHOWN_KINDS = ("answer", "personal", "not_on_site", "unverified", "off_topic")
+CONTACT_TITLE = "כל הדרכים ליצור איתנו קשר"  # שם עמוד צור קשר - בשורת המקור של חלק (וגם בצ'אט)
+
+
+def shared_type(u: Understanding) -> str | None:
+    """סוג הביטוח של כל ההודעה (מהבנת השאלה) - רק אם אף שאלה בה לא מזכירה סוג אחר."""
+    said = {insurance_type(q) for q in u.sub_questions} - {None}
+    return u.insurance_type if u.insurance_type and said <= {u.insurance_type} else None
+
+
+def part_understanding(u: Understanding, part: str, question: str) -> Understanding:
+    """הבנת השאלה לחלק אחד: השאלה שלו; המונח (key_term) - רק לחלק שהוא מופיע בו (אחרת בדיקת המונח הייתה פוסלת חלק
+    אחר); והודעה "אישית" - חלק שלא נראה אישי בכללי הקוד מקבל MIXED_INTENT, כדי ששאלת מידע לא תקבל את ההודעה האישית."""
+    intent = MIXED_INTENT if u.personal and not is_personal_question(part) else u.intent
+    term = u.key_term if u.key_term and term_in_passages(u.key_term, [part], question) else None
+    return replace(u, standalone_question=part, sub_questions=[part], intent=intent, key_term=term,
+                   needs_clarification=False)
+
+
+def _shown(a: "Answer | None") -> bool:
+    """חלק שמוצג כחלק מהתשובה. בלי תוצאה (לא הסתיים בזמן, נכשל), בלי מודל (no_model) או תקלה - כפתור, כמו היום."""
+    return a is not None and a.kind in SHOWN_KINDS and not a.reason.startswith("no_model")
+
+
+def _answer_parts(question: str, context: list[dict], u: Understanding, record: dict, inherited: str | None,
+                  on_stage, early: "EarlySearch | None", cache: bool) -> "Answer | None":
+    """MULTI_ANSWER: עד MULTI_MAX_PARTS שאלות במקביל, ותשובה אחת עם חלק לכל שאלה (combine_parts). שאלה בלי סוג ביטוח
+    (גם אחרי השלמה מזיכרון השיחה או מסוג ההודעה) ושאלה מעבר למקסימום - כפתורים: לחיצה שואלת עליה לבד. None - אין
+    שאלה שאפשר לענות עליה עכשיו (לכולן חסר סוג): המסלול הרגיל, עם שאלת ההבהרה שלו."""
+    shared = shared_type(u)
+    order, parts = [], []
+    for part in dict.fromkeys(u.sub_questions):
+        kind = inherited or (shared if needs_insurance_type(part) else None)
+        if kind and not has_insurance_type(part):
+            part = with_insurance_type(part, kind)
+            if kind == inherited:
+                record["inherited_type"] = inherited
+        order.append(part)
+        if not needs_insurance_type(part) and len(parts) < config.MULTI_MAX_PARTS:
+            parts.append(part)
+    if not parts:
+        return None
+    cacheable = not context and not config.LEGACY.get()
+    reached = ["search"] * len(parts)
+
+    def recorder(i: int):
+        def on_part(stage: str, **info):  # ב-thread של החלק: רק רושם. Streamlit - רק מה-thread הראשי (_wait_parts)
+            if stage in PART_STAGES:
+                reached[i] = stage
+        return on_part
+    if on_stage:
+        on_stage("search")
+    futures = {_PARTS.submit(contextvars.copy_context().run, _answer_one, part, context, part,
+                             part_understanding(u, part, question), record, recorder(i) if on_stage else None,
+                             early, cache, cacheable): i for i, part in enumerate(parts)}
+    outcomes = _wait_parts(futures, reached, on_stage)
+    shown = [(part, a) for part, a in zip(parts, outcomes) if _shown(a)]
+    if not shown:  # אף חלק לא הסתיים כמו שצריך: התוצאה של הראשון שחזר (כמו היום - שאלה אחת), והשאר כפתורים
+        first = next((i for i, a in enumerate(outcomes) if a is not None), None)
+        if first is None:  # אף חלק לא חזר בזמן - כמו שאלה אחת שאף מודל לא ענה עליה
+            first, outcomes[0] = 0, Answer(f"{UNVERIFIED_TEXT} {GENERIC_REFERRAL}\n\n{format_sources([CONTACT_URL])}",
+                                           "unverified", "no_model:timeout", [CONTACT_URL], None, "none",
+                                           question=parts[0], understanding=record)
+        result = outcomes[first]
+        result.more_questions = [p for p in order if p != parts[first]]
+        return result
+    result = combine_parts(shown, record)
+    result.more_questions = [p for p in order if p not in result.parts]
+    log.info("multi-answer: %d/%d parts shown, %d buttons", len(shown), len(parts), len(result.more_questions))
+    return result
+
+
+def _wait_parts(futures: dict, reached: list[str], on_stage) -> list["Answer | None"]:
+    """מחכה לחלקים עד סוף הזמן לשאלה, ועוד MULTI_GRACE_SECONDS. חלק שלא חזר עד אז או נכשל - None. on_stage (מה-thread
+    הראשי): השלב של החלק האיטי ביותר מבין אלה שעוד רצים, רק כשהוא מתקדם."""
+    outcomes: list[Answer | None] = [None] * len(futures)
+    left = time_left()
+    deadline = None if left is None else time.monotonic() + max(left, 0.0) + MULTI_GRACE_SECONDS
+    pending, stage = set(futures), 0  # stage - השלב שמוצג עכשיו (מקום ב-PART_STAGES)
+    while pending:
+        timeout = None if deadline is None else deadline - time.monotonic()
+        if timeout is not None and timeout <= 0:
+            break
+        if on_stage:
+            timeout = 0.25 if timeout is None else min(timeout, 0.25)
+        done, pending = concurrent.futures.wait(pending, timeout=timeout)
+        for future in done:
+            try:
+                outcomes[futures[future]] = future.result()
+            except Exception as exc:  # noqa: BLE001 - חלק שנכשל הופך לכפתור; שאר החלקים מוצגים
+                log.warning("multi-answer part failed: %s", str(exc)[:160])
+        if on_stage and pending:
+            slowest = min(PART_STAGES.index(reached[futures[f]]) for f in pending)
+            if slowest > stage:
+                stage = slowest
+                on_stage(PART_STAGES[stage])
+    if pending:
+        log.warning("multi-answer: %d parts out of time - buttons", len(pending))
+    return outcomes
+
+
+def combine_parts(shown: list[tuple[str, "Answer"]], record: dict) -> "Answer":
+    """החלקים -> תשובה אחת: לכל שאלה - השאלה, התשובה שלה (בלי שורת המקור) ו"(המקור: שם העמוד)"; בסוף - כל המקורות,
+    בלי כפולים (הצ'אט מציג אותם כקישורים). הבדיקות של כל חלק נעשו לבד, והחיבור לא משנה אף משפט."""
+    sections, sources, links, hits, timings = [], [], {}, [], {}
+    for part, a in shown:
+        titles = {h.url: h.title for h in a.hits if h.title} | {CONTACT_URL: CONTACT_TITLE}
+        cite = " · ".join(titles.get(url, url) for url in a.sources)
+        body = a.text.rsplit("\n\nהמקור", 1)[0]  # format_sources: "המקור:" / "המקורות:" בסוף (כמו בצ'אט)
+        sections.append(f"{part}\n{body}" + (f"\n(המקור: {cite})" if cite else ""))
+        sources += [url for url in a.sources if url not in sources]
+        links = a.links | links  # אותו עמוד בשני חלקים - הקישור של הראשון
+        hits += a.hits
+        for stage, seconds in a.timings.items():  # במקביל: הזמן של כל שלב - של החלק האיטי
+            timings[stage] = max(timings.get(stage, 0.0), seconds)
+    kinds = [a.kind for _, a in shown]
+    first = shown[0][1]
+    scores = [a.top_score for _, a in shown if a.top_score is not None]
+
+    def joined(values) -> str:
+        return " | ".join(dict.fromkeys(v for v in values if v))
+    return Answer("\n\n".join(sections) + f"\n\n{format_sources(sources, limit=None)}",
+                  "answer" if "answer" in kinds else "personal" if "personal" in kinds else kinds[0],
+                  "multi:" + "|".join(f"{a.kind}/{a.reason}" for _, a in shown), sources,
+                  max(scores) if scores else None, first.reranker, llm=joined(a.llm for _, a in shown) or None,
+                  question=first.question, hits=hits, timings=timings, pages=sum(a.pages for _, a in shown),
+                  warning=joined(a.warning for _, a in shown), race=joined(a.race for _, a in shown),
+                  early_search=first.early_search, cached=all(a.cached for _, a in shown),
+                  repaired=joined(a.repaired for _, a in shown), understanding=record,
+                  grounding=joined(a.grounding for _, a in shown), links=links, parts=[p for p, _ in shown])
 
 
 def _answer_by_rules(question: str, history: list[dict], on_stage=None, early: EarlySearch | None = None,
