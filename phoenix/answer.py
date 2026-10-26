@@ -81,6 +81,8 @@ UNVERIFIED_TEXT = "מצאתי באתר מידע קרוב, אבל לא הצלחת
 REPAIR_PROMPT = ("התשובה שלך נפסלה בבדיקה אוטומטית מול האתר: {problem} תקן את זה והחזר את ה-JSON כולו מחדש, לפי "
                  "אותם כללים. אם אי אפשר לענות מהקטעים - kind = \"not_on_site\".")
 MIN_REPAIR_SECONDS = 6  # בצ'אט: פחות מזה מהזמן לשאלה - בלי ניסיון תיקון
+EVIDENCE_IDS_FIX = ("ציין ב-evidence את המספרים של המשפטים שעליהם התשובה מבוססת, כמחרוזות (\"2.5\"), וב-sources - את "
+                    "הקטעים שלהם.")
 # שלב ההבנה קבע שזו שאלת מידע, ומודל התשובה בכל זאת ענה "אישי" (20/10, שאלה 4: "אני עוברת דירה בשבוע הבא. ביטוח
 # התכולה מכסה את הרהיטים בזמן ההובלה?" - 3.6 ענה personal, 3.8 ענה תשובה נכונה): ניסיון אחד עם ההסבר הזה.
 GENERAL_NOTE = ("שלב הבנת השאלה קבע שזו שאלה כללית - מידע מהאתר, לא בדיקה של הפוליסה או של הנתונים האישיים של "
@@ -103,6 +105,10 @@ def repair_note(reason: str, from_customer: list[str] = (), others: list[str] = 
     if reason.startswith("unsupported_numbers:"):
         return (f"המספרים {reason.split(':', 1)[1]} שבתשובה לא מופיעים באף קטע. כתוב רק מספרים שמופיעים בקטעים, "
                 "בדיוק כמו שהם כתובים.")
+    if reason.startswith("unverified_evidence:"):  # EVIDENCE_BY_ID: מספרי משפטים שלא קיימים
+        return f"המספרים {reason.split(':', 1)[1]} ב-evidence לא קיימים בקטעים. {EVIDENCE_IDS_FIX}"
+    if reason == "unverified_evidence" and config.EVIDENCE_BY_ID:
+        return f"המשפטים שציינת ב-evidence לא נמצאים בקטעים שציינת ב-sources. {EVIDENCE_IDS_FIX}"
     if reason.startswith("term_not_in_cited:"):
         term = reason.split(":", 1)[1]
         return (f"השאלה שואלת על \"{term}\", אבל הקטעים שציינת ב-sources לא מזכירים את זה. ציין את הקטע שמדבר על "
@@ -262,11 +268,34 @@ def with_answer_structure(prompt: str) -> str:
     return prompt.replace("4. ניסוח: ", ANSWER_STRUCTURE_RULE, 1)
 
 
+# ציטוט לפי מספר משפט (config.EVIDENCE_BY_ID): כלל 6 - מספרים במקום העתקה. מה מציינים נשאר כמו בהוראות שנמדדו
+# (FACTS: כל משפט רלוונטי, לפני התשובה; CLASSIC: המשפטים שהתשובה מבוססת עליהם) - רק הצורה משתנה.
+EVIDENCE_RULE = re.compile(r"6\. evidence.*?\n(?=   ב-\"not_on_site\")", re.DOTALL)
+EVIDENCE_IDS_WHAT = {
+    True: ("6. evidence - לפני שכותבים את התשובה: המספרים של כל משפט בקטעים שעונה על השאלה או על חלק ממנה - לא רק\n"
+           "   אחד: סכומים, השתתפות עצמית, תקרות, שלבים, מסמכים, זמנים, תנאים, גילים, ערוצי פנייה.\n"),
+    False: "6. evidence: המספרים של המשפט או המשפטים מהקטעים שעליהם התשובה מבוססת.\n",
+}
+EVIDENCE_IDS_HOW = ("   כל משפט בקטעים מסומן במספר: [2.5] הוא המשפט החמישי בקטע 2, [C.3] - השלישי בפרטי ההתקשרות.\n"
+                    "   כתבו רק את המספרים, כמחרוזות (\"2.5\") - בלי הטקסט, ובלי המספרים האלה בתוך answer.\n")
+
+
+def with_evidence_ids(prompt: str) -> str:
+    facts = "לפני שכותבים את התשובה" in prompt
+    prompt = EVIDENCE_RULE.sub(lambda _: EVIDENCE_IDS_WHAT[facts] + EVIDENCE_IDS_HOW, prompt, count=1)
+    return re.sub(r'"evidence": \[[^\]]*\]', '"evidence": ["2.5", "2.6"]', prompt, count=1)
+
+
+assert all("העתקה מדויקת" not in with_evidence_ids(p) and '"evidence": ["2.5", "2.6"]' in with_evidence_ids(p)
+           and EVIDENCE_IDS_HOW in with_evidence_ids(p) for p in (SYSTEM_PROMPT_CLASSIC, SYSTEM_PROMPT_FACTS))
+
 SYSTEM_PROMPT = SYSTEM_PROMPT_FACTS if config.ANSWER_FACTS else SYSTEM_PROMPT_CLASSIC
 if config.CUSTOMER_NUMBERS_RULE:  # כבוי - ההוראות זהות לגמרי לגרסה שנמדדה (וגם המטמון)
     SYSTEM_PROMPT = with_customer_numbers_rule(SYSTEM_PROMPT)
 if config.ANSWER_STRUCTURE:
     SYSTEM_PROMPT = with_answer_structure(SYSTEM_PROMPT)
+if config.EVIDENCE_BY_ID:
+    SYSTEM_PROMPT = with_evidence_ids(SYSTEM_PROMPT)
 
 # מתחת לסף המודל לא רואה את הקטעים - שאלה קצרה רק כדי להבחין בין off_topic ל-not_on_site
 TOPIC_PROMPT = ("האם ההודעה קשורה לביטוח, לפיננסים (פנסיה, חיסכון, הלוואות) או לשירות של חברת ביטוח? "
@@ -306,6 +335,9 @@ WORD = re.compile(r"\w+")
 HEBREW_ACRONYM_QUOTE = re.compile(r'(?<=[א-ת])"(?=[א-ת])')
 log = logging.getLogger("phoenix")
 NUMBER = re.compile(r"\d[\d\-./:,]*\d|\d")
+# "1. " / "2) " בתחילת שורה: רשימה ממוספרת (ההוראות מבקשות כך שלבים של תהליך). בלי זה "4" של השלב הרביעי נפסל כמספר
+# שלא באתר כשבקטעים אין 4. "1.5" (בלי רווח אחרי הנקודה) ומספר באמצע שורה - נבדקים כרגיל.
+LIST_NUMBER = re.compile(r"(?m)^[ \t]*\d{1,2}[.)][ \t]+")
 # קוד כוכבית: באתר הוא כתוב "5432*" (כדי שיוצג נכון מימין לשמאל), והמודל מעתיק אותו כך או כותב
 # "*5432*". בתשובה הוא תמיד "*5432", כמו שמחייגים, עם סימן כיוון LRM (U+200E) לפניו - כך הכוכבית
 # מוצגת משמאל למספר גם בטקסט עברי פשוט (קובצי הבדיקה, אקסל), ולא רק בצ'אט.
@@ -773,7 +805,8 @@ def customer_numbers(question: str, history: list[dict] = ()) -> set[str]:
 
 def unsupported_numbers(answer: str, texts: list[str]) -> list[str]:
     """מספרים בתשובה שלא מופיעים באף קטע (למשל טלפון או סכום שהמודל המציא). STRICT_VERIFICATION: גם מספרים במילים -
-    בתשובה ובקטעים ("שלושים יום" בתשובה עובר רק אם 30 או "שלושים" באתר)."""
+    בתשובה ובקטעים ("שלושים יום" בתשובה עובר רק אם 30 או "שלושים" באתר). מספור של רשימה ("1. " בתחילת שורה) - לא מספר
+    מהאתר, ולא נבדק (כמו grounding.LIST_PREFIX)."""
     allowed = set()
     for text in texts:
         for n in NUMBER.findall(text):
@@ -781,6 +814,7 @@ def unsupported_numbers(answer: str, texts: list[str]) -> list[str]:
             allowed.update(re.findall(r"\d+", n))
         if config.STRICT_VERIFICATION:
             allowed.update(_word_numbers(text))
+    answer = LIST_NUMBER.sub("", answer)
     bad = []
     for n in NUMBER.findall(answer):
         if re.sub(r"\D", "", n) not in allowed and not all(g in allowed for g in re.findall(r"\d+", n)):
@@ -980,11 +1014,70 @@ def _user_message(question: str, standalone: str, history: list[dict], hits: lis
         convo = "\n".join(f"{'לקוח' if m['role'] == 'user' else 'בוט'}: {m['content']}" for m in history[-4:])
         parts.append(f"השיחה עד עכשיו (רק להקשר):\n{convo}")
     parts.append(f"שאלת הלקוח: {question}" + (f"\n(כלומר: {standalone})" if standalone != question else ""))
-    blocks = [f"[{i}] {h.title}{' › ' + h.heading if h.heading else ''} | {h.url}\n{h.text.split(chr(10) * 2, 1)[-1]}"
-              for i, h in enumerate(hits, 1)]
-    blocks.append(f"[C] פרטי התקשרות | {CONTACT_URL}\n{contact_text()}")
+    numbered = evidence_units(hits) if config.EVIDENCE_BY_ID else None
+
+    def body(label: str, text: str) -> str:
+        if numbered is None:
+            return text
+        return "\n".join(f"[{label}.{n}] {sentence}" for n, sentence in enumerate(numbered[label], 1))
+    blocks = [f"[{i}] {h.title}{' › ' + h.heading if h.heading else ''} | {h.url}\n"
+              f"{body(str(i), h.text.split(chr(10) * 2, 1)[-1])}" for i, h in enumerate(hits, 1)]
+    blocks.append(f"[C] פרטי התקשרות | {CONTACT_URL}\n{body('C', contact_text())}")
     parts.append("קטעים מהאתר:\n\n" + "\n\n".join(blocks))
     return "\n\n".join(parts)
+
+
+# --- ציטוט לפי מספר משפט (config.EVIDENCE_BY_ID, docs/before-paid-tests.md סעיף 3) ---
+EVIDENCE_ID = re.compile(r"\[?\s*(\d+|[Cc])\s*\.\s*(\d+)\s*\]?")
+EVIDENCE_IDS = re.compile(rf"\s*{EVIDENCE_ID.pattern}(?:\s*[,;]\s*{EVIDENCE_ID.pattern})*\s*")  # "2.5, 2.6" במחרוזת אחת
+ID_LIST = r"\[(?:\d+|[Cc])\.\d+(?:[ \t]*[,;][ \t]*(?:\d+|[Cc])\.\d+)*\]"  # "[2.5]" / "[2.5, 2.6]" שנשאר בתוך התשובה
+ID_AT_LINE_START = re.compile(rf"(?m)^{ID_LIST}[ \t]*")
+ID_IN_TEXT = re.compile(rf"[ \t]*{ID_LIST}")  # בלי \s: לא לבלוע ירידת שורה ולחבר שתי שורות של רשימה
+UNIT_MARK = re.compile(r"^(?:#+|[-•*])\s+")  # כותרת או סימון רשימה בתחילת משפט - לא חלק מהעובדה
+
+
+def passage_sentences(body: str, pdf: bool) -> list[str]:
+    """גוף של קטע -> המשפטים שלו לפי הסדר: כל שורה, ושורה של כמה משפטים - כל משפט לחוד. ב-PDF - כל שורה כמו שהיא:
+    סדר המילים בשורה לא אמין, ופיצול לפי נקודה היה חותך באמצע (גם האימות ב-PDF עובד לפי שורות - _close_quote)."""
+    return [s.strip() for line in body.split("\n") if line.strip()
+            for s in ([line] if pdf else SENTENCE_END.split(line)) if s.strip()]
+
+
+def evidence_units(hits: list[Hit]) -> dict[str, list[str]]:
+    """תווית הקטע ("1".."n", "C") -> המשפטים שלו לפי הסדר - בדיוק מה שהמודל רואה ממוספר (_user_message)."""
+    units = {str(i): passage_sentences(h.text.split("\n\n", 1)[-1], PDF_MARK in h.text[:200].lower())
+             for i, h in enumerate(hits, 1)}
+    units["C"] = passage_sentences(contact_text(), False)
+    return units
+
+
+def resolve_evidence(items: list, units: dict[str, list[str]]) -> tuple[list[str], list[str]]:
+    """evidence מה-JSON -> (הטקסטים, מספרים שלא קיימים). מספר משפט - הטקסט שלו מהקטע, כפי שהוא (בלי סימון כותרת או
+    רשימה); טקסט (מודל שלא ציית) - כמו שהוא, לאימות הרגיל. מספר שאינו מחרוזת לא מתקבל: JSON הופך 2.10 ל-2.1."""
+    texts, bad = [], []
+    for item in items:
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            bad.append(str(item))
+            continue
+        if not isinstance(item, str):
+            continue
+        if not EVIDENCE_IDS.fullmatch(item):
+            texts.append(item)
+            continue
+        for label, n in EVIDENCE_ID.findall(item):
+            sentences = units.get(label.upper(), [])
+            if 1 <= int(n) <= len(sentences):
+                texts.append(UNIT_MARK.sub("", sentences[int(n) - 1]))
+            else:
+                bad.append(f"{label.upper()}.{n}")
+    return texts, bad
+
+
+def answer_body(raw_answer) -> str:
+    """הטקסט של התשובה מה-JSON. עם EVIDENCE_BY_ID - בלי מספרי משפטים שנשארו בו ("[2.5]"): הם לא חלק מהתשובה, ובבדיקת
+    המספרים "2.5" היה נפסל כמספר שלא באתר."""
+    text = tidy_codes(str(raw_answer or "").strip())
+    return ID_IN_TEXT.sub("", ID_AT_LINE_START.sub("", text)).strip() if config.EVIDENCE_BY_ID else text
 
 
 def number_sources(cited: list[tuple[str, str]], texts: list[str]) -> list[str]:
@@ -1223,6 +1316,14 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         own = " ".join([question] + [m["content"] for m in history if m["role"] == "user"])
         return None if term_in_passages(term, texts, own) else term
 
+    def evidence_of(raw_evidence) -> tuple[list[str], list[str]]:
+        """evidence מה-JSON -> (הטקסטים, מספרים שלא קיימים). עם EVIDENCE_BY_ID - מספרי משפטים נשלפים מהקטעים, כמו
+        שהמודל ראה אותם (אותם hits כמו ב-_user_message)."""
+        items = _as_list(raw_evidence)
+        if not config.EVIDENCE_BY_ID:
+            return [e for e in items if isinstance(e, str)], []
+        return resolve_evidence(items, evidence_units(hits))
+
     def finish(reply: llm.ChatResult, as_info: bool = False) -> Answer:
         """הבדיקות על תשובת מודל (ציטוט, מספרים, מילים באתר, דליפה) -> מה שמוצג. בבקשות במקביל - לכל
         אחת מהתשובות בנפרד. as_info: שלב ההבנה קבע שזו שאלת מידע - "אישי" של המודל נבדק כתשובה רגילה."""
@@ -1230,8 +1331,8 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         texts = [h.text for h in hits] + [contact_text()]
         cited = _cited(data.get("sources"), hits)
         number_texts = number_sources(cited, texts)
-        evidence = [e for e in _as_list(data.get("evidence")) if isinstance(e, str)]
-        answer_text = tidy_codes(str(data.get("answer") or "").strip())
+        evidence, bad_ids = evidence_of(data.get("evidence"))
+        answer_text = answer_body(data.get("answer"))
         referral = tidy_codes(str(data.get("referral") or "").strip())
         if not valid_referral(referral):
             referral = GENERIC_REFERRAL
@@ -1249,7 +1350,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             if not cited:
                 return not_on_site("no_source", **extra)
             if not any(quote_found(e, [text for _, text in cited]) for e in evidence):
-                return not_on_site("unverified_evidence", **extra)
+                return not_on_site("unverified_evidence" + (f":{','.join(bad_ids)}" if bad_ids else ""), **extra)
             if bad := unsupported_numbers(answer_text, number_texts):
                 return not_on_site(f"unsupported_numbers:{','.join(bad)}", **extra)
             if missing := unknown_terms():
@@ -1305,7 +1406,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             outcome.grounding = "skipped:time"
             return outcome
         raw = outcome.raw or {}
-        body = (tidy_codes(str(raw.get("answer") or "")) if salvage
+        body = (answer_body(raw.get("answer")) if salvage
                 else outcome.text.rsplit("\n\nהמקור", 1)[0])  # "המקור:" / "המקורות:" - format_sources
         parts = grounding.units(body)
         passages = [(str(i), h.text) for i, h in enumerate(hits, 1)] + [("C", contact_text())]
@@ -1342,7 +1443,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             return failed
         kept = grounding.rebuild([u for u, s in zip(parts, status) if s is not False])
         cited = _cited(raw.get("sources"), hits)
-        evidence = [e for e in _as_list(raw.get("evidence")) if isinstance(e, str)]
+        evidence, _ = evidence_of(raw.get("evidence"))
         urls = list(dict.fromkeys([url for url, _ in cited] or [hits[0].url]))
         # התשובה שנפסלה לא עברה את שאר הבדיקות - לא מצילים. המונח נבדק בקטעים שמהם אומתו המשפטים שנשארו
         # (support): ב-sources של תשובה שנפסלה אולי אין כלום (no_source).
@@ -1400,7 +1501,7 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
             return repair_note(outcome.reason)
         raw = outcome.raw or {}
         cited = _cited(raw.get("sources"), hits)
-        bad = unsupported_numbers(tidy_codes(str(raw.get("answer") or "")),
+        bad = unsupported_numbers(answer_body(raw.get("answer")),
                                   number_sources(cited, [h.text for h in hits] + [contact_text()]))
         mine = customer_numbers(question, history)  # רק מה שהלקוחה כתבה בפועל - לא הניסוח מחדש של המודל
         from_customer = [n for n in bad if re.sub(r"\D", "", n) in mine]

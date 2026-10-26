@@ -277,10 +277,15 @@ STRICT_VERIFICATION = os.getenv("STRICT_VERIFICATION", "true").strip().lower() i
 # להופיע בקטע שהתשובה מצטטת - כל מילות התוכן שלו באותו קטע, בצורה המתוקנת או כמו שהלקוחה כתבה. רק מחמיר: הבדיקה לכל
 # האתר נשארת לפניה. נפסלה - ניסיון תיקון אחד עם הסיבה; לא תוקנה - "לא מופיע באתר". כבוי עד A/B (כלל ג2).
 TERMS_IN_CITED = os.getenv("TERMS_IN_CITED", "false").strip().lower() in ("1", "true", "yes", "on")
+# ציטוט לפי מספר משפט (26/10, docs/before-paid-tests.md סעיף 3): כל משפט בקטעים ממוספר ([2.5] - החמישי בקטע 2), המודל
+# מחזיר ב-evidence מספרים במקום להעתיק טקסט, והקוד שולף את המשפטים מהקטעים - טעות העתקה (שני משפטים מחוברים, מילה
+# שהשתנתה) בלתי אפשרית, כמו ב-Citations API של Anthropic. טקסט במקום מספרים - האימות הרגיל. כבוי עד A/B (כלל ג2).
+EVIDENCE_BY_ID = os.getenv("EVIDENCE_BY_ID", "false").strip().lower() in ("1", "true", "yes", "on")
 # כל המתגים שמשנים תשובה - חלק מגרסת הקוד במטמון התשובות המאומתות (answer_cache): תשובה מגרסה אחת לא מוצגת בשנייה.
 BEHAVIOR_FLAGS = ("ANSWER_FACTS", "ANSWER_LOW_THINKING", "SITE_QUOTE", "CUSTOMER_NUMBERS_RULE", "NUMBERS_FROM_CITED",
                   "INJECTION_RULES", "GROUNDING", "ANSWER_STRUCTURE", "STRICT_VERIFICATION", "TERMS_IN_CITED",
-                  "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES", "CONTEXT_CHARS")
+                  "EVIDENCE_BY_ID", "CONVERSATION_MEMORY", "CONTEXT_FLEX", "CONTEXT_MAX_CHUNKS", "CONTEXT_PAGES",
+                  "CONTEXT_CHARS")
 # הציטוט מהאתר (כשאף מודל לא ענה) - רק כשמודל הבין את השאלה. בלי הבנה (כללי הקוד) - העמוד והפניה: בריצה של 21/10
 # ציטוט כזה "ענה" על ניסיון injection ועל שאלה בלי תשובה באתר.
 SITE_QUOTE_ONLY_UNDERSTOOD = os.getenv("SITE_QUOTE_ONLY_UNDERSTOOD", "true").strip().lower() in ("1", "true", "yes", "on")

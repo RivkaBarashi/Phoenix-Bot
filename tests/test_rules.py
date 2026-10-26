@@ -2847,11 +2847,113 @@ def test_the_verifier_reports_the_passages_that_support_each_kept_sentence(monke
 def test_the_verifier_sees_each_page_address_and_the_product_rule(monkeypatch):
     """כלל 4: "הפניקס מציעה X" - רק מקטע על מוצר של הפניקס. כותרת של כתבה לא אומרת שהיא כתבה ("שלושה סוגי רכב"), ולכן
     הבודק מקבל את כתובת העמוד ליד כל קטע (car_information / travel_information - כתבות)."""
-    sent = grounding_world(monkeypatch, reply_with(f"{FORM} {QUAKE}"), [{"n": 1, "verdict": "unsupported", "quote": ""}])
+    unsupported = [{"n": 1, "verdict": "unsupported", "quote": ""}]
+    sent = grounding_world(monkeypatch, reply_with(f"{FORM} {QUAKE}"), unsupported)
     A.respond("איך מגישים תביעה?", TWO_HITS)
     message = sent["verify"][0]
-    assert f"[1] {A.CONTACT_URL}\n" in message and f"[2] {ATV_PAGE}\n" in message and f"[C] {A.CONTACT_URL}\n" in message
+    assert all(f"[{label}] {url}\n" in message for label, url in [("1", A.CONTACT_URL), ("2", ATV_PAGE),
+                                                                   ("C", A.CONTACT_URL)])
     assert "מוצר או שירות של הפניקס" in grounding.GROUNDING_PROMPT and "information" in grounding.GROUNDING_PROMPT
+
+
+def test_list_numbering_is_not_a_number_from_the_site():
+    """26/10: "4. מחכים..." נפסל כ"מספר שלא באתר" כשבקטעים אין 4 - וההוראות מבקשות רשימה ממוספרת לשלבים."""
+    site = ["ממלאים טופס. מחכים 30 יום."]
+    assert A.unsupported_numbers("השלבים:\n1. ממלאים טופס.\n4) מחכים 30 יום.", site) == []
+    assert A.unsupported_numbers("1. ההחזר הוא 500 ש\"ח.", site) == ["500"]   # מספר בתוך השורה - נבדק
+    assert A.unsupported_numbers("1.5 מיליון ש\"ח", site) == ["1.5"]          # לא סימון רשימה
+    assert A.unsupported_numbers("יש 4 שלבים.", site) == ["4"]
+
+
+# ---------------------------------------------------------------- ציטוט לפי מספר משפט (config.EVIDENCE_BY_ID)
+STEPS = "תביעות\n\n## הגשת תביעה\nממלאים טופס. מצרפים צילום של הנזק.\nתשובה תינתן תוך 30 יום."
+STEPS_HIT = SearchResult([Hit("s", A.CONTACT_URL, "תביעות", "", STEPS, score=0.95)], "gemini:x",
+                         "cohere:rerank-v4.0-pro")
+
+
+def by_id(evidence, answer="ממלאים טופס ומצרפים צילום של הנזק.", sources=(1,)) -> dict:
+    return {"kind": "answer", "evidence": evidence, "answer": answer, "referral": "", "sources": list(sources)}
+
+
+@pytest.fixture
+def evidence_ids(monkeypatch):
+    monkeypatch.setattr(A.config, "EVIDENCE_BY_ID", True)
+
+
+def test_evidence_by_id_is_off_until_measured():
+    assert not A.config.EVIDENCE_BY_ID and "[2.5]" not in A.SYSTEM_PROMPT
+    assert "[1.1]" not in A._user_message("q", "q", [], STEPS_HIT.hits)
+
+
+@pytest.mark.parametrize("prompt", [A.SYSTEM_PROMPT_CLASSIC, A.SYSTEM_PROMPT_FACTS])
+def test_the_prompt_asks_for_sentence_numbers_and_keeps_what_to_cite(prompt):
+    out = A.with_evidence_ids(prompt)
+    assert "העתקה מדויקת" not in out and A.EVIDENCE_IDS_HOW in out and '"evidence": ["2.5", "2.6"]' in out
+    assert ("לא רק\n   אחד" in out) == (prompt is A.SYSTEM_PROMPT_FACTS)  # FACTS: כל משפט רלוונטי, כמו שנמדד
+    assert out.replace(A.EVIDENCE_IDS_HOW, "").count("6. evidence") == 1 and "7. sources" in out
+
+
+def test_every_sentence_is_numbered_and_pdf_lines_stay_whole(evidence_ids):
+    message = A._user_message("q", "q", [], STEPS_HIT.hits)
+    assert "[1.1] ## הגשת תביעה\n[1.2] ממלאים טופס.\n[1.3] מצרפים צילום של הנזק.\n[1.4] תשובה תינתן" in message
+    assert "[C.1] " in message and "תביעות\n\n## הגשת" not in message  # הכותרת של הקטע - בשורת הכותרת, לא ממוספרת
+    pdf = "מסמך (PDF, עמוד 2)\n\nשורה ראשונה. עם נקודה באמצע\nשורה שנייה"
+    assert A.passage_sentences(pdf.split("\n\n", 1)[1], pdf=True) == ["שורה ראשונה. עם נקודה באמצע", "שורה שנייה"]
+
+
+@pytest.mark.parametrize("items, texts, bad", [
+    (["1.2", "[1.3]"], ["ממלאים טופס.", "מצרפים צילום של הנזק."], []),
+    (["1.2, 1.4"], ["ממלאים טופס.", "תשובה תינתן תוך 30 יום."], []),     # כמה מספרים במחרוזת אחת
+    (["1.1"], ["הגשת תביעה"], []),                                       # בלי סימון הכותרת
+    (["1.9", "C.999"], [], ["1.9", "C.999"]),                             # לא קיימים
+    ([1.2], [], ["1.2"]),                                                 # מספר ולא מחרוזת: 1.20 היה הופך ל-1.2
+    (["ממלאים טופס."], ["ממלאים טופס."], []),                             # טקסט - כמו שהוא, לאימות הרגיל
+])
+def test_resolve_evidence(items, texts, bad):
+    units = A.evidence_units(STEPS_HIT.hits)
+    assert A.resolve_evidence(items, units) == (texts, bad)
+
+
+def test_an_answer_cited_by_ids_is_verified_with_the_sentences_from_the_site(monkeypatch, evidence_ids):
+    replies(monkeypatch, by_id(["1.2", "1.3"], answer="ממלאים טופס [1.2] ומצרפים צילום של הנזק [1.3]."))
+    a = A.respond("איך מגישים תביעה?", STEPS_HIT)
+    assert (a.kind, a.reason) == ("answer", "verified")
+    assert a.text.startswith("ממלאים טופס ומצרפים צילום של הנזק.")  # המספרים לא נשארים בתשובה
+    assert "#:~:text=" in a.links[A.CONTACT_URL]  # הקישור למקור - לפי המשפט שנשלף מהאתר
+
+
+def test_ids_left_in_the_answer_are_not_numbers_to_verify(monkeypatch, evidence_ids):
+    """בלי ההסרה "1.4" היה נפסל בבדיקת המספרים (לא מופיע באתר) - והתשובה הייתה "לא הצלחתי לאמת"."""
+    replies(monkeypatch, by_id(["1.4"], answer="[1.4] תשובה תינתן תוך 30 יום.\n1. [1.2] ממלאים טופס."))
+    a = A.respond("תוך כמה זמן עונים?", STEPS_HIT)
+    assert a.reason == "verified" and a.text.startswith("תשובה תינתן תוך 30 יום.\n1. ממלאים טופס.")
+
+
+def test_ids_that_do_not_exist_get_one_repair_with_the_exact_ids(monkeypatch, evidence_ids):
+    sent = replies(monkeypatch, by_id(["1.9"]), by_id(["1.2", "1.3"]))
+    a = A.respond("איך מגישים תביעה?", STEPS_HIT)
+    assert (a.kind, a.reason, a.repaired) == ("answer", "verified", "unverified_evidence:1.9")
+    assert "המספרים 1.9 ב-evidence לא קיימים" in sent[1][-1]["content"]
+
+
+def test_ids_from_a_passage_that_is_not_in_sources_are_rejected(monkeypatch, evidence_ids):
+    sent = replies(monkeypatch, by_id(["C.1"]), by_id(["C.1"]))
+    a = A.respond("איך מגישים תביעה?", STEPS_HIT)
+    assert a.reason == "unverified:unverified_evidence"  # כמו ציטוט טקסט מקטע שלא צוין
+    assert "לא נמצאים בקטעים שציינת ב-sources" in sent[1][-1]["content"]
+
+
+def test_text_evidence_still_works_with_ids_on(monkeypatch, evidence_ids):
+    """מודל שלא ציית ומחזיר טקסט - האימות הרגיל, בלי שבירה."""
+    replies(monkeypatch, by_id(["ממלאים טופס."]))
+    assert A.respond("איך מגישים תביעה?", STEPS_HIT).reason == "verified"
+
+
+def test_a_missing_fact_from_an_id_is_the_clean_site_sentence(monkeypatch, evidence_ids):
+    """ANSWER_FACTS: עובדה עם מספר שחסרה בתשובה נוספת מילה במילה - מהמשפט שנשלף, בלי סימון כותרת או רשימה."""
+    replies(monkeypatch, by_id(["1.2", "1.4"], answer="ממלאים טופס."))
+    a = A.respond("איך מגישים תביעה ותוך כמה זמן עונים?", STEPS_HIT)
+    assert "\n• תשובה תינתן תוך 30 יום." in a.text
 
 
 def test_the_site_sentence_needs_the_term_in_its_page(monkeypatch, terms_in_cited):
