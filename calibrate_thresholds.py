@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 import eval_retrieval
-from phoenix import answer_cache, config, stats
+from phoenix import answer_cache, config, rerank, stats
 from phoenix.rerank import API_REQUESTS
 
 GRID = [round(0.30 + 0.01 * i, 2) for i in range(70)]  # 0.30 ... 0.99
@@ -62,9 +62,12 @@ def main():
     parser.add_argument("--alpha", type=float, default=0.10,
                         help="שיעור מקסימלי (בגבול העליון) של שאלות עם תשובה שנחסמות בטעות")
     parser.add_argument("--write", action="store_true", help="לשמור ל-data/thresholds.json")
+    parser.add_argument("--per-minute", type=float, default=9,
+                        help="קריאות Cohere לדקה לכל היותר (מפתח Trial: 10 לדקה; 0 - בלי הגבלה, למפתח בתשלום)")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     config.patient()
+    rerank.COHERE_MIN_INTERVAL = 60 / args.per_minute if args.per_minute > 0 else 0
     eval_retrieval.RERANKER = args.reranker
     rows = load_rows([Path(p) for p in args.questions])
     scored = []

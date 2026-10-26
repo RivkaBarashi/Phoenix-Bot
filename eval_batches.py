@@ -153,6 +153,7 @@ def main():
         if not sep or not name.isidentifier():
             sys.exit(f"--env: '{item}' - בצורה NAME=VALUE")
         changes[name] = value
+    changes.setdefault("COHERE_MIN_INTERVAL", "6.7")  # מפתח Cohere מסוג Trial: עד 9 קריאות Rerank לדקה (מתוך 10)
     keys = parse_keys(args.keys, [number for number, _ in config.GEMINI_KEYS])
     numbers = [n for n, _ in select_rows(args.questions, args.only, args.category)]
     if not numbers or not keys:

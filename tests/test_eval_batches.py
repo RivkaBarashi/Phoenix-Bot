@@ -105,6 +105,7 @@ def test_main_runs_each_batch_in_its_own_process_with_another_key(monkeypatch, t
         only = [int(n) for n in command[command.index("--only") + 1].split(",")]
         seen.append((only, env["LLM_GEMINI_KEY"], env.get("TERMS_IN_CITED"), "--no-history" in command,
                      command[command.index("--llm") + 1]))
+        assert env["COHERE_MIN_INTERVAL"] == "6.7"  # מפתח Cohere מסוג Trial - עד 9 קריאות Rerank לדקה
         with open(command[command.index("--out") + 1], "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(row(1)))
             writer.writeheader()
@@ -120,6 +121,32 @@ def test_main_runs_each_batch_in_its_own_process_with_another_key(monkeypatch, t
     assert seen == [([1, 2], "4", "true", True, "gemini-3.6-flash"), ([3], "7", "true", True, "gemini-3.6-flash")]
     merged = list(csv.DictReader(open(out, encoding="utf-8-sig")))
     assert [(r["n"], r["key"], r["infra"]) for r in merged] == [("1", "4", ""), ("2", "4", ""), ("3", "7", "")]
+
+
+def test_cohere_trial_pacing_waits_between_real_calls_only(monkeypatch):
+    """מפתח Trial: 10 קריאות Rerank לדקה. COHERE_MIN_INTERVAL - מרווח בין קריאות אמיתיות; מהמטמון - בלי המתנה."""
+    import time
+    from phoenix import rerank
+    monkeypatch.setattr(rerank, "COHERE_MIN_INTERVAL", 0.3)
+    monkeypatch.setitem(rerank._cohere_pace, "last", 0.0)
+    rerank._cohere_paced()
+    start = time.monotonic()
+    rerank._cohere_paced()
+    assert time.monotonic() - start >= 0.25
+    monkeypatch.setattr(rerank, "COHERE_MIN_INTERVAL", 0)
+    start = time.monotonic()
+    rerank._cohere_paced()
+    assert time.monotonic() - start < 0.05  # בלי מרווח (הצ'אט, מפתח בתשלום)
+
+    paced, calls = [], []
+    monkeypatch.setattr(rerank, "_cohere_paced", lambda: paced.append(1))
+    monkeypatch.setattr(rerank, "_cache", {})
+    monkeypatch.setattr(rerank, "_save_cache", lambda: None)
+    monkeypatch.setattr(rerank.store, "count_call", lambda service: None)
+    cached = rerank._cached("cohere:test", lambda q, docs, n, t: calls.append(1) or [(i, 0.5) for i in range(len(docs))])
+    cached("q", ["a", "b"], 2)
+    cached("q", ["a", "b"], 2)  # הכול במטמון - בלי קריאה ובלי המתנה
+    assert (len(calls), len(paced)) == (1, 1)
 
 
 def test_the_holdout_needs_final(monkeypatch):

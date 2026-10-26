@@ -36,6 +36,21 @@ VOYAGE_TPM = int(os.getenv("VOYAGE_TPM", "10000"))
 VOYAGE_RPM = int(os.getenv("VOYAGE_RPM", "3"))
 TOKENS_PER_CHAR = 0.4  # נמדד 0.38 בעברית - קצת מעל, כדי לא לחרוג
 VOYAGE_WAIT = 4  # מחכים למקום בדקה רק עד 4 שניות (ובצ'אט רק אם נשאר זמן לתשובה); אחרת - הספק הבא
+# מפתח Cohere מסוג Trial: 10 קריאות Rerank לדקה. בבדיקות (כיול, eval בחבילות) - מרווח קבוע בין קריאות אמיתיות ל-API
+# (מהמטמון - בלי המתנה). 0 - בלי מרווח (הצ'אט, ומפתח בתשלום). COHERE_MIN_INTERVAL=6.7 - עד 9 קריאות לדקה.
+COHERE_MIN_INTERVAL = float(os.getenv("COHERE_MIN_INTERVAL", "0") or 0)
+_cohere_pace = {"last": 0.0, "lock": threading.Lock()}
+
+
+def _cohere_paced():
+    """מחכה עד שעבר COHERE_MIN_INTERVAL מהקריאה הקודמת ל-Cohere (בכל ה-threads של התהליך)."""
+    if COHERE_MIN_INTERVAL <= 0:
+        return
+    with _cohere_pace["lock"]:
+        wait = _cohere_pace["last"] + COHERE_MIN_INTERVAL - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _cohere_pace["last"] = time.monotonic()
 _voyage_sent: collections.deque = collections.deque()  # (זמן, טוקנים) של הבקשות בדקה האחרונה
 _voyage_lock = threading.Lock()
 _cache_lock = threading.Lock()  # חיפוש מוקדם במקביל להבנת השאלה: שני חיפושים יכולים לכתוב למטמון יחד
@@ -86,6 +101,8 @@ def _cached(name: str, call, max_docs: int | None = None, prepare=None):
             API_REQUESTS[name] += 1
             if name.startswith(("cohere:", "voyage:")):  # מכסה חודשית - מונה משותף לכל האתרים (Upstash)
                 store.count_call(name.split(":")[0])
+            if name.startswith("cohere:"):
+                _cohere_paced()
             scores = call(query, [docs[i] for i in missing], len(missing), timeout)
             with _cache_lock:
                 for j, score in scores:
