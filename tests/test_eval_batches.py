@@ -143,7 +143,10 @@ def test_cohere_trial_pacing_waits_between_real_calls_only(monkeypatch):
     monkeypatch.setattr(rerank, "_cache", {})
     monkeypatch.setattr(rerank, "_save_cache", lambda: None)
     monkeypatch.setattr(rerank.store, "count_call", lambda service: None)
-    cached = rerank._cached("cohere:test", lambda q, docs, n, t: calls.append(1) or [(i, 0.5) for i in range(len(docs))])
+    def api(query, docs, top_n, timeout):
+        calls.append(1)
+        return [(i, 0.5) for i in range(len(docs))]
+    cached = rerank._cached("cohere:test", api)
     cached("q", ["a", "b"], 2)
     cached("q", ["a", "b"], 2)  # הכול במטמון - בלי קריאה ובלי המתנה
     assert (len(calls), len(paced)) == (1, 1)
