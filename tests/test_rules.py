@@ -1572,6 +1572,7 @@ def test_gemini_gets_the_thinking_level_the_model_accepts(monkeypatch, model, le
             sent.append(config.thinking_config)
             return type("R", (), {"text": "{}", "usage_metadata": None})()
     monkeypatch.setattr(config, "gemini_client", lambda number=1: type("C", (), {"models": Models()})())
+    monkeypatch.setattr(config, "LLM_GEMINI_KEY", 1)  # גם בלי .env (GitHub Actions)
     call = llm._gemini(model)
     call([{"role": "user", "content": "x"}], "s", 0, json_mode=True, low_thinking=True)
     call([{"role": "user", "content": "x"}], "s", 0, json_mode=True)
