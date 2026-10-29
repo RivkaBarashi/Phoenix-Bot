@@ -78,6 +78,10 @@ class StopChain(Exception):
     """תקלה שספק אחר לא יפתור (למשל עמוד שלא קיים) - עוצרים מיד."""
 
 
+class QuotaExhausted(Exception):
+    """המכסה היומית נגמרה בכל המפתחות של המודל (gemini_keys.py) - נספרת כמו מכסה."""
+
+
 class AllProvidersFailed(Exception):
     def __init__(self, purpose: str, errors: list[str]):
         self.purpose = purpose
@@ -154,6 +158,8 @@ BAD_KEY = re.compile(r"API_KEY_(?:INVALID|EXPIRED)|API key (?:not valid|expired)
 def classify(exc: Exception) -> str:
     if isinstance(exc, EmptyResult):
         return EMPTY
+    if isinstance(exc, QuotaExhausted):
+        return QUOTA
     if isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError)):
         return UNAVAILABLE
     code = _status_code(exc)

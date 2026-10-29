@@ -69,11 +69,13 @@ def _gemini_keys() -> list[tuple[int, str]]:
 
 
 GEMINI_KEYS: list[tuple[int, str]] = _gemini_keys()
-# הבוט - מפתח Gemini אחד, בלי סבב מפתחות, למודלי השפה ולווקטור לשאלה: GEMINI_API_KEY (מספר 1; אם הוא ריק - הראשון שיש).
-# ביום הבדיקות משדרגים את הפרויקט של המפתח הזה לתשלום, ושום דבר בקוד לא משתנה. LLM_GEMINI_KEY=<מספר> - מפתח אחר (בדיקות
-# על מפתחות חינמיים: eval_batches.py נותן לכל חבילה מפתח אחר). המאגר (GEMINI_KEYS) - רק לכלים: הבדיקות ובניית האינדקס.
+# הבוט עובד על מפתח Gemini ראשי, למודלי השפה ולווקטור לשאלה: GEMINI_API_KEY (מספר 1; אם הוא ריק - הראשון שיש).
+# LLM_GEMINI_KEY=<מספר> - ראשי אחר (eval_batches.py נותן לכל חבילה מפתח אחר). מפתח בתשלום - הבוט נשאר עליו כל הזמן.
+# GEMINI_KEY_SWITCH (החלטת הבעלים 29/10): נגמרה המכסה היומית של הראשי - עוברים לבא בתור מהמאגר, ורק אז (gemini_keys.py).
+# כבוי - רק הראשי (כלי הבדיקות: כל חבילה על המפתח שלה).
 LLM_GEMINI_KEY: int | None = (int(os.getenv("LLM_GEMINI_KEY")) if os.getenv("LLM_GEMINI_KEY", "").strip().isdigit()
                               else GEMINI_KEYS[0][0] if GEMINI_KEYS else None)
+GEMINI_KEY_SWITCH = os.getenv("GEMINI_KEY_SWITCH", "true").strip().lower() in ("1", "true", "yes", "on")
 
 # כל מודלי השפה שהבוט מכיר. מי עונה בכל שלב ובאיזה סדר - ROUTES (למטה), דרך שער המודלים (gateway.py). השרשרת המלאה
 # משמשת רק קריאה בלי נתיב (בדיקת ספקים), ו-Groq/OpenRouter - רק את השופט בבדיקות.

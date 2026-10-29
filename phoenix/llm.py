@@ -5,7 +5,7 @@
     result.text, result.provider
 
 כל קריאה עוברת בשער המודלים (gateway.py): לכל שלב נתיב משלו (config.ROUTES) - מודל ראשי ואחריו גיבויים,
-עם מפסק זרם לכל מודל. מפתח Gemini אחד (config.LLM_GEMINI_KEY), בלי סבב מפתחות.
+עם מפסק זרם לכל מודל. מפתח Gemini ראשי (config.LLM_GEMINI_KEY); הבא בתור - רק כשהמכסה היומית נגמרה (gemini_keys.py).
 
 מטמון (חיסכון במכסה): תשובה של מודל נשמרת ב-data/cache/llm.json לפי ההוראות (system), ההודעות (השאלה
 והקטעים) וההגדרות. אותה בקשה בדיוק - התשובה מהמטמון, בלי לשלוח שוב. כל שינוי בהוראות או בקטעים הוא
@@ -25,7 +25,7 @@ from typing import Any, Callable
 import httpx
 from google.genai import types
 
-from . import config, fallback, gateway
+from . import config, fallback, gateway, gemini_keys
 from .fallback import EmptyResult, Provider
 
 OPENAI_COMPATIBLE_URLS = {
@@ -105,7 +105,7 @@ def _with_system(messages: list[dict], system: str) -> list[dict]:
     return ([{"role": "system", "content": system}] if system else []) + messages
 
 
-def _gemini(model, number=1):
+def _gemini(model):
     # Gemma דרך אותו API לא תומך בהוראות מערכת ובמצב JSON - ההוראות נכנסות להודעה הראשונה
     is_gemma = model.startswith("gemma")
 
@@ -117,21 +117,24 @@ def _gemini(model, number=1):
                           parts=[types.Part(text=m["content"])])
             for m in messages
         ]
-        resp = config.gemini_client(number).models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=None if is_gemma else (system or None),
-                temperature=temperature,
-                response_mime_type="application/json" if json_mode and not is_gemma else None,
-                # הרמה הנמוכה שהמודל מקבל (config.LOW_THINKING); בלי - ברירת המחדל של המודל
-                thinking_config=types.ThinkingConfig(thinking_level=config.LOW_THINKING.get(model, "LOW"))
-                if low_thinking and not is_gemma else None,
-                http_options=types.HttpOptions(timeout=int((timeout or config.HTTP_TIMEOUT) * 1000)),
-            ),
-        )
-        _count_tokens(f"gemini:{model}#{number}", getattr(resp.usage_metadata, "total_token_count", None))
-        return _non_empty(resp.text)
+
+        def ask(number):
+            resp = config.gemini_client(number).models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=None if is_gemma else (system or None),
+                    temperature=temperature,
+                    response_mime_type="application/json" if json_mode and not is_gemma else None,
+                    # הרמה הנמוכה שהמודל מקבל (config.LOW_THINKING); בלי - ברירת המחדל של המודל
+                    thinking_config=types.ThinkingConfig(thinking_level=config.LOW_THINKING.get(model, "LOW"))
+                    if low_thinking and not is_gemma else None,
+                    http_options=types.HttpOptions(timeout=int((timeout or config.HTTP_TIMEOUT) * 1000)),
+                ),
+            )
+            _count_tokens(f"gemini:{model}#{number}", getattr(resp.usage_metadata, "total_token_count", None))
+            return _non_empty(resp.text)
+        return gemini_keys.call(model, ask)  # המפתח הראשי; נגמרה לו המכסה היומית - הבא בתור
     return call
 
 
@@ -181,13 +184,13 @@ def _make(provider, model):
 
 
 def _providers() -> list[Provider]:
-    """הספקים לפי הסדר ב-config.LLM_CHAIN: כל מודל במפתח אחד (config.LLM_GEMINI_KEY) - בלי סבב מפתחות. השער
-    (gateway.py) בוחר ביניהם לפי הנתיב של כל שלב."""
+    """הספקים לפי הסדר ב-config.LLM_CHAIN: מודל Gemini אחד לכל גרסה, על המפתח הראשי (config.LLM_GEMINI_KEY) - ועל הבא
+    בתור רק כשהמכסה היומית נגמרה (gemini_keys.py). השער (gateway.py) בוחר ביניהם לפי הנתיב של כל שלב."""
     providers = []
     for p, m in config.LLM_CHAIN:
         if p == "gemini":
             n = config.LLM_GEMINI_KEY
-            providers.append(Provider(f"gemini:{m}#{n or 1}", _gemini(m, n or 1), enabled=n is not None,
+            providers.append(Provider(f"gemini:{m}#{n or 1}", _gemini(m), enabled=n is not None,
                                       group=f"gemini:{m}", key=f"gemini#{n or 1}"))
         else:
             key = config.COHERE_CHAT_KEY if p == "cohere" else config.API_KEYS[p]
@@ -282,8 +285,10 @@ def chat(messages: list[dict], system: str = "", temperature: float = 0.2, json_
         def call() -> ChatResult:
             extra = {"low_thinking": True} if low and p.name.startswith(("gemini:", "cohere:")) else {}
             text = p.call(messages, system, temperature, json_mode=json_mode, timeout=config.QUERY_TIMEOUT, **extra)
+            # המפתח שענה בפועל (אחרי שהמכסה של הראשי נגמרה - לא הראשי): "gemini:gemini-3.6-flash#4"
+            number = gemini_keys.answered_by() if p.name.startswith("gemini:") else None
             try:
-                return ChatResult(text, p.name, parse(text) if parse else None)
+                return ChatResult(text, f"{p.group}#{number}" if number else p.name, parse(text) if parse else None)
             except ValueError as exc:
                 raise EmptyResult(f"unusable response: {exc}") from exc
         return gateway.Lane(p.name, call, tier)

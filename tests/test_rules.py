@@ -1358,9 +1358,9 @@ def test_language_models_use_one_gemini_key_without_rotation():
         assert config.LLM_GEMINI_KEY == config.GEMINI_KEYS[0][0] and all(p.enabled for p in gemini)
 
 
-def test_the_query_vector_uses_the_same_one_key():
-    """החלטת הבעלים 27/10: הבוט עובד עם מפתח Gemini אחד - גם הווקטור לשאלה (קודם: סבב על כל המאגר). כמה מפתחות - רק
-    בכלים: הבדיקות (eval_batches.py, דרך LLM_GEMINI_KEY) ובניית האינדקס (embeddings.POOL)."""
+def test_the_query_vector_starts_on_the_same_primary_key():
+    """הווקטור לשאלה - ספק אחד על המפתח הראשי של מודלי השפה (קודם: ספק לכל מפתח במאגר). המעבר למפתח הבא - בתוך
+    הקריאה, רק כשהמכסה נגמרה (gemini_keys.py). בניית האינדקס (embeddings.POOL) - ספק לכל מפתח."""
     from phoenix import config, embeddings
     if not config.GEMINI_KEYS:
         pytest.skip("אין מפתח Gemini ב-.env")
@@ -1369,6 +1369,129 @@ def test_the_query_vector_uses_the_same_one_key():
     assert {p.key for p in embeddings.POOL if p.name.startswith("gemini:")} == {f"gemini#{n}" for n, _ in config.GEMINI_KEYS}
     assert [p.name for p in embeddings._providers([7]) if p.name.startswith("gemini:")] == [
         f"gemini:{m}#7" for p, m in config.EMBED_CHAIN if p == "gemini"]  # מפתח אחר לבדיקה - רק הוא
+
+
+# ---------------------------------------------------------------- מפתחות Gemini: הבא בתור רק כשהמכסה נגמרה (29/10)
+from phoenix import gemini_keys  # noqa: E402
+
+REAL_CHAT = llm.chat  # לפני ש-conftest חוסם אותו
+
+
+@pytest.fixture
+def three_keys(monkeypatch):
+    """שלושה מפתחות (2 ראשי), זיכרון ריק, בלי Upstash. מחזיר מה נכתב לזיכרון המשותף."""
+    from phoenix import config, store
+    monkeypatch.setattr(config, "GEMINI_KEYS", [(1, "a"), (2, "b"), (3, "c")])
+    monkeypatch.setattr(config, "LLM_GEMINI_KEY", 2)
+    monkeypatch.setattr(config, "GEMINI_KEY_SWITCH", True)
+    monkeypatch.setattr(gemini_keys, "_until", {})
+    monkeypatch.setattr(gemini_keys, "_synced", time.time())
+    written = []
+    monkeypatch.setattr(store, "write", lambda *commands, wait=False: written.extend(commands))
+    return written
+
+
+def keyed(behaviour: dict[int, Exception]):
+    """ask(מפתח): זורק את החריגה של המפתח, או עונה "ok#<מפתח>". asked - המפתחות שנשאלו, לפי הסדר."""
+    asked = []
+
+    def ask(number):
+        asked.append(number)
+        if number in behaviour:
+            raise behaviour[number]
+        return f"ok#{number}"
+    return ask, asked
+
+
+def test_the_bot_stays_on_the_primary_key_while_it_has_quota(three_keys):
+    ask, asked = keyed({})
+    assert gemini_keys.call("gemini-3.6-flash", ask) == "ok#2" and asked == [2]  # הראשי קודם - לא מפתח 1
+    assert gemini_keys.answered_by() == 2 and not three_keys
+
+
+def test_a_used_up_key_moves_to_the_next_one_and_rests_until_the_reset(three_keys):
+    ask, asked = keyed({2: FakeApiError(429, DAILY_QUOTA)})
+    assert gemini_keys.call("gemini-3.6-flash", ask) == "ok#1" and asked == [2, 1]
+    assert gemini_keys.call("gemini-3.6-flash", ask) == "ok#1" and asked == [2, 1, 1]  # לא חוזרים למפתח שנגמר
+    assert gemini_keys.call("gemini-3.8-flash", keyed({})[0]) == "ok#2"  # מכסה לכל מודל בנפרד
+    until = gemini_keys._until["gemini-3.6-flash#2"]
+    assert until == gemini_keys.quota_reset() and ["HSET", gemini_keys.SHARED, "gemini-3.6-flash#2", f"{until:.0f}"] in three_keys
+
+
+@pytest.mark.parametrize("error", [FakeApiError(503, "The model is overloaded."), FakeApiError(504, "DEADLINE_EXCEEDED"),
+                                   FakeApiError(429, "Resource exhausted. Please try again later."), TimeoutError("slow")])
+def test_overload_and_a_minute_limit_do_not_change_the_key(three_keys, error):
+    """עומס, timeout ו-429 לדקה - המודל, לא המפתח: התקלה עוברת לשער, והוא עובר למודל הבא בנתיב."""
+    ask, asked = keyed({2: error})
+    with pytest.raises(type(error)):
+        gemini_keys.call("gemini-3.6-flash", ask)
+    assert asked == [2] and not gemini_keys._until
+
+
+def test_a_key_that_does_not_work_at_all_is_skipped_too(three_keys):
+    ask, asked = keyed({2: FakeApiError(403, "Your project has been denied access. Please contact support.")})
+    assert gemini_keys.call("gemini-3.6-flash", ask) == "ok#1" and asked == [2, 1]
+
+
+def test_every_key_used_up_counts_as_quota_for_the_gateway(three_keys):
+    ask, asked = keyed({n: FakeApiError(429, DAILY_QUOTA) for n in (1, 2, 3)})
+    with pytest.raises(fallback.QuotaExhausted) as caught:
+        gemini_keys.call("gemini-3.6-flash", ask)
+    assert asked == [2, 1, 3] and fallback.classify(caught.value) == fallback.QUOTA
+    with pytest.raises(fallback.QuotaExhausted):
+        gemini_keys.call("gemini-3.6-flash", ask)
+    assert asked == [2, 1, 3]  # עד האיפוס - בלי לשלוח עוד בקשות
+
+
+def test_the_test_tools_keep_each_batch_on_its_own_key(three_keys, monkeypatch):
+    """eval_batches.py: GEMINI_KEY_SWITCH=false - החבילה לא לוקחת מפתחות של חבילות אחרות."""
+    from phoenix import config
+    monkeypatch.setattr(config, "GEMINI_KEY_SWITCH", False)
+    ask, asked = keyed({2: FakeApiError(429, DAILY_QUOTA)})
+    with pytest.raises(fallback.QuotaExhausted):
+        gemini_keys.call("gemini-3.6-flash", ask)
+    assert asked == [2]
+
+
+def test_keys_used_up_on_the_other_site_are_skipped_without_asking(three_keys, monkeypatch):
+    """Streamlit ו-Render (ותהליך שעלה מחדש) חולקים את הזיכרון ב-Upstash: מפתח שנגמר שם לא נשאל כאן."""
+    from phoenix import store
+    monkeypatch.setattr(gemini_keys, "_synced", 0.0)
+    monkeypatch.setattr(store, "read", lambda *command: ["gemini-3.6-flash#2", str(time.time() + 3600),
+                                                         "gemini-3.6-flash#1", str(time.time() - 60)])  # ישן - נגמר
+    ask, asked = keyed({})
+    assert gemini_keys.call("gemini-3.6-flash", ask) == "ok#1" and asked == [1]
+
+
+@pytest.mark.parametrize("now, reset", [((2026, 10, 29, 12, 0), (2026, 10, 30, 9, 0)),   # בין סופי שעון הקיץ: 09:00
+                                        ((2026, 10, 29, 8, 0), (2026, 10, 29, 9, 0)),    # לפני האיפוס - עוד היום
+                                        ((2026, 11, 10, 12, 0), (2026, 11, 11, 10, 0))])  # חורף: 10:00 בישראל
+def test_the_daily_quota_resets_at_midnight_pacific(now, reset):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    israel = ZoneInfo("Asia/Jerusalem")
+    assert gemini_keys.quota_reset(datetime(*now, tzinfo=israel).timestamp()) == datetime(*reset, tzinfo=israel).timestamp()
+
+
+def test_the_answer_names_the_key_that_really_answered(three_keys, monkeypatch):
+    """הדוחות ומצב המפתחת מראים את המפתח שענה: אחרי שהמכסה של הראשי (2) נגמרה - מפתח 1."""
+    from phoenix import config
+    monkeypatch.setattr(llm, "CACHE_MODE", "off")
+
+    class Models:
+        def __init__(self, number):
+            self.number = number
+
+        def generate_content(self, model, contents, config):
+            if self.number == 2:
+                raise FakeApiError(429, DAILY_QUOTA)
+            return type("R", (), {"text": '{"ok": 1}', "usage_metadata": None})()
+    monkeypatch.setattr(config, "gemini_client", lambda number=1: type("C", (), {"models": Models(number)})())
+    provider = fallback.Provider("gemini:gemini-3.6-flash#2", llm._gemini("gemini-3.6-flash"),
+                                 group="gemini:gemini-3.6-flash", key="gemini#2")
+    monkeypatch.setattr(llm, "PROVIDERS", [provider])
+    result = REAL_CHAT([{"role": "user", "content": "x"}], names=[provider.name])
+    assert result.provider == "gemini:gemini-3.6-flash#1"
 
 
 @pytest.mark.parametrize("asked, standalone, same", [

@@ -1,9 +1,10 @@
 """eval_answers.py בחבילות, כל חבילה על מפתח Gemini אחר - רק לבדיקות, ורק כשהמפתחות חינמיים.
 
-למה: הבוט עובד עם מפתח Gemini אחד (config.LLM_GEMINI_KEY), ובמפתח חינמי יש 20 בקשות ביום לכל מודל. שאלה אחת צריכה
+למה: הבוט עובד עם מפתח Gemini ראשי (config.LLM_GEMINI_KEY), ובמפתח חינמי יש 20 בקשות ביום לכל מודל. שאלה אחת צריכה
 עד 2 בקשות מכל מודל (3.8: הבנת השאלה ובדיקת העיגון; 3.6: התשובה וניסיון תיקון), ולכן 30 שאלות לא נכנסות במפתח אחד.
 כאן הבדיקה מתחלקת לחבילות של עד 8 שאלות (16 בקשות לכל מודל לכל היותר - מרווח לניסיון חוזר), וכל חבילה רצה בתהליך
-משלה עם LLM_GEMINI_KEY אחר. הבוט עצמו לא משתנה. בבדיקה בתשלום אין בזה צורך: eval_answers.py רגיל, על המפתח הראשון.
+משלה עם LLM_GEMINI_KEY אחר, בלי המעבר של הבוט למפתח הבא (GEMINI_KEY_SWITCH=false) - כך כל חבילה נשארת על המפתח שלה.
+בבדיקה בתשלום אין בזה צורך: eval_answers.py רגיל, על המפתח הראשון.
 
 תשתית מול איכות: שאלה שנכשלה בגלל תשתית (אף מודל לא ענה, הבנת השאלה נכשלה, הבודק או השופט לא זמינים, החיפוש נכשל)
 רצה שוב בחבילה אחרת, על המפתח הבא, עד --attempts פעמים. מפתח שכל החבילה שלו נכשלה בתשתית (המכסה היומית נגמרה) - לא
@@ -180,7 +181,9 @@ def main():
         out, log = folder / f"batch_{tag}.csv", folder / f"batch_{tag}.log"
         command = [sys.executable, "-X", "utf8", str(ROOT / "eval_answers.py"), "--questions", args.questions,
                    "--only", ",".join(map(str, batch)), "--out", str(out), "--no-history", *extra]
-        env = os.environ | changes | {"LLM_GEMINI_KEY": str(key), "PYTHONIOENCODING": "utf-8"}
+        # GEMINI_KEY_SWITCH=false: החבילה רק על המפתח שלה - בלי המעבר של הבוט למפתח הבא, שהיה לוקח מפתחות של חבילות אחרות
+        env = os.environ | changes | {"LLM_GEMINI_KEY": str(key), "GEMINI_KEY_SWITCH": "false",
+                                      "PYTHONIOENCODING": "utf-8"}
         start = time.perf_counter()
         try:
             with open(log, "w", encoding="utf-8") as f:

@@ -12,7 +12,7 @@
 import httpx
 from google.genai import types
 
-from . import config
+from . import config, gemini_keys
 from .fallback import Provider, run_chain
 
 # איך הטקסט נשלח להטמעה. index.py שומר את זה באינדקס, ואינדקס שנבנה בפורמט אחר נבנה מחדש.
@@ -37,7 +37,8 @@ def gemini_input(text: str, is_query: bool) -> str:
     return f"title: {title} | text: {body}"
 
 
-def _gemini(model, number=1):
+def _gemini(model, number=None):
+    """number: מפתח קבוע (בניית האינדקס). None - הבוט: המפתח הראשי, והבא בתור כשהמכסה היומית נגמרה (gemini_keys.py)."""
     uses_prefix = model.startswith("gemini-embedding-2")  # gemini-embedding-001 עובד עם task_type
 
     def call(texts, is_query, timeout=None):
@@ -49,13 +50,16 @@ def _gemini(model, number=1):
         if timeout:
             cfg = (cfg or types.EmbedContentConfig()).model_copy(
                 update={"http_options": types.HttpOptions(timeout=int(timeout * 1000))})
-        resp = config.gemini_client(number).models.embed_content(
-            model=model,
-            # gemini-embedding-2 מאחד רשימת מחרוזות לוקטור אחד - לכן כל טקסט כ-Content נפרד
-            contents=[types.Content(parts=[types.Part(text=t)]) for t in inputs],
-            config=cfg,
-        )
-        return _same_length([e.values for e in resp.embeddings], texts)
+
+        def ask(n):
+            resp = config.gemini_client(n).models.embed_content(
+                model=model,
+                # gemini-embedding-2 מאחד רשימת מחרוזות לוקטור אחד - לכן כל טקסט כ-Content נפרד
+                contents=[types.Content(parts=[types.Part(text=t)]) for t in inputs],
+                config=cfg,
+            )
+            return _same_length([e.values for e in resp.embeddings], texts)
+        return ask(number) if number else gemini_keys.call(model, ask)
     return call
 
 
@@ -74,18 +78,19 @@ def _voyage(model):
 
 _FACTORIES = {"gemini": _gemini, "voyage": _voyage}
 
-def _providers(keys: list[int]) -> list[Provider]:
-    """הספקים לפי EMBED_CHAIN. Gemini - אותו מודל בכל אחד מהמפתחות keys: אותם וקטורים, אותו אינדקס (fnx_gemini)."""
+def _providers(keys: list[int], switch: bool = False) -> list[Provider]:
+    """הספקים לפי EMBED_CHAIN. Gemini - אותו מודל בכל אחד מהמפתחות keys: אותם וקטורים, אותו אינדקס (fnx_gemini).
+    switch - המפתח עובר לבא בתור כשהמכסה היומית נגמרה (gemini_keys.py)."""
     return [provider
             for p, m in config.EMBED_CHAIN
-            for provider in ([Provider(f"gemini:{m}#{n}", _gemini(m, n), group=f"gemini:{m}", key=f"gemini#{n}")
-                              for n in keys] if p == "gemini"
+            for provider in ([Provider(f"gemini:{m}#{n}", _gemini(m, None if switch else n), group=f"gemini:{m}",
+                                       key=f"gemini#{n}") for n in keys] if p == "gemini"
                              else [Provider(f"{p}:{m}", _FACTORIES[p](m), enabled=bool(config.API_KEYS[p]))])]
 
 
-# הבוט: מפתח Gemini אחד, אותו מפתח של מודלי השפה (config.LLM_GEMINI_KEY) - החלטת הבעלים 27/10: החברה משלמת על מפתח, ולא
-# צריכה כמה. הבדיקות על מפתחות חינמיים (eval_batches.py) נותנות לכל חבילה מפתח אחר דרך LLM_GEMINI_KEY.
-PROVIDERS = _providers([config.LLM_GEMINI_KEY] if config.LLM_GEMINI_KEY else [])
+# הבוט: אותו מפתח ראשי של מודלי השפה (config.LLM_GEMINI_KEY), והבא בתור רק כשהמכסה היומית שלו נגמרה (החלטת הבעלים
+# 29/10). הבדיקות על מפתחות חינמיים (eval_batches.py) נותנות לכל חבילה מפתח אחר דרך LLM_GEMINI_KEY, בלי מעבר.
+PROVIDERS = _providers([config.LLM_GEMINI_KEY] if config.LLM_GEMINI_KEY else [], switch=True)
 # בניית האינדקס בלבד (index.py): כל המפתחות - מכסה של מפתח חינמי נגמרה באמצע הבנייה, המפתח הבא ממשיך
 POOL = _providers([n for n, _ in config.GEMINI_KEYS])
 
