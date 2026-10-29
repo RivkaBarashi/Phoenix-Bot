@@ -2601,6 +2601,19 @@ def test_an_unsupported_claim_without_a_number_is_removed_and_said_so(monkeypatc
     a = A.respond("איך מגישים תביעה?", RACE_HIT)
     assert (a.kind, a.reason, a.grounding) == ("answer", "verified_partial", "partial:1/2")
     assert FORM in a.text and "רעידת אדמה" not in a.text and A.PARTIAL_NOTE in a.text and a.sources
+    assert A.GENERIC_REFERRAL in a.text  # בתשובה אין פרטי קשר - ההפניה הקבועה משלימה
+
+
+def test_a_trimmed_answer_that_already_gives_a_number_gets_no_second_one(monkeypatch):
+    """נבדק 27/10 (שאלה 74, עדכון פרטים בביטוח דירה): בתשובה הוואטסאפ 054-8765432 מהעמוד, והחיתוך הוסיף את ההפניה
+    הקבועה עם 054-9893455 - שני מספרים שונים בתשובה אחת, והשופט פסק "מספר שגוי"."""
+    update = "כדי לעדכן פרטי קשר רק לביטוח מסוים יש לפנות לשירות הלקוחות בוואטסאפ 054-8765432."
+    hit = SearchResult([Hit("x", A.CONTACT_URL, "תביעות", "", f"תביעות\n\n{SENTENCE} {update}", score=0.95)],
+                       "gemini:x", "cohere:rerank-v4.0-pro")
+    grounding_world(monkeypatch, reply_with(f"{FORM} {update} {QUAKE}"), [{"n": 1, "verdict": "unsupported", "quote": ""}])
+    a = A.respond("איך מעדכנים פרטים?", hit)
+    assert a.reason == "verified_partial" and A.PARTIAL_NOTE in a.text and "רעידת אדמה" not in a.text
+    assert "054-8765432" in a.text and "054-9893455" not in a.text
 
 
 def test_the_code_does_not_trust_the_verifier(monkeypatch):

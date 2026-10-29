@@ -579,6 +579,11 @@ def _is_referral(sentence: str) -> bool:
     return bool(SERVICE.search(sentence) and (ASK_TO_CONTACT.search(sentence) or CONTACT_DETAIL.search(sentence)))
 
 
+def _gives_contact(sentences: list[str]) -> bool:
+    """יש משפט שמפנה למוקד עם טלפון, קוד או מייל: "יש לפנות לשירות הלקוחות בטלפון 5432*"."""
+    return any(_is_referral(s) and CONTACT_DETAIL.search(s) for s in sentences)
+
+
 def leaked(text: str) -> bool:
     """סימני דליפה: "כללים:", "kind", "JSON", "system prompt", שמות השדות של ה-JSON, או משפט ארוך באנגלית
     (קישורים ומיילים לא נחשבים)."""
@@ -604,7 +609,7 @@ def add_referral(answer_text: str, referral: str) -> str:
         return f"{answer_text} {referral}"
     body = answer_text.removeprefix(PERSONAL_OPENING).strip()
     sentences = [s for s in SENTENCE_END.split(body) if s.strip()]
-    if _contacts(referral) & _contacts(body) or any(_is_referral(s) and CONTACT_DETAIL.search(s) for s in sentences):
+    if _contacts(referral) & _contacts(body) or _gives_contact(sentences):
         return answer_text
     if len(sentences) > 1 and _is_referral(sentences[-1]) and CONTACT_DETAIL.search(referral):
         return f"{answer_text[:answer_text.rindex(sentences[-1])].rstrip()} {referral}"
@@ -1451,7 +1456,11 @@ def respond(question: str, result: SearchResult, history: list[dict] = (), thres
         if salvage and (leaked(kept) or unknown_terms() or term_not_cited(support)):
             return outcome
         whole = supported == len(claims)  # נפסלה בבדיקות בקוד, אבל כל משפט בה מאומת מול האתר
-        note = "" if whole else f"\n\n{PARTIAL_NOTE}" + (f" {GENERIC_REFERRAL}" if outcome.kind != "personal" else "")
+        # ההפניה הקבועה - רק אם בתשובה שנשארה אין כבר הפניה עם פרטי קשר. נבדק 27/10: "איפה מעדכנים פרטים בביטוח
+        # הדירה?" - בתשובה הוואטסאפ 054-8765432 מהעמוד, ואחריו 054-9893455 של ההפניה הקבועה. שניהם באתר, אבל שני
+        # מספרים שונים בתשובה אחת מבלבלים (השופט: "מספר וואטסאפ שגוי").
+        refer = outcome.kind != "personal" and not _gives_contact(SENTENCE_END.split(kept))
+        note = "" if whole else f"\n\n{PARTIAL_NOTE}" + (f" {GENERIC_REFERRAL}" if refer else "")
         if outcome.kind == "personal":
             urls = list(dict.fromkeys(urls + [CONTACT_URL]))
         reason = ("verified_grounded" if whole else "verified_partial") + (":salvaged" if salvage else "")
